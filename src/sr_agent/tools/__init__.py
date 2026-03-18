@@ -6,10 +6,12 @@
 from .base_tool import BaseTool, ToolMetadata
 from .statistics import StatisticsTool
 from .evaluate import EvaluateTool
+from .llm_tool import LLMTool
 
 __all__ = [
     "BaseTool",
     "ToolMetadata",
     "StatisticsTool",
     "EvaluateTool",
+    "LLMTool",
 ]

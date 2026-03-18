@@ -8,7 +8,7 @@ from openai.types.chat import ChatCompletion
 from collections import defaultdict
 from typing import Generator, Tuple, List, Dict
 from .llm_api import LLMAPI
-from ....utils import log_exception
+from ..utils import log_exception
 
 _logger = logging.getLogger(__name__)
 

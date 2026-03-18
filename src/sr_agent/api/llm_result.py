@@ -56,7 +56,7 @@ class LLMResult:
 
     @property
     def usage(self) -> dict:
-        """Token usage statistics."""
+        """Token & Price usage statistics."""
         return self._result.get('usage', {})
 
     @property

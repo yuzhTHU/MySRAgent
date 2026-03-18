@@ -5,7 +5,7 @@ from openai import OpenAI
 from collections import defaultdict
 from typing import Generator, List, Dict
 from .llm_api import LLMAPI
-from ....utils import log_exception
+from ..utils import log_exception
 
 _logger = logging.getLogger(__name__)
 
