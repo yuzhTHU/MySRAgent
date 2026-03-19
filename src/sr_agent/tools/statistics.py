@@ -4,11 +4,12 @@
 """
 
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 from .base_tool import BaseTool, ToolMetadata
 
 
+@BaseTool.register_model('statistics_analysis')
 class StatisticsTool(BaseTool):
     """计算输入数据和目标变量的描述性统计量。
 
@@ -28,23 +29,32 @@ class StatisticsTool(BaseTool):
     )
 
     def execute(
-        self, x: Dict[str, np.ndarray], y: np.ndarray
+        self,
+        x_vars: Optional[List[str]] = None,
+        y_var: str = "y",
     ) -> Dict[str, Any]:
         """执行统计分析。
 
         Args:
-            x: 输入特征字典，键为特征名，值为 numpy 数组。
-            y: 目标变量，numpy 数组。
+            x_vars: 要分析的输入特征名列表，如 ["x1", "x2"]。None 表示分析全部特征。
+            y_var: 目标变量名，默认为 "y"。
 
         Returns:
             包含以下字段的字典：
             - target: 目标变量的统计量
             - features: 各输入特征的统计量列表
         """
+        x = self.context['x']
+        y = self.context['y']
+
+        # 选择要分析的变量
+        if x_vars is None:
+            x_vars = list(x.keys())
+
         result = {
-            "target": self._compute_stats(y, "y"),
+            "target": self._compute_stats(y, y_var),
             "features": [
-                self._compute_stats(arr, name) for name, arr in x.items()
+                self._compute_stats(x[name], name) for name in x_vars
             ],
         }
         return result

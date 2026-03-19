@@ -4,13 +4,12 @@
 """
 
 import numpy as np
-from typing import Dict, Any, Optional
-
 import nd2py as nd
-
+from typing import List, Dict, Any, Optional
 from .base_tool import BaseTool, ToolMetadata
 
 
+@BaseTool.register_model('evaluate_formula')
 class EvaluateTool(BaseTool):
     """评估数学公式对数据的拟合能力。
 
@@ -40,23 +39,16 @@ class EvaluateTool(BaseTool):
         category="evaluation",
     )
 
-    def __init__(self, fit_parameters: bool = True):
-        """初始化评估工具。
-
-        Args:
-            fit_parameters: 是否使用 BFGS 算法优化公式中的可拟合参数。
-        """
-        self.fit_parameters = fit_parameters
-
     def execute(
-        self, eq: str, X: Dict[str, np.ndarray], y: np.ndarray
+        self, eq: str, x_vars: Optional[List[str]] = None, y_var: str = "y", fit: bool = False,
     ) -> Dict[str, Any]:
         """评估公式的拟合能力。
 
         Args:
             eq: 公式字符串，如 "x1^2 + sin(x2) + 3.5"。
-            X: 输入特征字典，键为特征名（如 "x1", "x2"），值为 numpy 数组。
-            y: 目标变量，numpy 数组。
+            x_vars: 输入特征名列表，如 ["x1", "x2"]。None 表示使用全部特征。
+            y_var: 目标变量名，默认为 "y"。
+            fit: 是否使用 BFGS 算法优化公式中的可拟合参数。
 
         Returns:
             包含以下字段的字典：
@@ -69,6 +61,15 @@ class EvaluateTool(BaseTool):
             - y_pred: 预测值数组
             - formula: 简化后的公式字符串
         """
+        x = self.context['x']
+        y = self.context['y']
+
+        # 选择要使用的变量
+        if x_vars is None:
+            x_vars = list(x.keys())
+
+        X_data = {var: x[var] for var in x_vars}
+        y_data = y
         try:
             # ^ 在 Python 中是异或，** 才是幂运算，进行替换
             eq = eq.replace("^", "**")
@@ -77,14 +78,14 @@ class EvaluateTool(BaseTool):
             eqtree = nd.parse(eq)
 
             # 如果需要拟合参数，使用 BFGS 算法优化
-            if self.fit_parameters:
+            if fit:
                 bfgs = nd.BFGSFit(eqtree)
-                bfgs.fit(X, y)
+                bfgs.fit(X_data, y_data)
                 eqtree = bfgs.expression
 
             # 计算预测值
-            y_pred = eqtree.eval(X)
-            y_true = np.array(y).flatten()
+            y_pred = eqtree.eval(X_data)
+            y_true = np.array(y_data).flatten()
             y_pred = y_pred.flatten()
 
             # 计算评价指标

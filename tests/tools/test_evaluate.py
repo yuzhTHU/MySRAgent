@@ -14,8 +14,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([5.0, 7.0, 9.0, 11.0, 13.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("x1 * 2 + 3", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("x1 * 2 + 3")
 
         assert result["success"] is True
         assert result["error"] is None
@@ -27,8 +27,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("x1**2", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("x1**2")
 
         assert result["success"] is True
         assert result["mse"] == 0.0
@@ -39,8 +39,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([0.0, np.pi/2, np.pi, 3*np.pi/2])}
         y = np.array([0.0, 1.0, 0.0, -1.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("sin(x1)", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("sin(x1)")
 
         assert result["success"] is True
         assert result["mse"] < 1e-10
@@ -50,8 +50,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("x1", X, y)  # 错误的公式
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("x1")  # 错误的公式
 
         assert result["success"] is True
         assert result["mse"] > 10000  # MSE 应该很大
@@ -65,8 +65,8 @@ class TestEvaluateTool:
         }
         y = np.array([1.5, 3.0, 4.5, 6.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("x1 + x2", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("x1 + x2")
 
         assert result["success"] is True
         assert result["mse"] == 0.0
@@ -76,8 +76,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([1.0, 2.0, 3.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("invalid_syntax!!", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("invalid_syntax!!")
 
         assert result["success"] is False
         assert result["error"] is not None
@@ -87,9 +87,9 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([2.1, 3.9, 6.2, 7.9, 10.1])  # y ≈ 2*x，带有噪声
 
-        tool = EvaluateTool(fit_parameters=True)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=True)
         # 可拟合参数是 Number 节点（如 1.0），不是符号变量（如 a）
-        result = tool.execute("1.0 * x1", X, y)
+        result = tool.execute("1.0 * x1", fit=True)
 
         # 拟合后应该能得到较好的结果
         assert result["success"] is True
@@ -100,8 +100,8 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([1.0, 2.0, 3.0])
 
-        tool = EvaluateTool(fit_parameters=False)
-        result = tool.execute("x1", X, y)
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        result = tool.execute("x1")
 
         # 检查所有必需的键
         required_keys = ["success", "error", "mse", "rmse", "mae", "r2", "y_pred", "formula"]
@@ -110,7 +110,24 @@ class TestEvaluateTool:
 
     def test_metadata_exists(self):
         """测试元数据存在。"""
-        tool = EvaluateTool()
+        tool = EvaluateTool(x={"x": np.array([1.0])}, y=np.array([1.0]))
         assert tool.metadata is not None
         assert tool.metadata.name == "evaluate_formula"
         assert tool.metadata.category == "evaluation"
+
+    def test_x_vars_subset(self):
+        """测试 x_vars 参数可以选择子集。"""
+        X = {
+            "x1": np.array([1.0, 2.0, 3.0]),
+            "x2": np.array([4.0, 5.0, 6.0]),
+            "x3": np.array([7.0, 8.0, 9.0]),
+        }
+        # y = x1 * 2 + x3 * 1
+        y = np.array([9.0, 12.0, 15.0])
+
+        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        # 只使用 x1 和 x3
+        result = tool.execute("x1 * 2 + x3", x_vars=["x1", "x3"])
+
+        assert result["success"] is True
+        assert result["r2"] > 0.9

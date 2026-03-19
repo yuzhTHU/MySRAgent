@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 from .base_tool import BaseTool, ToolMetadata
 
 
+@BaseTool.register_model('polynomial_fit')
 class PolynomialFitTool(BaseTool):
     """对数据进行多项式拟合。
 
@@ -38,8 +39,8 @@ class PolynomialFitTool(BaseTool):
 
     def execute(
         self,
-        x: Dict[str, np.ndarray],
-        y: np.ndarray,
+        x_vars: Optional[List[str]] = None,
+        y_var: str = "y",
         max_degree: int = 2,
         include_interactions: bool = True,
         interaction_blacklist: Optional[List[Tuple[str, str]]] = None,
@@ -49,8 +50,8 @@ class PolynomialFitTool(BaseTool):
         """执行多项式拟合。
 
         Args:
-            x: 输入特征字典，键为特征名（如 "x1", "x2"），值为 numpy 数组。
-            y: 目标变量，numpy 数组。
+            x_vars: 输入特征名列表，如 ["x1", "x2"]。None 表示使用全部特征。
+            y_var: 目标变量名，默认为 "y"。
             max_degree: 多项式最高阶次数，默认为 2。
             include_interactions: 是否包含交叉项，默认为 True。
             interaction_blacklist: 交叉项黑名单，指定哪些变量之间不产生交叉项。
@@ -70,6 +71,16 @@ class PolynomialFitTool(BaseTool):
             - n_parameters: 参数数量
             - warnings: 警告信息列表
         """
+        x = self.context['x']
+        y = self.context['y']
+
+        # 选择要使用的变量
+        if x_vars is None:
+            x_vars = list(x.keys())
+
+        # 从 context 中获取数据
+        x = {var: x[var] for var in x_vars}
+
         warnings = []
 
         # 数据验证
