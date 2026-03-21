@@ -10,12 +10,12 @@ class BasePrompt(FactoryMixin):
     Base class for Prompts.
 
     Inherits from FactoryMixin which provides:
-    - BasePrompt.register_model('name'): Decorator to register subclasses
+    - BasePrompt.register('name'): Decorator to register subclasses
     - BasePrompt.create(...): Factory method to create instances
 
     The base class is automatically registered as 'default' model.
     Example:
-        @BasePrompt.register_model('some_prompt')
+        @BasePrompt.register('some_prompt')
         class SomePrompt(BasePrompt):
             def __init__(self, ...):
                 super().__init__(...)

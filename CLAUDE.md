@@ -3,7 +3,7 @@
 ## 运行环境
 
 - 使用 conda prefix 环境 `./venv` 运行所有 Python 代码和测试
-  - Windows 系统使用 `./venv/Scripts/python` 或 `./venv/python.exe`
+  - Windows 系统使用 `./venv/python`
   - Unix/Linux/MacOS 使用 `./venv/bin/python`
 
 ## 开发流程

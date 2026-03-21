@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from .base_tool import BaseTool, ToolMetadata
 
 
-@BaseTool.register_model('statistics_analysis')
+@BaseTool.register('statistics_analysis')
 class StatisticsTool(BaseTool):
     """计算输入数据和目标变量的描述性统计量。
 

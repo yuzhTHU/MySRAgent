@@ -75,7 +75,7 @@ FORBIDDEN_MODULES = {
 }
 
 
-@BaseTool.register_model('code_executor')
+@BaseTool.register('code_executor')
 class CodeExecutorTool(BaseTool):
     """执行给定的 Python 代码并返回打印输出。
 

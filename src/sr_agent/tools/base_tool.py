@@ -8,8 +8,7 @@ from logging import getLogger
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict
-
-from ..utils.factory import FactoryMixin
+from ..utils import FactoryMixin
 
 _logger = getLogger(f'sr_agent.{__name__}')
 
@@ -35,7 +34,7 @@ class BaseTool(ABC, FactoryMixin):
     工具的 docstring 会作为给 LLM 的说明。
 
     Example:
-        @BaseTool.register_model('statistics_tool')
+        @BaseTool.register('statistics_tool')
         class StatisticsTool(BaseTool):
             '''计算数据的统计量。'''
             def execute(self, *args, **kwargs):
@@ -64,7 +63,7 @@ class BaseTool(ABC, FactoryMixin):
             ...     print(f"{tool['name']}: {tool['description']}")
         """
         tool_list = []
-        for name, tool_cls in cls.MODEL_DICT.items():
+        for name, tool_cls in cls.REGISTRY_DICT.items():
             metadata = getattr(tool_cls, 'metadata', None)
             tool_list.append({
                 'name': metadata.name if metadata else name,

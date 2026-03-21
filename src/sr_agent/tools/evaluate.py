@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 from .base_tool import BaseTool, ToolMetadata
 
 
-@BaseTool.register_model('evaluate_formula')
+@BaseTool.register('evaluate_formula')
 class EvaluateTool(BaseTool):
     """评估数学公式对数据的拟合能力。
 

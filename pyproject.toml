@@ -32,10 +32,15 @@ llm = [
 where = ["src"]
 
 [tool.pytest.ini_options]
+minversion = "7.0"
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+markers = [
+    "slow: marks tests as slow (integration tests)",
+    "paid: marks tests as paid API calls (requires credits)",
+]
 
 [tool.ruff]
 line-length = 100

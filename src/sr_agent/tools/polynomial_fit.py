@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 from .base_tool import BaseTool, ToolMetadata
 
 
-@BaseTool.register_model('polynomial_fit')
+@BaseTool.register('polynomial_fit')
 class PolynomialFitTool(BaseTool):
     """对数据进行多项式拟合。
 

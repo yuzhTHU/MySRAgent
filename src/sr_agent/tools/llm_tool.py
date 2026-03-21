@@ -8,7 +8,7 @@ from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata
 
 
-@BaseTool.register_model('call_llm')
+@BaseTool.register('call_llm')
 class LLMTool(BaseTool):
     """调用 LLM API 生成文本回复。
 

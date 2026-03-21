@@ -11,5 +11,6 @@ from .log_exception import log_exception
 from .classproperty import classproperty
 from .render_python import render_python
 from .render_markdown import render_markdown
+from .factory_mixin import FactoryMixin
 from .fix_parser import add_minus_flags, add_negation_flags
 from . import nn

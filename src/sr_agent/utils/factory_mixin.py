@@ -10,7 +10,7 @@ class FactoryMixin:
     Mixin class that provides factory pattern capabilities for any class.
 
     Any class inheriting from this mixin gains the ability to:
-    1. Register subclasses via @<Class>.register_model('name')
+    1. Register subclasses via @<Class>.register('name')
     2. Create instances via <Class>.create(config, *args, **kwargs)
 
     The base class is automatically registered as 'default' model.
@@ -26,7 +26,7 @@ class FactoryMixin:
 
     This ensures correct Method Resolution Order (MRO) so that:
     1. create() method resolves correctly
-    2. Subclasses share the same MODEL_DICT through the mixin
+    2. Each subclass has its own independent registry
 
     ═══════════════════════════════════════════════════════════════════════════
     EXAMPLE
@@ -40,7 +40,7 @@ class FactoryMixin:
             super().__init__()
             self.config = config
 
-    @MyModel.register_model('gcn')
+    @MyModel.register('gcn')
     class GCNModel(MyModel):
         def __init__(self, config, tokenizer):
             super().__init__(config, tokenizer)
@@ -56,54 +56,71 @@ class FactoryMixin:
     ```
     """
 
-    MODEL_DICT: Dict[str, Type] = {}
-    """Registry of model classes keyed by name. Shared across all subclasses."""
+    REGISTRY_DICT: Dict[str, Type] = None  # type: ignore
+    """
+    Registry of model classes keyed by name.
+
+    Direct subclasses of FactoryMixin get their own registry.
+    Grandchildren share the registry with their parent class.
+    """
+
+    def __init_subclass__(cls, **kwargs):
+        """Automatically called when a subclass is created.
+
+        Only create a new registry for direct subclasses of FactoryMixin.
+        Grandchildren will share the same registry with their parent,
+        so registering on StatsTool also makes it visible to BaseTool.
+        """
+        super().__init_subclass__(**kwargs)
+        # Check if FactoryMixin is a direct parent (not just ancestor)
+        if FactoryMixin in cls.__bases__:
+            cls.REGISTRY_DICT = {}
+        # else: inherit REGISTRY_DICT from parent (already via normal inheritance)
 
     @classmethod
-    def register_model(cls, name: str):
+    def register(cls, name: str):
         """
         Decorator to register a model subclass.
 
         Usage:
-            @MyModel.register_model('gcn')
+            @MyModel.register('gcn')
             class GCNModel(MyModel):
                 ...
         """
         def decorator(model_cls: type) -> type:
-            cls.MODEL_DICT[name] = model_cls
+            cls.REGISTRY_DICT[name] = model_cls
             model_cls.model_name = name
             return model_cls
         return decorator
 
     @classmethod
-    def create(cls: Type[T], config, *args, **kwargs) -> T:
+    def create(cls: Type[T], name: str, *args, create_instance=True, **kwargs) -> T | Type[T]:
         """
         Factory method to create instance based on config.model.
 
         Args:
             config: Configuration object with model type specified in config.model
             *args: Positional arguments passed to constructor
+            create_instance: 
             **kwargs: Keyword arguments passed to constructor
 
         Returns:
             Instantiated object of the type specified in config.model
 
         Raises:
-            ValueError: If config.model is not found in MODEL_DICT
+            ValueError: If config.model is not found in REGISTRY_DICT
         """
-        model_name = getattr(config, 'model', 'default')
-
         # 'default' refers to the base class itself
-        if model_name == 'default':
+        if name == 'default':
             model_class = cls
-        elif model_name in cls.MODEL_DICT:
-            model_class = cls.MODEL_DICT[model_name]
+        elif name in cls.REGISTRY_DICT:
+            model_class = cls.REGISTRY_DICT[name]
         else:
-            available = ['default'] + list(cls.MODEL_DICT.keys())
+            available = ['default'] + list(cls.REGISTRY_DICT.keys())
             raise ValueError(
-                f"Unknown model type: '{model_name}'. "
+                f"Unknown model type: '{name}'. "
                 f"Available models: {available}. "
                 f"Make sure the model class is imported (registration happens at import time)."
             )
 
-        return model_class(config, *args, **kwargs)
+        return model_class(*args, **kwargs) if create_instance else model_class
