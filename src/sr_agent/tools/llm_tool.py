@@ -10,29 +10,30 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register('call_llm')
 class LLMTool(BaseTool):
-    """调用 LLM API 生成文本回复。
+    """Call LLM API to generate text responses.
 
-    本工具提供统一的 LLM 调用接口，支持多种 LLM 提供商（OpenAI、DeepSeek、Gemini 等）。
-    返回 LLM 的回复内容，以及 token 使用和费用信息。
+    This tool provides a unified interface for LLM API calls, supporting
+    multiple providers (OpenAI, DeepSeek, Gemini, etc.).
+    Returns the LLM response content along with token usage and cost information.
 
-    适用场景：
-    - 文本生成和对话
-    - 数据分析结果的解释
-    - 符号回归公式的自然语言解释
-    - 任意需要 LLM 能力的任务
+    Use cases:
+    - Text generation and dialogue
+    - Explaining data analysis results
+    - Natural language explanations for symbolic regression formulas
+    - Any task requiring LLM capabilities
 
-    支持的提供商：
-    - openai: OpenAI GPT 系列
+    Supported providers:
+    - openai: OpenAI GPT series
     - deepseek: DeepSeek-V3/V2.5
     - gemini: Google Gemini
-    - siliconflow: 硅基流动
-    - openrouter: OpenRouter 聚合平台
-    - manual: 手动输入（测试用）
+    - siliconflow: SiliconFlow
+    - openrouter: OpenRouter aggregation platform
+    - manual: Manual input (for testing)
     """
 
     metadata = ToolMetadata(
         name="call_llm",
-        description="调用 LLM API 生成文本回复。支持 openai、deepseek、gemini 等提供商。返回回复内容、token 使用和费用信息。",
+        description="Call LLM API to generate text responses. Supports openai, deepseek, gemini providers. Returns response content, token usage, and cost info.",
         category="llm",
     )
 
@@ -42,20 +43,20 @@ class LLMTool(BaseTool):
         llm_model: str,
         messages: List[Dict[str, str]],
     ) -> Dict[str, Any]:
-        """调用 LLM API。
+        """Call LLM API.
 
         Args:
-            llm_provider: LLM 提供商名称，如 "openai"、"deepseek"、"gemini" 等。
-            llm_model: 模型名称，如 "gpt-4o-mini"、"deepseek-chat" 等。
-            messages: 消息列表，每个消息为 {"role": "user"|"assistant", "content": "..."} 格式。
+            llm_provider: LLM provider name, e.g., "openai", "deepseek", "gemini".
+            llm_model: Model name, e.g., "gpt-4o-mini", "deepseek-chat".
+            messages: List of messages, each as {"role": "user"|"assistant", "content": "..."}.
 
         Returns:
-            包含以下字段的字典：
-            - success: 是否成功调用
-            - error: 错误信息（如果失败）
-            - message: LLM 回复内容
-            - token_usage: Token 使用统计（prompt、completion、total 等）
-            - money_usage: 费用统计（USD）
+            Dictionary containing:
+            - success: Whether the call succeeded
+            - error: Error message (if failed)
+            - message: LLM response content
+            - token_usage: Token usage statistics (prompt, completion, total)
+            - money_usage: Cost statistics (USD)
         """
         try:
             from ..api.llm_api import LLMAPI

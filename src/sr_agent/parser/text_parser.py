@@ -21,10 +21,10 @@ class TextParser(BaseParser):
     """
 
     def format_tools(self) -> str:
-        """将工具列表格式化为 LLM 可读的描述字符串。
+        """Format tool list into a description string for LLM.
 
         Returns:
-            格式化后的工具描述字符串。
+            Formatted tool description string.
         """
         lines = ["## Available Tools:", ""]
 
@@ -32,28 +32,42 @@ class TextParser(BaseParser):
             name = tool['name']
             desc = tool['description']
 
-            # 获取工具类的签名
+            # 获取工具类的签名和 docstring
             try:
                 if (tool_cls := BaseTool.create(name, create_instance=False)):
+                    # 获取 execute 方法的签名
                     sig = inspect.signature(tool_cls.execute)
                     params = []
                     for param_name, param in sig.parameters.items():
                         if param_name in ('self', 'args', 'kwargs'):
                             continue
-                        if param.default is inspect.Parameter.empty:
-                            params.append(f"{param_name}")
-                        else:
-                            params.append(f"{param_name}={param.default}")
+                        # 构建带类型注解的参数描述
+                        param_parts = []
+                        param_parts.append(param_name)
+                        # 添加类型注解
+                        if param.annotation is not inspect.Parameter.empty:
+                            type_hint = self._format_type(param.annotation)
+                            param_parts.append(f": {type_hint}")
+                        # 添加默认值
+                        if param.default is not inspect.Parameter.empty:
+                            default_val = param.default
+                            param_parts.append(f" = {default_val!r}")
+                        params.append("".join(param_parts))
                     signature = f"{name}({', '.join(params)})"
+
+                    # 获取 docstring
+                    docstring = inspect.getdoc(tool_cls.execute) or "No detailed documentation available."
                 else:
                     signature = f"{name}(...)"
+                    docstring = "No detailed documentation available."
             except Exception:
                 signature = f"{name}(...)"
+                docstring = "No detailed documentation available."
 
             lines.append(f"### {name}")
             lines.append(f"- **Description**: {desc}")
             lines.append(f"- **Signature**: `{signature}`")
-            lines.append(f"- **DocString: `...`")
+            lines.append(f"- **DocString**: {docstring}")
             lines.append("")
 
         lines.append("## Output Format:")
@@ -121,6 +135,47 @@ class TextParser(BaseParser):
         except Exception as e:
             _logger.warning(f"Failed to parse params '{params_str}': {e}")
             return {'raw_params': params_str}
+
+    def _format_type(self, annotation) -> str:
+        """Format type annotation into a readable string.
+
+        Args:
+            annotation: The type annotation to format.
+
+        Returns:
+            Formatted type string.
+        """
+        import typing
+        if annotation is inspect.Parameter.empty:
+            return ""
+
+        # 处理常见类型
+        if annotation is type(None):
+            return "None"
+        if annotation is ...:
+            return "..."
+
+        # 处理 typing 模块的类型
+        origin = getattr(annotation, '__origin__', None)
+        if origin is not None:
+            # 处理 Optional[T] = Union[T, None]
+            if origin is typing.Union:
+                args = getattr(annotation, '__args__', ())
+                if type(None) in args:
+                    non_none = [t for t in args if t is not type(None)]
+                    if len(non_none) == 1:
+                        return f"Optional[{self._format_type(non_none[0])}]"
+            # 处理 List[T], Dict[K, V], Tuple[...]
+            args = getattr(annotation, '__args__', ())
+            args_str = ', '.join(self._format_type(arg) for arg in args)
+            name = getattr(origin, '__name__', str(origin))
+            return f"{name}[{args_str}]"
+
+        # 处理普通类型
+        if hasattr(annotation, '__name__'):
+            return annotation.__name__
+
+        return str(annotation)
 
     def _split_params(self, params_str: str) -> List[str]:
         """分割参数字符串，处理引号内的逗号。

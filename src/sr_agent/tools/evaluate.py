@@ -12,55 +12,57 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register('evaluate_formula')
 class EvaluateTool(BaseTool):
-    """评估数学公式对数据的拟合能力。
+    """Evaluate the fit of mathematical formulas to data.
 
-    本工具使用 nd2py 符号引擎解析公式字符串，拟合并评估其对给定数据的拟合能力。
-    返回多种评价指标，包括 MSE、MAE、R² 等，帮助 LLM 判断公式的质量。
+    This tool uses the nd2py symbolic engine to parse formula strings and
+    evaluate their fit to given data. Returns multiple evaluation metrics
+    including MSE, MAE, R², etc., to help LLM judge formula quality.
 
-    适用场景：
-    - 符号回归中评估候选公式的质量
-    - 比较多个公式的拟合效果
-    - 为 LLM 提供反馈以迭代优化公式
+    Use cases:
+    - Evaluating candidate formula quality in symbolic regression
+    - Comparing fit quality of multiple formulas
+    - Providing feedback to LLM for iterative formula optimization
 
-    支持的数学运算：
-    - 基本运算：+、-、*、/、**（幂）
-    - 三角函数：sin、cos、tan、asin、acos、atan
-    - 双曲函数：sinh、cosh、tanh
-    - 指数对数：exp、log、sqrt
-    - 其他：abs、sigmoid 等
+    Supported mathematical operations:
+    - Basic operations: +, -, *, /, ** (power)
+    - Trigonometric functions: sin, cos, tan, asin, acos, atan
+    - Hyperbolic functions: sinh, cosh, tanh
+    - Exponential and logarithmic: exp, log, sqrt
+    - Others: abs, sigmoid, etc.
 
-    注意：
-    - 幂运算使用 ** 而不是 ^（如 x1**2 而不是 x1^2）
-    - 变量名应与输入字典 X 的键名一致
+    Note:
+    - Use ** for exponentiation, not ^ (e.g., x1**2, not x1^2)
+    - Variable names should match keys in input dictionary X
     """
 
     metadata = ToolMetadata(
         name="evaluate_formula",
-        description="评估数学公式对数据的拟合能力。返回 MSE、MAE、R² 等指标。公式格式如 'x1**2 + sin(x2) + 3.5'。支持基本运算、三角函数、指数对数等。",
+        description="Evaluate how well a mathematical formula fits the data. Returns MSE, MAE, R² metrics. Formula format: 'x1**2 + sin(x2) + 3.5'. Supports basic operations, trig functions, exp/log.",
         category="evaluation",
     )
 
     def execute(
         self, eq: str, x_vars: Optional[List[str]] = None, y_var: str = "y", fit: bool = False,
     ) -> Dict[str, Any]:
-        """评估公式的拟合能力。
+        """Evaluate formula fit quality.
 
         Args:
-            eq: 公式字符串，如 "x1^2 + sin(x2) + 3.5"。
-            x_vars: 输入特征名列表，如 ["x1", "x2"]。None 表示使用全部特征。
-            y_var: 目标变量名，默认为 "y"。
-            fit: 是否使用 BFGS 算法优化公式中的可拟合参数。
+            eq: Formula string, e.g., "x1^2 + sin(x2) + 3.5".
+            x_vars: List of input feature names, e.g., ["x1", "x2"].
+                None means use all features.
+            y_var: Target variable name, default is "y".
+            fit: Whether to optimize formula parameters using BFGS algorithm.
 
         Returns:
-            包含以下字段的字典：
-            - success: 是否成功评估
-            - error: 错误信息（如果失败）
-            - mse: 均方误差（Mean Squared Error）
-            - rmse: 均方根误差（Root Mean Squared Error）
-            - mae: 平均绝对误差（Mean Absolute Error）
-            - r2: 决定系数（R-squared）
-            - y_pred: 预测值数组
-            - formula: 简化后的公式字符串
+            Dictionary containing:
+            - success: Whether evaluation succeeded
+            - error: Error message (if failed)
+            - mse: Mean Squared Error
+            - rmse: Root Mean Squared Error
+            - mae: Mean Absolute Error
+            - r2: R-squared (coefficient of determination)
+            - y_pred: Predicted values array
+            - formula: Simplified formula string
         """
         x = self.context['x']
         y = self.context['y']

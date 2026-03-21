@@ -12,20 +12,21 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register('statistics_analysis')
 class StatisticsTool(BaseTool):
-    """计算输入数据和目标变量的描述性统计量。
+    """Compute descriptive statistics for input data and target variable.
 
-    本工具用于快速了解数据的基本分布特征，帮助 LLM 形成对数据的初步认知。
-    返回的统计量包括：最小值、最大值、均值、标准差、方差、中位数、样本数量。
+    This tool is used to quickly understand the basic distribution characteristics
+    of data, helping LLM form an initial understanding of the data.
+    Returned statistics include: min, max, mean, std, variance, median, sample count.
 
-    适用场景：
-    - 数据分析任务的起点
-    - 符号回归前的数据探索
-    - 检测异常值或数据质量问题
+    Use cases:
+    - Starting point for data analysis tasks
+    - Data exploration before symbolic regression
+    - Detecting outliers or data quality issues
     """
 
     metadata = ToolMetadata(
         name="statistics_analysis",
-        description="计算数据的描述性统计量（最小值、最大值、均值、方差、标准差、中位数）。适用于快速了解数据分布特征。",
+        description="Compute descriptive statistics (min, max, mean, variance, std, median) for input data. Useful for quick data distribution analysis.",
         category="statistics",
     )
 
@@ -34,16 +35,17 @@ class StatisticsTool(BaseTool):
         x_vars: Optional[List[str]] = None,
         y_var: str = "y",
     ) -> Dict[str, Any]:
-        """执行统计分析。
+        """Execute statistical analysis.
 
         Args:
-            x_vars: 要分析的输入特征名列表，如 ["x1", "x2"]。None 表示分析全部特征。
-            y_var: 目标变量名，默认为 "y"。
+            x_vars: List of input feature names to analyze, e.g., ["x1", "x2"].
+                None means analyze all features.
+            y_var: Target variable name, default is "y".
 
         Returns:
-            包含以下字段的字典：
-            - target: 目标变量的统计量
-            - features: 各输入特征的统计量列表
+            Dictionary containing:
+            - target: Statistics for the target variable
+            - features: List of statistics for each input feature
         """
         x = self.context['x']
         y = self.context['y']
@@ -61,14 +63,14 @@ class StatisticsTool(BaseTool):
         return result
 
     def _compute_stats(self, arr: np.ndarray, name: str) -> Dict[str, Any]:
-        """计算单个数组的统计量。
+        """Compute statistics for a single array.
 
         Args:
-            arr: 输入数组。
-            name: 数组名称。
+            arr: Input array.
+            name: Array name.
 
         Returns:
-            统计量字典。
+            Dictionary of statistics.
         """
         arr = np.asarray(arr).flatten()
         return {

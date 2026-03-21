@@ -110,11 +110,11 @@ class TestStatisticsTool:
         assert result["target"]["n_samples"] == 3
 
     def test_metadata_exists(self):
-        """测试元数据存在。"""
+        """Test that metadata exists."""
         assert self.tool.metadata is not None
         assert self.tool.metadata.name == "statistics_analysis"
         assert self.tool.metadata.category == "statistics"
-        assert "统计量" in self.tool.metadata.description
+        assert "statistics" in self.tool.metadata.description.lower()
 
     def test_x_vars_subset(self):
         """测试 x_vars 参数可以选择子集。"""

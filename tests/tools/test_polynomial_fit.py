@@ -237,11 +237,11 @@ class TestPolynomialFitTool:
         assert abs(residual_sum) < 1e-6
 
     def test_metadata_exists(self):
-        """测试元数据存在。"""
+        """Test that metadata exists."""
         assert self.tool.metadata is not None
         assert self.tool.metadata.name == "polynomial_fit"
         assert self.tool.metadata.category == "regression"
-        assert "多项式" in self.tool.metadata.description
+        assert "polynomial" in self.tool.metadata.description.lower()
 
     def test_multicollinearity_warning(self):
         """测试多重共线性警告。"""

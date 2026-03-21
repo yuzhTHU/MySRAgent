@@ -77,39 +77,41 @@ FORBIDDEN_MODULES = {
 
 @BaseTool.register('code_executor')
 class CodeExecutorTool(BaseTool):
-    """执行给定的 Python 代码并返回打印输出。
+    """Execute given Python code and return printed output.
 
-    本工具提供一个受限的 Python 执行环境，只允许导入安全的计算相关模块。
-    适用于：
-    - 数值计算和数据处理
-    - 数学公式验证
-    - 算法原型设计
-    - 符号回归中的表达式求值
+    This tool provides a restricted Python execution environment that only
+    allows importing safe, computation-related modules.
 
-    安全限制：
-    - 只能导入白名单中的模块（如 numpy, math, random 等）
-    - 禁止文件系统操作、网络访问、系统调用
-    - 禁止使用 eval/exec 等动态执行函数
-    - 捕获 stdout 作为输出结果
+    Use cases:
+    - Numerical computation and data processing
+    - Mathematical formula verification
+    - Algorithm prototyping
+    - Expression evaluation in symbolic regression
+
+    Security restrictions:
+    - Only whitelisted modules can be imported (numpy, math, random, etc.)
+    - File system operations, network access, and system calls are forbidden
+    - Dynamic execution functions like eval/exec are forbidden
+    - Stdout is captured as output
     """
 
     metadata = ToolMetadata(
         name="code_executor",
-        description="执行 Python 代码并返回打印输出。支持 numpy、math 等计算库，适用于数值计算和公式验证。",
+        description="Execute Python code and return printed output. Supports numpy, math libraries for numerical computation and formula verification.",
         category="computation",
     )
 
     def execute(self, program: str) -> Dict[str, Any]:
-        """执行给定的 Python 代码。
+        """Execute given Python code.
 
         Args:
-            program: 要执行的 Python 代码字符串。
+            program: Python code string to execute.
 
         Returns:
-            包含以下字段的字典：
-            - success: 布尔值，表示执行是否成功
-            - output: 字符串，捕获的 stdout 输出
-            - error: 字符串，错误信息（如果有）
+            Dictionary containing:
+            - success: Boolean indicating whether execution succeeded
+            - output: Captured stdout output
+            - error: Error message (if any)
         """
         # 验证代码安全性
         is_safe, error_msg = self._validate_code(program)
@@ -147,13 +149,13 @@ class CodeExecutorTool(BaseTool):
             sys.stdout = old_stdout
 
     def _validate_code(self, code: str) -> Tuple[bool, str]:
-        """验证代码是否安全。
+        """Validate code for security.
 
         Args:
-            code: 要验证的代码字符串。
+            code: Code string to validate.
 
         Returns:
-            (是否安全，错误信息)
+            Tuple of (is_safe, error_message).
         """
         try:
             tree = ast.parse(code)
@@ -190,10 +192,10 @@ class CodeExecutorTool(BaseTool):
         return True, ""
 
     def _create_safe_globals(self) -> Dict[str, Any]:
-        """创建安全的全局命名空间。
+        """Create safe global namespace.
 
         Returns:
-            包含允许模块的字典。
+            Dictionary containing allowed modules.
         """
         safe_globals = {}
 

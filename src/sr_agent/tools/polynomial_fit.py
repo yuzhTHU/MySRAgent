@@ -13,28 +13,29 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register('polynomial_fit')
 class PolynomialFitTool(BaseTool):
-    """对数据进行多项式拟合。
+    """Fit polynomial models to data.
 
-    本工具使用最小二乘法对输入数据进行多项式拟合，支持：
-    - 自定义最高阶次数
-    - 是否包含交叉项
-    - 交叉项黑名单（哪些变量之间不产生交叉项）
-    - 交叉项白名单（只允许哪些变量之间产生交叉项）
+    This tool uses least squares regression to fit polynomials to input data,
+    supporting:
+    - Configurable maximum degree
+    - Option to include interaction terms
+    - Interaction blacklist (which variable pairs should not interact)
+    - Interaction whitelist (only allow specified variable pairs to interact)
 
-    返回结果包括：
-    - 拟合的多项式表达式
-    - 各系数的值及其统计显著性
-    - 整体拟合效果（R²、调整 R²、RMSE 等）
+    Returned results include:
+    - Fitted polynomial expression
+    - Coefficient values and their statistical significance
+    - Overall fit quality metrics (R², adjusted R², RMSE, etc.)
 
-    适用场景：
-    - 探索变量间的非线性关系
-    - 符号回归的预处理或基线
-    - 特征工程中的多项式特征生成
+    Use cases:
+    - Exploring nonlinear relationships between variables
+    - Preprocessing or baseline for symbolic regression
+    - Polynomial feature generation in feature engineering
     """
 
     metadata = ToolMetadata(
         name="polynomial_fit",
-        description="对数据进行多项式拟合，支持自定义阶数、交叉项控制。返回拟合的多项式及其统计显著性、拟合效果指标。",
+        description="Fit polynomial models to data with configurable degree and interaction terms. Returns fitted polynomials with statistical significance and fit quality metrics.",
         category="regression",
     )
 
@@ -48,29 +49,30 @@ class PolynomialFitTool(BaseTool):
         interaction_whitelist: Optional[List[Tuple[str, str]]] = None,
         include_bias: bool = True,
     ) -> Dict[str, Any]:
-        """执行多项式拟合。
+        """Execute polynomial fit.
 
         Args:
-            x_vars: 输入特征名列表，如 ["x1", "x2"]。None 表示使用全部特征。
-            y_var: 目标变量名，默认为 "y"。
-            max_degree: 多项式最高阶次数，默认为 2。
-            include_interactions: 是否包含交叉项，默认为 True。
-            interaction_blacklist: 交叉项黑名单，指定哪些变量之间不产生交叉项。
-                例如 [("x1", "x2")] 表示 x1 和 x2 之间不产生交叉项。
-            interaction_whitelist: 交叉项白名单，只允许指定的变量对产生交叉项。
-                如果为 None，则允许所有变量对（除非在黑名单中）。
-                如果指定，则只生成白名单中的交叉项。
-            include_bias: 是否包含截距项，默认为 True。
+            x_vars: List of input feature names, e.g., ["x1", "x2"].
+                None means use all features.
+            y_var: Target variable name, default is "y".
+            max_degree: Maximum polynomial degree, default is 2.
+            include_interactions: Whether to include interaction terms, default is True.
+            interaction_blacklist: List of variable pairs that should not interact.
+                E.g., [("x1", "x2")] means no interaction between x1 and x2.
+            interaction_whitelist: Only allow specified variable pairs to interact.
+                If None, all pairs are allowed (unless in blacklist).
+                If specified, only interactions in the whitelist are generated.
+            include_bias: Whether to include bias/intercept term, default is True.
 
         Returns:
-            包含以下字段的字典：
-            - polynomial: 多项式字符串表达式
-            - terms: 各多项式项的详细信息列表
-            - coefficients: 系数字典 {term: coefficient}
-            - fit_quality: 拟合质量指标（R²、调整 R²、RMSE、AIC、BIC）
-            - design_matrix_shape: 设计矩阵的形状
-            - n_parameters: 参数数量
-            - warnings: 警告信息列表
+            Dictionary containing:
+            - polynomial: Polynomial string expression
+            - terms: Detailed information for each term
+            - coefficients: Coefficient dictionary {term: coefficient}
+            - fit_quality: Fit quality metrics (R², adjusted R², RMSE, AIC, BIC)
+            - design_matrix_shape: Shape of the design matrix
+            - n_parameters: Number of parameters
+            - warnings: List of warning messages
         """
         x = self.context['x']
         y = self.context['y']
@@ -277,16 +279,16 @@ class PolynomialFitTool(BaseTool):
         blacklist: Optional[List[Tuple[str, str]]],
         whitelist: Optional[List[Tuple[str, str]]],
     ) -> Set[Tuple[str, str]]:
-        """获取允许的交叉项组合。
+        """Get allowed interaction term combinations.
 
         Args:
-            var_names: 变量名列表。
-            include_interactions: 是否包含交叉项。
-            blacklist: 交叉项黑名单。
-            whitelist: 交叉项白名单。
+            var_names: List of variable names.
+            include_interactions: Whether to include interaction terms.
+            blacklist: List of variable pairs to exclude from interactions.
+            whitelist: List of variable pairs to allow for interactions.
 
         Returns:
-            允许的交叉项组合集合。
+            Set of allowed variable pair combinations.
         """
         if not include_interactions:
             return set()
@@ -318,17 +320,18 @@ class PolynomialFitTool(BaseTool):
         max_degree: int,
         allowed_interactions: Set[Tuple[str, str]],
     ) -> List[Tuple[int, ...]]:
-        """生成所有多项式项的幂次组合。
+        """Generate all polynomial term power combinations.
 
-        使用递归方式生成所有满足总次数 <= max_degree 的幂次组合。
+        Generates all power combinations satisfying total degree <= max_degree.
 
         Args:
-            var_names: 变量名列表。
-            max_degree: 最高阶次数。
-            allowed_interactions: 允许的交叉项组合。
+            var_names: List of variable names.
+            max_degree: Maximum polynomial degree.
+            allowed_interactions: Set of allowed variable pair combinations.
 
         Returns:
-            幂次组合列表，每个组合是一个元组，表示各变量的幂次。
+            List of power combinations, each as a tuple representing
+            the power of each variable.
         """
         n_vars = len(var_names)
         term_powers = []
@@ -357,15 +360,15 @@ class PolynomialFitTool(BaseTool):
         var_names: List[str],
         allowed_interactions: Set[Tuple[str, str]],
     ) -> bool:
-        """检查幂次组合是否满足交叉项约束。
+        """Check if power combination satisfies interaction constraints.
 
         Args:
-            powers: 幂次元组。
-            var_names: 变量名列表。
-            allowed_interactions: 允许的交叉项组合。
+            powers: Tuple of powers for each variable.
+            var_names: List of variable names.
+            allowed_interactions: Set of allowed variable pair combinations.
 
         Returns:
-            是否满足约束。
+            True if constraints are satisfied, False otherwise.
         """
         if not allowed_interactions:
             # 不允许任何交叉项，检查是否有多于一个变量非零
@@ -389,16 +392,16 @@ class PolynomialFitTool(BaseTool):
         term_powers: List[Tuple[int, ...]],
         include_bias: bool,
     ) -> Tuple[np.ndarray, List[str]]:
-        """构建设计矩阵。
+        """Build design matrix.
 
         Args:
-            x: 输入特征字典。
-            var_names: 变量名列表。
-            term_powers: 幂次组合列表。
-            include_bias: 是否包含截距项。
+            x: Input feature dictionary.
+            var_names: List of variable names.
+            term_powers: List of power combinations.
+            include_bias: Whether to include bias/intercept term.
 
         Returns:
-            设计矩阵和项名称列表。
+            Design matrix and list of term names.
         """
         n_samples = len(next(iter(x.values())))
         term_info = []
@@ -433,14 +436,14 @@ class PolynomialFitTool(BaseTool):
         powers: Tuple[int, ...],
         var_names: List[str],
     ) -> str:
-        """将幂次组合转换为字符串表示。
+        """Convert power combination to string representation.
 
         Args:
-            powers: 幂次元组。
-            var_names: 变量名列表。
+            powers: Tuple of powers.
+            var_names: List of variable names.
 
         Returns:
-            字符串表示，如 "x1**2*x2"。
+            String representation, e.g., "x1**2*x2".
         """
         parts = []
         for var_name, power in zip(var_names, powers):
