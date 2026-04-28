@@ -16,7 +16,7 @@ class EvaluateTool(BaseTool):
 
     This tool uses the nd2py symbolic engine to parse formula strings and
     evaluate their fit to given data. Returns multiple evaluation metrics
-    including MSE, MAE, R², etc., to help LLM judge formula quality.
+    including MSE, MAE, R^2, etc., to help LLM judge formula quality.
 
     Use cases:
     - Evaluating candidate formula quality in symbolic regression
@@ -37,7 +37,7 @@ class EvaluateTool(BaseTool):
 
     metadata = ToolMetadata(
         name="evaluate_formula",
-        description="Evaluate how well a mathematical formula fits the data. Returns MSE, MAE, R² metrics. Formula format: 'x1**2 + sin(x2) + 3.5'. Supports basic operations, trig functions, exp/log. When you are confident about a formula, call this tool to check its ability to fit the data. Floating-point numbers in the formula will be automatically optimized to better fit the data.",
+        description="Evaluate how well a mathematical formula fits the data. Returns MSE, MAE, R^2 metrics. Formula format: 'x1**2 + sin(x2) + 3.5'. Supports basic operations, trig functions, exp/log. When you are confident about a formula, call this tool to check its ability to fit the data. Floating-point numbers in the formula will be automatically optimized to better fit the data.",
         category="evaluation",
     )
 
@@ -55,14 +55,9 @@ class EvaluateTool(BaseTool):
 
         Returns:
             Dictionary containing:
-            - success: Whether evaluation succeeded
-            - error: Error message (if failed)
-            - mse: Mean Squared Error
-            - rmse: Root Mean Squared Error
-            - mae: Mean Absolute Error
-            - r2: R-squared (coefficient of determination)
-            - y_pred: Predicted values array
-            - formula: Simplified formula string
+            - metrics: Evaluation metrics (MSE, RMSE, MAE, R^2)
+            - error: Error message if evaluation failed, None otherwise
+            - formula: Simplified formula string (if different from input)
         """
         x = self.context['x']
         y = self.context['y']
@@ -96,7 +91,7 @@ class EvaluateTool(BaseTool):
             rmse = float(np.sqrt(mse))
             mae = float(np.mean(np.abs(y_pred - y_true)))
 
-            # R² = 1 - SS_res / SS_tot
+            # R^2 = 1 - SS_res / SS_tot
             ss_res = np.sum((y_true - y_pred) ** 2)
             ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
             r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float('nan')
@@ -107,25 +102,22 @@ class EvaluateTool(BaseTool):
             except Exception:
                 formula_str = eq
 
-            return {
-                "success": True,
+            # 只在公式简化后与输入不同时返回 formula
+            result = {
+                "metrics": {
+                    "mse": mse,
+                    "rmse": rmse,
+                    "mae": mae,
+                    "r2": r2,
+                },
                 "error": None,
-                "mse": mse,
-                "rmse": rmse,
-                "mae": mae,
-                "r2": r2,
-                "y_pred": y_pred.tolist(),
-                "formula": formula_str,
             }
+            if formula_str != eq:
+                result["formula"] = formula_str
+            return result
 
         except Exception as e:
             return {
-                "success": False,
+                "metrics": None,
                 "error": str(e),
-                "mse": None,
-                "rmse": None,
-                "mae": None,
-                "r2": None,
-                "y_pred": None,
-                "formula": None,
             }

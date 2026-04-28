@@ -13,6 +13,7 @@ from .tools import BaseTool
 from .parser import BaseParser
 from .utils import FactoryMixin, ParallelTimer, NamedTimer
 from .utils.logger import setup_logging
+from .utils import render_python, render_markdown, tag2ansi
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
 
@@ -145,23 +146,25 @@ Please start by analyzing the data to understand the relationship between featur
 
             # Step 1: 根据 Buffer 创建 Prompt
             messages = self.build_prompt()
-            _logger.debug(f"Built prompt with {len(messages)} messages")
-            _logger.debug(f"Prompt messages: {messages}")
+            _logger.info(f"Built prompt with {len(messages)} messages")
+            logs = []
+            for msg in messages:
+                role = tag2ansi(f"[red bold][{msg['role']}]:[reset]")
+                content = render_markdown(msg['content'])
+                logs.append(f"{role}\n{content}")
+            _logger.debug(f"Prompt messages:\n{'\n---\n'.join(logs)}")
 
             # Step 2: 请求 LLM，得到 Response
             response = self.request_llm(messages)
-            _logger.debug(f"LLM response: {response[:200]}...")
-            _logger.debug(f"Full LLM response: {response}")
+            _logger.info(f"Full LLM response:\n{render_markdown(response)}")
 
             # Step 3: 解析 Response，得到 Action
             actions = self.parse_actions(response)
             _logger.info(f"Parsed actions: {actions}")
-            _logger.debug(f"Full parsed actions: {actions}")
 
             # Step 4: 执行 Action，得到 Result
             results = self.execute_action(actions)
-            _logger.debug(f"Action result: {results}")
-            _logger.debug(f"Full action results: {results}")
+            _logger.info(f"Action result: {results}")
 
             # Step 5: 基于 Action 和 Result 更新 Buffer
             self.update_buffer(response, actions, results)
@@ -295,4 +298,4 @@ Please start by analyzing the data to understand the relationship between featur
         for (name, params), result in zip(actions, results):
             # 工具调用
             self.buffer.append({'role': 'user', 'content': f"Assistant call `{name}` with params `{params}`"})
-            self.buffer.append({'role': 'user', 'content': f"Results: {str(result)}"})
+            self.buffer.append({'role': 'user', 'content': f"Results: `{str(result)}`"})

@@ -24,17 +24,17 @@ class TestPolynomialFitTool:
         # 检查返回结构
         assert "polynomial" in result
         assert "terms" in result
-        assert "coefficients" in result
         assert "fit_quality" in result
 
         # 检查拟合质量
         assert result["fit_quality"]["r_squared"] > 0.99
 
         # 检查系数（截距约 1，斜率约 2）
-        assert "1" in result["coefficients"]
-        assert "x" in result["coefficients"]
-        assert abs(result["coefficients"]["1"] - 1.0) < 0.2
-        assert abs(result["coefficients"]["x"] - 2.0) < 0.1
+        terms_dict = {t["term"]: t["coefficient"] for t in result["terms"]}
+        assert "1" in terms_dict
+        assert "x" in terms_dict
+        assert abs(terms_dict["1"] - 1.0) < 0.2
+        assert abs(terms_dict["x"] - 2.0) < 0.1
 
     def test_quadratic_fit(self):
         """测试二次多项式拟合。"""
@@ -46,9 +46,10 @@ class TestPolynomialFitTool:
         result = tool.execute(max_degree=2)
 
         assert result["fit_quality"]["r_squared"] > 0.95
-        assert "x**2" in result["coefficients"]
-        assert "x" in result["coefficients"]
-        assert "1" in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "x**2" in terms
+        assert "x" in terms
+        assert "1" in terms
 
     def test_multivariate_polynomial(self):
         """测试多元多项式拟合。"""
@@ -63,9 +64,10 @@ class TestPolynomialFitTool:
         result = tool.execute(max_degree=2, include_interactions=True)
 
         assert result["fit_quality"]["r_squared"] > 0.9
-        assert "x1" in result["coefficients"]
-        assert "x2" in result["coefficients"]
-        assert "x1*x2" in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "x1" in terms
+        assert "x2" in terms
+        assert "x1*x2" in terms
 
     def test_no_interactions(self):
         """测试不包含交叉项的情况。"""
@@ -81,7 +83,8 @@ class TestPolynomialFitTool:
         )
 
         # 交叉项不应该存在
-        assert "x1*x2" not in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "x1*x2" not in terms
 
     def test_interaction_blacklist(self):
         """测试交叉项黑名单。"""
@@ -102,9 +105,10 @@ class TestPolynomialFitTool:
         )
 
         # x1*x2 不应该存在
-        assert "x1*x2" not in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "x1*x2" not in terms
         # 但 x1*x3 和 x2*x3 应该存在
-        assert "x1*x3" in result["coefficients"] or "x3*x1" in result["coefficients"]
+        assert "x1*x3" in terms or "x3*x1" in terms
 
     def test_interaction_whitelist(self):
         """测试交叉项白名单。"""
@@ -124,8 +128,9 @@ class TestPolynomialFitTool:
         )
 
         # 只有 x1*x2 应该存在
-        has_x1_x3 = "x1*x3" in result["coefficients"]
-        has_x2_x3 = "x2*x3" in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        has_x1_x3 = "x1*x3" in terms
+        has_x2_x3 = "x2*x3" in terms
         assert not has_x1_x3
         assert not has_x2_x3
 
@@ -138,7 +143,8 @@ class TestPolynomialFitTool:
         result = tool.execute(max_degree=1, include_bias=False)
 
         # 截距项不应该存在
-        assert "1" not in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "1" not in terms
 
     def test_higher_degree(self):
         """测试高次多项式拟合。"""
@@ -150,10 +156,11 @@ class TestPolynomialFitTool:
         result = tool.execute(max_degree=3)
 
         assert result["fit_quality"]["r_squared"] > 0.9
-        assert "x**3" in result["coefficients"]
-        assert "x**2" in result["coefficients"]
-        assert "x" in result["coefficients"]
-        assert "1" in result["coefficients"]
+        terms = [t["term"] for t in result["terms"]]
+        assert "x**3" in terms
+        assert "x**2" in terms
+        assert "x" in terms
+        assert "1" in terms
 
     def test_fit_quality_metrics(self):
         """测试拟合质量指标的计算。"""
@@ -201,11 +208,10 @@ class TestPolynomialFitTool:
 
         result = tool.execute(max_degree=2)
 
-        assert "design_matrix_shape" in result
-        assert "n_parameters" in result
-        assert "n_samples" in result
-        assert result["n_samples"] == 5
-        assert result["design_matrix_shape"][0] == 5  # 行数等于样本数
+        # 设计矩阵信息已移除，改用 terms 和 residuals_summary
+        assert "terms" in result
+        assert "residuals_summary" in result
+        assert len(result["terms"]) > 0
 
     def test_polynomial_string_format(self):
         """测试多项式字符串格式。"""
@@ -227,14 +233,16 @@ class TestPolynomialFitTool:
 
         result = tool.execute(max_degree=1)
 
-        assert "predictions" in result
-        assert "residuals" in result
-        assert len(result["predictions"]) == 5
-        assert len(result["residuals"]) == 5
+        # 残差统计信息
+        assert "residuals_summary" in result
+        summary = result["residuals_summary"]
+        assert "min" in summary
+        assert "max" in summary
+        assert "mean" in summary
+        assert "std" in summary
 
-        # 残差和应该接近 0（最小二乘性质）
-        residual_sum = sum(result["residuals"])
-        assert abs(residual_sum) < 1e-6
+        # 残差均值应该接近 0（最小二乘性质）
+        assert abs(summary["mean"]) < 1e-6
 
     def test_metadata_exists(self):
         """Test that metadata exists."""
@@ -263,7 +271,7 @@ class TestPolynomialFitTool:
             for w in result["warnings"]
         )
         # 由于 x2 = 2*x1，应该有多重共线性警告
-        assert has_rank_warning or result["matrix_rank"] < result["n_parameters"]
+        assert has_rank_warning
 
     def test_coefficients_dict_completeness(self):
         """测试系数字典的完整性。"""
@@ -273,10 +281,12 @@ class TestPolynomialFitTool:
 
         result = tool.execute(max_degree=2)
 
-        # 系数字典中的项应该与 terms 列表中的项一致
-        terms_in_list = {t["term"] for t in result["terms"]}
-        terms_in_dict = set(result["coefficients"].keys())
-        assert terms_in_list == terms_in_dict
+        # terms 列表中的所有项都应该有完整的统计信息
+        for term_info in result["terms"]:
+            assert "term" in term_info
+            assert "coefficient" in term_info
+            assert "std_error" in term_info
+            assert "p_value" in term_info
 
     def test_x_vars_subset(self):
         """测试 x_vars 参数可以选择子集。"""
@@ -292,6 +302,6 @@ class TestPolynomialFitTool:
         # 只使用 x1 和 x2
         result = tool.execute(x_vars=["x1", "x2"], max_degree=2)
 
-        # x3 不应该出现在系数中
-        assert "x3" not in result["coefficients"]
-        assert all("x3" not in term for term in result["coefficients"].keys())
+        # x3 不应该出现在 terms 中
+        terms = [t["term"] for t in result["terms"]]
+        assert all("x3" not in term for term in terms)

@@ -25,7 +25,7 @@ class PolynomialFitTool(BaseTool):
     Returned results include:
     - Fitted polynomial expression
     - Coefficient values and their statistical significance
-    - Overall fit quality metrics (R², adjusted R², RMSE, etc.)
+    - Overall fit quality metrics (R^2, adjusted R^2, RMSE, etc.)
 
     Use cases:
     - Exploring nonlinear relationships between variables
@@ -67,12 +67,10 @@ class PolynomialFitTool(BaseTool):
         Returns:
             Dictionary containing:
             - polynomial: Polynomial string expression
-            - terms: Detailed information for each term
-            - coefficients: Coefficient dictionary {term: coefficient}
-            - fit_quality: Fit quality metrics (R², adjusted R², RMSE, AIC, BIC)
-            - design_matrix_shape: Shape of the design matrix
-            - n_parameters: Number of parameters
-            - warnings: List of warning messages
+            - terms: Detailed information for each term (coefficient, std_error, p_value, significance)
+            - fit_quality: Fit quality metrics (R^2, adjusted R^2, RMSE, MAE, AIC, BIC)
+            - residuals_summary: Summary statistics of residuals (min, max, mean, std)
+            - warnings: List of warning messages (e.g., multicollinearity, insufficient samples)
         """
         x = self.context['x']
         y = self.context['y']
@@ -186,7 +184,7 @@ class PolynomialFitTool(BaseTool):
         ss_tot = np.sum((y - np.mean(y)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
-        # 调整 R²
+        # Adjusted R^2
         if n > p and ss_tot > 0:
             adj_r_squared = 1 - (1 - r_squared) * (n - 1) / (n - p)
         else:
@@ -208,7 +206,6 @@ class PolynomialFitTool(BaseTool):
         # 构建结果
         terms_result = []
         polynomial_parts = []
-        coefficients_dict = {}
 
         for i, (term_str, coef, std_err, t_stat, p_val) in enumerate(
             zip(term_info, coefficients, std_errors, t_stats, p_values)
@@ -223,7 +220,6 @@ class PolynomialFitTool(BaseTool):
                 "significant_at_0.01": bool(p_val < 0.01) if not np.isnan(p_val) else None,
             }
             terms_result.append(term_result)
-            coefficients_dict[term_str] = float(coef)
 
             # 构建多项式字符串部分
             if term_str == "1":
@@ -254,7 +250,6 @@ class PolynomialFitTool(BaseTool):
         return {
             "polynomial": polynomial_str,
             "terms": terms_result,
-            "coefficients": coefficients_dict,
             "fit_quality": {
                 "r_squared": float(r_squared),
                 "adjusted_r_squared": float(adj_r_squared) if not np.isnan(adj_r_squared) else None,
@@ -263,12 +258,12 @@ class PolynomialFitTool(BaseTool):
                 "aic": float(aic) if not np.isnan(aic) else None,
                 "bic": float(bic) if not np.isnan(bic) else None,
             },
-            "residuals": residuals.tolist(),
-            "predictions": y_pred.tolist(),
-            "design_matrix_shape": design_matrix.shape,
-            "n_parameters": n_params,
-            "n_samples": n_samples,
-            "matrix_rank": matrix_rank,
+            "residuals_summary": {
+                "min": float(np.min(residuals)) if len(residuals) > 0 else None,
+                "max": float(np.max(residuals)) if len(residuals) > 0 else None,
+                "mean": float(np.mean(residuals)) if len(residuals) > 0 else None,
+                "std": float(np.std(residuals)) if len(residuals) > 0 else None,
+            },
             "warnings": warnings,
         }
 

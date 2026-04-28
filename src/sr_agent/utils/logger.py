@@ -222,6 +222,7 @@ def setup_logging(
 
     # ========== 控制台 Handler ==========
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.stream.reconfigure(encoding='utf-8')
     console_handler.setLevel(getattr(logging, info_level.upper()))
     console_handler.setFormatter(LogFormatter(
         exp_name=exp_name,

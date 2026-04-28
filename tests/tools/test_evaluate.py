@@ -18,10 +18,9 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("x1 * 2 + 3")
 
-        assert result["success"] is True
         assert result["error"] is None
-        assert result["mse"] == 0.0
-        assert result["r2"] == 1.0
+        assert result["metrics"]["mse"] == 0.0
+        assert result["metrics"]["r2"] == 1.0
 
     def test_quadratic_formula(self):
         """测试二次公式：y = x1**2。"""
@@ -31,9 +30,9 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("x1**2")
 
-        assert result["success"] is True
-        assert result["mse"] == 0.0
-        assert result["r2"] == 1.0
+        assert result["error"] is None
+        assert result["metrics"]["mse"] == 0.0
+        assert result["metrics"]["r2"] == 1.0
 
     def test_trigonometric_formula(self):
         """测试三角函数公式：y = sin(x1)。"""
@@ -43,8 +42,8 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("sin(x1)")
 
-        assert result["success"] is True
-        assert result["mse"] < 1e-10
+        assert result["error"] is None
+        assert result["metrics"]["mse"] < 1e-10
 
     def test_poor_fit(self):
         """测试拟合不佳的情况。"""
@@ -54,9 +53,9 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("x1")  # 错误的公式
 
-        assert result["success"] is True
-        assert result["mse"] > 10000  # MSE 应该很大
-        assert result["r2"] < 0  # R² 应该为负（比预测均值还差）
+        assert result["error"] is None
+        assert result["metrics"]["mse"] > 10000  # MSE 应该很大
+        assert result["metrics"]["r2"] < 0  # R² 应该为负（比预测均值还差）
 
     def test_multiple_features(self):
         """测试多特征公式：y = x1 + x2。"""
@@ -69,8 +68,8 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("x1 + x2")
 
-        assert result["success"] is True
-        assert result["mse"] == 0.0
+        assert result["error"] is None
+        assert result["metrics"]["mse"] == 0.0
 
     def test_invalid_formula(self):
         """测试无效公式。"""
@@ -80,8 +79,8 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("invalid_syntax!!")
 
-        assert result["success"] is False
         assert result["error"] is not None
+        assert result["metrics"] is None
 
     def test_with_parameter_fitting(self):
         """测试参数拟合功能。"""
@@ -93,8 +92,8 @@ class TestEvaluateTool:
         result = tool.execute("1.0 * x1", fit=True)
 
         # 拟合后应该能得到较好的结果
-        assert result["success"] is True
-        assert result["r2"] > 0.95
+        assert result["error"] is None
+        assert result["metrics"]["r2"] > 0.95
 
     def test_output_structure(self):
         """测试输出结构完整性。"""
@@ -104,10 +103,14 @@ class TestEvaluateTool:
         tool = EvaluateTool(x=X, y=y, fit_parameters=False)
         result = tool.execute("x1")
 
-        # 检查所有必需的键
-        required_keys = ["success", "error", "mse", "rmse", "mae", "r2", "y_pred", "formula"]
-        for key in required_keys:
-            assert key in result, f"Missing key: {key}"
+        # 检查必需的键
+        assert "metrics" in result
+        assert "error" in result
+        assert result["metrics"] is not None
+        assert "mse" in result["metrics"]
+        assert "rmse" in result["metrics"]
+        assert "mae" in result["metrics"]
+        assert "r2" in result["metrics"]
 
     def test_metadata_exists(self):
         """测试元数据存在。"""
@@ -130,5 +133,5 @@ class TestEvaluateTool:
         # 只使用 x1 和 x3
         result = tool.execute("x1 * 2 + x3", x_vars=["x1", "x3"])
 
-        assert result["success"] is True
-        assert result["r2"] > 0.9
+        assert result["error"] is None
+        assert result["metrics"]["r2"] > 0.9
