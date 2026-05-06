@@ -4,7 +4,7 @@
 提供数据分布的基本统计量计算，包括最小值、最大值、均值、方差等。
 """
 import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Tuple
 from .base_tool import BaseTool, ToolMetadata
 
 
@@ -26,22 +26,25 @@ class StatisticsTool(BaseTool):
     def execute(
         self,
         variables: List[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], List[str]]:
         """Execute statistical analysis.
 
         Args:
             variables: List of variable names to analyze, e.g., ["x1", "x2", "y"].
-                None means analyze all variables (including the target variable).
+                Use all variables (including the target variable) by default.
 
         Returns:
-            - statistics: statistics for each variable, including min, max, mean, variance, std, median, q1, q3, sample count.
+            results:
+                statistics: statistics for each variable, including min, max, mean, variance, std, median, q1, q3, sample count.
+            exceptions: List of any exceptions that occurred during analysis.
         """
         data = self.context['data'] # {str: np.ndarray}, 包括 input variables & target variable
         if variables is None:
             variables = list(data.keys())
-        return {
+        results = {
             'statistics': {var: self.get_stats(data[var]) for var in variables}
         }
+        return results, []
     
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:

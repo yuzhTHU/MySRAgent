@@ -1,134 +1,177 @@
-# Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""数据统计分析工具的单元测试。"""
+"""StatisticsTool 的单元测试。"""
+
+from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from sr_agent.tools.statistics import StatisticsTool
 
 
-class TestStatisticsTool:
-    """测试 StatisticsTool 的正确性。"""
+class TestStatisticsToolMetadata:
+    def test_metadata_is_inferred_from_execute_docstring(self):
+        assert StatisticsTool.metadata.name == "statistics_analysis"
+        assert StatisticsTool.metadata.description == "Execute statistical analysis."
+        assert StatisticsTool.metadata.category == "default"
 
+    def test_parameters_schema_is_inferred_from_execute_signature_and_docstring(self):
+        assert StatisticsTool.metadata.parameters == {
+            "type": "object",
+            "properties": {
+                "variables": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        'List of variable names to analyze, e.g., ["x1", "x2", "y"].\n'
+                        "None means analyze all variables (including the target variable)."
+                    ),
+                    "default": None,
+                }
+            },
+            "required": [],
+        }
+
+    def test_to_dict_exports_openrouter_tool_schema(self):
+        assert StatisticsTool.to_dict() == {
+            "type": "function",
+            "function": {
+                "name": "statistics_analysis",
+                "description": "Execute statistical analysis.",
+                "parameters": StatisticsTool.metadata.parameters,
+            },
+        }
+
+
+class TestStatisticsToolExecution:
     def setup_method(self):
-        """每个测试方法前执行。"""
-        # 测试数据
-        self.x = {"feature1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
-        self.y = np.array([2.0, 4.0, 6.0, 8.0, 10.0])
-        self.tool = StatisticsTool(x=self.x, y=self.y)
+        self.data = {
+            "x1": np.array([1.0, 2.0, 3.0, 4.0]),
+            "x2": np.array([10.0, 20.0, 30.0, 40.0]),
+            "y": np.array([2.0, 4.0, 6.0, 8.0]),
+        }
+        self.tool = StatisticsTool(data=self.data)
 
-    def test_basic_statistics(self):
-        """测试基本统计量计算。"""
+    def test_execute_analyzes_all_variables_by_default(self):
         result = self.tool.execute()
 
-        # 检查返回结构
-        assert "target" in result
-        assert "features" in result
-        assert len(result["features"]) == 1
+        assert set(result.keys()) == {"statistics"}
+        assert set(result["statistics"].keys()) == {"x1", "x2", "y"}
 
-        # 检查目标变量统计量
-        target = result["target"]
-        assert target["name"] == "y"
-        assert target["n_samples"] == 5
-        assert target["min"] == 2.0
-        assert target["max"] == 10.0
-        assert target["mean"] == 6.0
-        assert target["median"] == 6.0
+    def test_execute_analyzes_selected_variables(self):
+        result = self.tool.execute(variables=["x2", "y"])
 
-        # 检查特征统计量
-        feature = result["features"][0]
-        assert feature["name"] == "feature1"
-        assert feature["n_samples"] == 5
-        assert feature["min"] == 1.0
-        assert feature["max"] == 5.0
-        assert feature["mean"] == 3.0
+        assert set(result["statistics"].keys()) == {"x2", "y"}
+        assert result["statistics"]["x2"]["mean"] == 25.0
+        assert result["statistics"]["y"]["max"] == 8.0
 
-    def test_multiple_features(self):
-        """测试多特征输入。"""
-        x = {
-            "f1": np.array([1.0, 2.0, 3.0]),
-            "f2": np.array([10.0, 20.0, 30.0]),
-            "f3": np.array([100.0, 200.0, 300.0]),
+    def test_execute_preserves_requested_variable_order(self):
+        result = self.tool.execute(variables=["y", "x1"])
+
+        assert list(result["statistics"].keys()) == ["y", "x1"]
+
+    def test_execute_raises_for_unknown_variable(self):
+        result = self.tool(variables=["missing"])
+
+        assert result.ok is False
+        assert "KeyError" in result.result_str
+        assert "missing" in result.result_str
+
+    def test_call_wraps_successful_result(self):
+        result = self.tool(variables=["x1"])
+
+        assert result.ok is True
+        assert set(result.result["statistics"].keys()) == {"x1"}
+        assert "Variable 'x1'" in result.result_str
+        assert result.meta_data["tool"] == "statistics_analysis"
+
+
+class TestStatisticsToolStats:
+    def test_get_stats_computes_all_metrics(self):
+        tool = StatisticsTool(data={})
+        stats = tool.get_stats(np.array([1.0, 2.0, 3.0, 4.0]))
+
+        assert stats == {
+            "n_samples": 4,
+            "min": 1.0,
+            "max": 4.0,
+            "mean": 2.5,
+            "variance": 1.25,
+            "std": float(np.std([1.0, 2.0, 3.0, 4.0])),
+            "median": 2.5,
+            "q1": 1.75,
+            "q3": 3.25,
         }
-        y = np.array([5.0, 10.0, 15.0])
-        tool = StatisticsTool(x=x, y=y)
 
-        result = tool.execute()
+    def test_get_stats_flattens_multidimensional_arrays(self):
+        tool = StatisticsTool(data={})
+        stats = tool.get_stats(np.array([[1.0, 2.0], [3.0, 4.0]]))
 
-        assert len(result["features"]) == 3
-        feature_names = {f["name"] for f in result["features"]}
-        assert feature_names == {"f1", "f2", "f3"}
+        assert stats["n_samples"] == 4
+        assert stats["mean"] == 2.5
 
-    def test_variance_and_std(self):
-        """测试方差和标准差计算。"""
-        x = {"x": np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])}
-        y = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-        tool = StatisticsTool(x=x, y=y)
+    def test_get_stats_raises_for_empty_array(self):
+        tool = StatisticsTool(data={})
 
-        result = tool.execute()
+        try:
+            tool.get_stats(np.array([]))
+        except ValueError as exc:
+            assert "zero-size array" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for empty array")
 
-        # 验证方差 (variance = sum((x - mean)^2) / n)
-        expected_var_y = np.var([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-        assert abs(result["target"]["variance"] - expected_var_y) < 1e-10
-        assert abs(result["target"]["std"] - np.sqrt(expected_var_y)) < 1e-10
 
-    def test_quartiles(self):
-        """测试四分位数计算。"""
-        x = {"x": np.array(range(1, 101))}  # 1 到 100
-        y = np.array(range(1, 101))
-        tool = StatisticsTool(x=x, y=y)
-
-        result = tool.execute()
-
-        # 对于 1-100，Q1=25.75, Q3=75.25 (线性插值)
-        assert abs(result["target"]["q1"] - 25.75) < 0.01
-        assert abs(result["target"]["q3"] - 75.25) < 0.01
-
-    def test_callable(self):
-        """测试工具可以像函数一样调用。"""
-        result = self.tool()
-        assert result["target"]["mean"] == 6.0
-
-    def test_empty_input_raises(self):
-        """测试空输入是否抛出异常。"""
-        x = {"x": np.array([])}
-        y = np.array([])
-        tool = StatisticsTool(x=x, y=y)
-
-        with pytest.raises(ValueError):
-            # 空数组的统计量计算可能会出错
-            tool.execute()
-
-    def test_numpy_compatibility(self):
-        """测试与 numpy 数组的兼容性。"""
-        # 测试二维数组（应该被 flatten）
-        x = {"x": np.array([[1.0], [2.0], [3.0]])}
-        y = np.array([[1.0], [2.0], [3.0]])
-        tool = StatisticsTool(x=x, y=y)
-
-        result = tool.execute()
-        assert result["target"]["n_samples"] == 3
-
-    def test_metadata_exists(self):
-        """Test that metadata exists."""
-        assert self.tool.metadata is not None
-        assert self.tool.metadata.name == "statistics_analysis"
-        assert self.tool.metadata.category == "statistics"
-        assert "statistics" in self.tool.metadata.description.lower()
-
-    def test_x_vars_subset(self):
-        """测试 x_vars 参数可以选择子集。"""
-        x = {
-            "f1": np.array([1.0, 2.0, 3.0]),
-            "f2": np.array([4.0, 5.0, 6.0]),
-            "f3": np.array([7.0, 8.0, 9.0]),
+class TestStatisticsToolFormatting:
+    def test_format_result_dict_formats_each_variable(self):
+        result = {
+            "statistics": {
+                "x1": {
+                    "n_samples": 4,
+                    "min": 1.0,
+                    "max": 4.0,
+                    "mean": 2.5,
+                    "variance": 1.25,
+                    "std": 1.11803398875,
+                    "median": 2.5,
+                    "q1": 1.75,
+                    "q3": 3.25,
+                }
+            }
         }
-        y = np.array([10.0, 11.0, 12.0])
-        tool = StatisticsTool(x=x, y=y)
 
-        # 只分析 f1 和 f3
-        result = tool.execute(x_vars=["f1", "f3"])
+        assert StatisticsTool.format_result_dict(result) == (
+            "Variable 'x1': n=4, min=1.0000, max=4.0000, "
+            "mean=2.5000, variance=1.2500, std=1.1180, "
+            "median=2.5000, q1=1.7500, q3=3.2500\n"
+        )
 
-        assert len(result["features"]) == 2
-        feature_names = {f["name"] for f in result["features"]}
-        assert feature_names == {"f1", "f3"}
+    def test_format_result_dict_formats_multiple_variables_in_order(self):
+        result = {
+            "statistics": {
+                "x1": {
+                    "n_samples": 1,
+                    "min": 1.0,
+                    "max": 1.0,
+                    "mean": 1.0,
+                    "variance": 0.0,
+                    "std": 0.0,
+                    "median": 1.0,
+                    "q1": 1.0,
+                    "q3": 1.0,
+                },
+                "y": {
+                    "n_samples": 1,
+                    "min": 2.0,
+                    "max": 2.0,
+                    "mean": 2.0,
+                    "variance": 0.0,
+                    "std": 0.0,
+                    "median": 2.0,
+                    "q1": 2.0,
+                    "q3": 2.0,
+                },
+            }
+        }
+
+        formatted = StatisticsTool.format_result_dict(result)
+
+        assert formatted.splitlines()[0].startswith("Variable 'x1':")
+        assert formatted.splitlines()[1].startswith("Variable 'y':")

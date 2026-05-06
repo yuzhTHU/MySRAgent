@@ -99,7 +99,7 @@ For the parameters:
             pytest.skip("LLM API not available")
 
         assert len(actions) >= 1, f"No actions parsed from response: {response}"
-        assert actions[0][0] == expected_tool, f"Expected {expected_tool}, got {actions[0][0]}"
+        assert actions[0].name == expected_tool, f"Expected {expected_tool}, got {actions[0].name}"
 
     @pytest.mark.slow
     def test_llm_handles_multiple_sequential_actions(self, parser, tool_formats):
@@ -152,8 +152,8 @@ Use the format: Action: tool_name(param1=value1, param2=value2)
             pytest.skip("LLM API not available")
 
         assert len(actions) >= 1, f"No actions parsed from response: {response}"
-        if actions[0][0] == "polynomial_fit":
-            params = actions[0][1]
+        if actions[0].name == "polynomial_fit":
+            params = actions[0].params
             # 验证关键参数
             assert params.get("max_degree") == 3, f"max_degree should be 3, got {params.get('max_degree')}"
             assert params.get("include_interactions") is False, f"include_interactions should be False"
@@ -181,8 +181,8 @@ Use the format: Action: tool_name(param1=value1, param2=value2)
             pytest.skip("LLM API not available")
 
         assert len(actions) >= 1, f"No actions parsed from response: {response}"
-        if actions[0][0] == "evaluate_formula":
-            params = actions[0][1]
+        if actions[0].name == "evaluate_formula":
+            params = actions[0].params
             eq = params.get("eq", "")
             # 验证公式包含关键元素
             assert "x1" in eq.lower() or "x**2" in eq, f"Formula should contain x1: {eq}"
@@ -217,8 +217,8 @@ Use the format: Action: tool_name(param1=value1, param2=value2)
 
             assert actions is not None, f"Attempt {i+1}: Failed to get response"
             assert len(actions) >= 1, f"Attempt {i+1}: No actions parsed from response"
-            assert actions[0][0] == "statistics_analysis", \
-                f"Attempt {i+1}: Expected statistics_analysis, got {actions[0][0]}"
+            assert actions[0].name == "statistics_analysis", \
+                f"Attempt {i+1}: Expected statistics_analysis, got {actions[0].name}"
 
     @pytest.mark.slow
     def test_llm_with_code_executor(self, parser, tool_formats):
@@ -242,8 +242,8 @@ Use the format: Action: tool_name(param1=value1)
             pytest.skip("LLM API not available")
 
         assert len(actions) >= 1, f"No actions parsed from response: {response}"
-        if actions[0][0] == "code_executor":
-            params = actions[0][1]
+        if actions[0].name == "code_executor":
+            params = actions[0].params
             program = params.get("program", "")
             assert len(program) > 0, "Program should not be empty"
             assert "print" in program.lower(), f"Program should contain print: {program}"

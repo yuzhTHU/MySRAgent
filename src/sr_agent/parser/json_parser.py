@@ -7,6 +7,7 @@ from ast import literal_eval
 from logging import getLogger
 from typing import List, Dict, Any, Tuple
 from .base_parser import BaseParser
+from ..api.core import ToolCall
 from ..tools import BaseTool
 
 _logger = getLogger(f'sr_agent.{__name__}')
@@ -78,16 +79,16 @@ class JSONParser(BaseParser):
 
         return "\n".join(lines)
 
-    def parse_response(self, response: str) -> List[Tuple[str, Dict[str, Any]]]:
+    def parse_response(self, response: str) -> List[ToolCall]:
         """从 LLM 响应中解析工具调用。
 
         Args:
             response: LLM 的原始响应文本。
 
         Returns:
-            工具调用列表，每个元素为 (tool_name, params) 元组。
+            工具调用列表。
         """
-        actions = []
+        tool_calls = []
 
         # 尝试从响应中提取 JSON
         if (json_match := re.search(r'```(?:json)?\s*({.*?})\s*```', response, re.DOTALL)):
@@ -102,8 +103,8 @@ class JSONParser(BaseParser):
                 for action in data['actions']:
                     if (tool_name := action.get('tool', action.get('name'))):
                         params = action.get('params', action.get('arguments', {}))
-                        actions.append((tool_name, params))
+                        tool_calls.append(ToolCall(name=tool_name, params=params, raw_str=json_str))
         except json.JSONDecodeError as e:
             _logger.warning(f"Failed to parse JSON: {e}")
 
-        return actions
+        return tool_calls

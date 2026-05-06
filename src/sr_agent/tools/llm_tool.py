@@ -31,11 +31,7 @@ class LLMTool(BaseTool):
     - manual: Manual input (for testing)
     """
 
-    metadata = ToolMetadata(
-        name="call_llm",
-        description="Call LLM API to generate text responses. Supports openai, deepseek, gemini providers. Returns response content, token usage, and cost info.",
-        category="llm",
-    )
+    metadata = ToolMetadata(name="call_llm", category="llm")
 
     def execute(
         self,
@@ -48,7 +44,7 @@ class LLMTool(BaseTool):
         Args:
             llm_provider: LLM provider name, e.g., "openai", "deepseek", "gemini".
             llm_model: Model name, e.g., "gpt-4o-mini", "deepseek-chat".
-            messages: List of messages, each as {"role": "user"|"assistant", "content": "..."}.
+            messages: List of messages, each as [{"role": "user"|"assistant", "content": "..."}, ...].
 
         Returns:
             Dictionary containing:
@@ -85,3 +81,14 @@ class LLMTool(BaseTool):
                 "token_usage": {},
                 "money_usage": {},
             }
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format LLM call result for LLM consumption.
+
+        Args:
+            result: Tool execution result.
+        """
+        if not result.get("success"):
+            return f"LLM call failed: {result.get('error')}"
+        return str(result.get("message", ""))

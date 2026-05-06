@@ -1,10 +1,9 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 import os
-import yaml
 import logging
 import requests
 from collections import defaultdict
-from typing import Generator, Tuple, List, Dict
+from typing import Generator, List, Dict
 from .llm_api import LLMAPI
 from ..utils import log_exception
 
@@ -17,18 +16,19 @@ class SiliconFlowAPI(LLMAPI):
         "Deepseek-V3",
     ]
 
-    def __init__(self, model='Qwen3-8B', max_tokens=1024, n=1, temperature=1.0, top_p=1.0):
-        self.n = n
-        self.top_p = top_p
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
+    def __init__(self, model='Qwen3-8B', **kwargs):
+        super().__init__(model=model, **kwargs)
 
-    def _request(self, messages: List|str, **kwargs) -> Generator[str, None, Dict]:
+    def _request(
+        self,
+        messages: List[Dict[str, str]],
+        n=1,
+        max_tokens=1024,
+        temperature=1.0,
+        top_p=1.0,
+    ) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         yield from []
-        if isinstance(messages, str):
-            messages = [{"role": "user", "content": messages}]
         url = 'https://api.siliconflow.cn/v1/chat/completions'
         headers = {
             'Authorization': f"Bearer {os.environ['SILICONFLOW_API_KEY']}",
@@ -36,28 +36,35 @@ class SiliconFlowAPI(LLMAPI):
         }
         payload = {
             'messages': messages,
-            'n': kwargs.get('n', self.n),
+            'n': n,
             'stop': [],
-            'top_k': kwargs.get('top_k', 50),
-            'top_p': kwargs.get('top_p', self.top_p),
-            'min_p': kwargs.get('min_p', 0.05),
-            'stream': kwargs.get('stream', False),
-            'thinking_budget': kwargs.get('thinking_budget', 1024),
-            'max_tokens': kwargs.get('max_tokens', self.max_tokens),
-            'temperature': kwargs.get('temperature', self.temperature),
-            'frequency_penalty': kwargs.get('frequency_penalty', 0.5),
+            'top_k': 50,
+            'top_p': top_p,
+            'min_p': 0.05,
+            'stream': False,
+            'thinking_budget': 1024,
+            'max_tokens': max_tokens,
+            'temperature': temperature,
+            'frequency_penalty': 0.5,
         }
+        if not self.tool_list:
+            pass
+        elif self.tool_parser:
+            payload["messages"] = self.add_tool_description(payload["messages"])
+        else:
+            payload["tools"] = self.tool_description_json
+            payload["tool_choice"] = "auto"
         # Request the LLM API
-        model = kwargs.get('model', self.model)
+        model = self.model
         if model == 'Qwen3-8B':
-            results = yield from self.qwen3_8b(url, headers, payload, **kwargs)
+            results = yield from self.qwen3_8b(url, headers, payload)
         elif model == "Deepseek-V3":
-            results = yield from self.deepseek_v3(url, headers, payload, **kwargs)
+            results = yield from self.deepseek_v3(url, headers, payload)
         else:
             raise ValueError(f"Model {model} not supported in SiliconFlowAPI.")
         return results
 
-    def qwen3_8b(self, url, headers, payload, **kwargs) -> Generator[str, None, Dict]:
+    def qwen3_8b(self, url, headers, payload) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         yield from []
         payload = {
@@ -74,8 +81,23 @@ class SiliconFlowAPI(LLMAPI):
             _logger.error(f"Error requesting {self.model}: {res.text}")
             return []
         responses = res.json()
+        details = []
         for choice in responses["choices"]:
-            yield choice["message"]["content"]
+            content = choice["message"]["content"]
+            if not self.tool_list:
+                tool_call = None
+            elif self.tool_parser:
+                tool_call = self.tool_parser.parse_response(content)
+            else:
+                tool_call = self.normalize_native_tool_calls(choice["message"].get("tool_calls"))
+            details.append({
+                "content": content,
+                "tool_call": tool_call,
+                "token_usage": {},
+                "price_usage": {},
+                "response": {"choices": [choice]},
+            })
+            yield content, tool_call
         usage = {'token': {}, 'price': {}}
         usage['token']['prompt'] = (prompt_tokens := responses["usage"]["prompt_tokens"])
         usage['token']['reason'] = (reason_tokens := responses["usage"].get("completion_tokens_details", {}).get("reasoning_tokens", 0))
@@ -85,15 +107,18 @@ class SiliconFlowAPI(LLMAPI):
         usage['price']['prompt'] = 0.00 * prompt_tokens / 1e6
         usage['price']['answer'] = 0.00 * answer_tokens / 1e6
         usage['price']['reason'] = 0.00 * reason_tokens / 1e6
-        results = {
-            'usage': usage,
-            'messages': payload['messages'],
-            'contents': [choice["message"]["content"] for choice in responses["choices"]],
-            'responses': responses
+        for detail in details:
+            detail["token_usage"] = {"prompt": prompt_tokens, "answer": answer_tokens, "reason": reason_tokens}
+            detail["price_usage"] = dict(usage["price"])
+        return {
+            "usage": usage,
+            "contents": [detail["content"] for detail in details],
+            "response_message": details[0]["content"] if details else "",
+            "tool_calls": details[0]["tool_call"] if len(details) == 1 else [detail["tool_call"] for detail in details],
+            "responses": [responses],
         }
-        return results
 
-    def deepseek_v3(self, url, headers, payload, **kwargs) -> Generator[str, None, Dict]:
+    def deepseek_v3(self, url, headers, payload) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         yield from []
         payload = {
@@ -103,7 +128,7 @@ class SiliconFlowAPI(LLMAPI):
         n, payload['n'] = payload['n'], 1  # Deepseek-V3 does not support n>1 in one request
         model = payload['model']
         usage = dict(token=defaultdict(float), price=defaultdict(float))
-        responses = []
+        details = []
         for _ in range(n):
             try:
                 res = requests.request("POST", url, json=payload, headers=headers)
@@ -120,13 +145,29 @@ class SiliconFlowAPI(LLMAPI):
                 usage['token']['other'] += other
             usage['price']['prompt'] += 2/7.0 * prompt_tokens / 1e6 # 7.0 CNY ~ 1.0 USD
             usage['price']['answer'] += 8/7.0 * answer_tokens / 1e6
-            responses.append(response)
-            text = response["choices"][0]["message"]["content"]
-            yield text
-        results = {
+            message = response["choices"][0]["message"]
+            content = message["content"] or ""
+            if not self.tool_list:
+                tool_call = None
+            elif self.tool_parser:
+                tool_call = self.tool_parser.parse_response(content)
+            else:
+                tool_call = self.normalize_native_tool_calls(message.get("tool_calls"))
+            details.append({
+                "content": content,
+                "tool_call": tool_call,
+                "token_usage": {"prompt": prompt_tokens, "answer": answer_tokens},
+                "price_usage": {
+                    "prompt": 2/7.0 * prompt_tokens / 1e6,
+                    "answer": 8/7.0 * answer_tokens / 1e6,
+                },
+                "response": response,
+            })
+            yield {"content": content, "tool_call": tool_call, "message": message}
+        return {
             "usage": usage,
-            "messages": payload["messages"], 
-            'contents': [response['choices'][0]["message"]["content"] for response in responses],
-            'responses': responses
+            "contents": [detail["content"] for detail in details],
+            "response_message": details[0]["content"] if details else "",
+            "tool_calls": details[0]["tool_call"] if len(details) == 1 else [detail["tool_call"] for detail in details],
+            "responses": [detail["response"] for detail in details],
         }
-        return results

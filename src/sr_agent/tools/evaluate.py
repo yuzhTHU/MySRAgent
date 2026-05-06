@@ -4,8 +4,9 @@
 评估数学公式对数据的拟合能力，返回多种评价指标。
 """
 
+import ast
 import numpy as np
-import nd2py as nd
+from scipy.optimize import minimize
 from typing import List, Dict, Any, Optional
 from .base_tool import BaseTool, ToolMetadata
 
@@ -35,23 +36,22 @@ class EvaluateTool(BaseTool):
     - Variable names should match keys in input dictionary X
     """
 
-    metadata = ToolMetadata(
-        name="evaluate_formula",
-        description="Evaluate how well a mathematical formula fits the data. Returns MSE, MAE, R^2 metrics. Formula format: 'x1**2 + sin(x2) + 3.5'. Supports basic operations, trig functions, exp/log. When you are confident about a formula, call this tool to check its ability to fit the data. Floating-point numbers in the formula will be automatically optimized to better fit the data.",
-        category="evaluation",
-    )
+    metadata = ToolMetadata(name="evaluate_formula", category="evaluation")
 
     def execute(
-        self, eq: str, x_vars: Optional[List[str]] = None, y_var: str = "y", fit: bool = False,
+        self,
+        eq: str,
+        y_var: str = "y",
+        fit: bool = False,
+        x_vars: List[str] = None,
     ) -> Dict[str, Any]:
         """Evaluate formula fit quality.
 
         Args:
-            eq: Formula string, e.g., "x1^2 + sin(x2) + 3.5".
-            x_vars: List of input feature names, e.g., ["x1", "x2"].
-                None means use all features.
-            y_var: Target variable name, default is "y".
+            eq: Formula string, e.g., "x1**2 + sin(x2) + 3.5".
+            y_var: Target variable name.
             fit: Whether to optimize formula parameters using BFGS algorithm.
+            x_vars: Input variable subset to expose to the formula. None means all input variables.
 
         Returns:
             Dictionary containing:
@@ -59,31 +59,28 @@ class EvaluateTool(BaseTool):
             - error: Error message if evaluation failed, None otherwise
             - formula: Simplified formula string (if different from input)
         """
-        x = self.context['x']
-        y = self.context['y']
-
-        # 选择要使用的变量
-        if x_vars is None:
-            x_vars = list(x.keys())
-
-        X_data = {var: x[var] for var in x_vars}
-        y_data = y
         try:
+            data = self._get_data(y_var)
+            y_data = np.asarray(data[y_var]).flatten()
+            x = {var: value for var, value in data.items() if var != y_var}
+            if x_vars is None:
+                x_vars = list(x.keys())
+            X_data = {var: np.asarray(x[var]) for var in x_vars}
+
             # ^ 在 Python 中是异或，** 才是幂运算，进行替换
             eq = eq.replace("^", "**")
+            formula, constants = self._prepare_formula(eq, fit)
 
-            # 解析公式字符串为符号树
-            eqtree = nd.parse(eq)
+            if fit and constants:
+                def objective(values):
+                    pred = self._eval_formula(formula, X_data, values)
+                    return float(np.mean((np.asarray(pred).flatten() - y_data) ** 2))
 
-            # 如果需要拟合参数，使用 BFGS 算法优化
-            if fit:
-                bfgs = nd.BFGSFit(eqtree)
-                bfgs.fit(X_data, y_data)
-                eqtree = bfgs.expression
+                opt = minimize(objective, np.asarray(constants, dtype=float), method="BFGS")
+                constants = opt.x.tolist()
 
-            # 计算预测值
-            y_pred = eqtree.eval(X_data)
-            y_true = np.array(y_data).flatten()
+            y_pred = self._eval_formula(formula, X_data, constants)
+            y_true = y_data
             y_pred = y_pred.flatten()
 
             # 计算评价指标
@@ -96,12 +93,6 @@ class EvaluateTool(BaseTool):
             ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
             r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float('nan')
 
-            # 简化并输出公式
-            try:
-                formula_str = nd.StringPrinter(eqtree).print()
-            except Exception:
-                formula_str = eq
-
             # 只在公式简化后与输入不同时返回 formula
             result = {
                 "metrics": {
@@ -112,8 +103,8 @@ class EvaluateTool(BaseTool):
                 },
                 "error": None,
             }
-            if formula_str != eq:
-                result["formula"] = formula_str
+            if fit and constants:
+                result["formula"] = self._format_fitted_formula(formula, constants)
             return result
 
         except Exception as e:
@@ -121,3 +112,86 @@ class EvaluateTool(BaseTool):
                 "metrics": None,
                 "error": str(e),
             }
+
+    def _get_data(self, y_var: str) -> Dict[str, np.ndarray]:
+        if "data" in self.context:
+            return self.context["data"]
+        if "x" in self.context and "y" in self.context:
+            return {**self.context["x"], y_var: self.context["y"]}
+        raise KeyError("data")
+
+    def _prepare_formula(self, eq: str, fit: bool) -> tuple[str, list[float]]:
+        tree = ast.parse(eq, mode="eval")
+        if not fit:
+            return eq, []
+
+        constants = []
+
+        class ReplaceConstants(ast.NodeTransformer):
+            def visit_Constant(self, node):
+                if isinstance(node.value, (int, float)):
+                    idx = len(constants)
+                    constants.append(float(node.value))
+                    return ast.copy_location(ast.Name(id=f"__c{idx}", ctx=ast.Load()), node)
+                return node
+
+        tree = ReplaceConstants().visit(tree)
+        ast.fix_missing_locations(tree)
+        return ast.unparse(tree), constants
+
+    def _eval_formula(
+        self,
+        formula: str,
+        data: Dict[str, np.ndarray],
+        constants: list[float],
+    ) -> np.ndarray:
+        local_vars = dict(data)
+        local_vars.update({f"__c{i}": value for i, value in enumerate(constants)})
+        safe_globals = {
+            "__builtins__": {},
+            "abs": np.abs,
+            "sin": np.sin,
+            "cos": np.cos,
+            "tan": np.tan,
+            "asin": np.arcsin,
+            "acos": np.arccos,
+            "atan": np.arctan,
+            "sinh": np.sinh,
+            "cosh": np.cosh,
+            "tanh": np.tanh,
+            "exp": np.exp,
+            "log": np.log,
+            "sqrt": np.sqrt,
+            "sigmoid": lambda x: 1 / (1 + np.exp(-x)),
+            "pi": np.pi,
+            "e": np.e,
+            "np": np,
+        }
+        return np.asarray(eval(formula, safe_globals, local_vars), dtype=float)
+
+    def _format_fitted_formula(self, formula: str, constants: list[float]) -> str:
+        for idx, value in enumerate(constants):
+            formula = formula.replace(f"__c{idx}", f"{value:.12g}")
+        return formula
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format formula evaluation result for LLM consumption.
+
+        Args:
+            result: Tool execution result.
+        """
+        if result.get("error"):
+            return f"Evaluation failed: {result['error']}"
+
+        metrics = result.get("metrics") or {}
+        parts = [
+            "Evaluation metrics:",
+            f"MSE={metrics.get('mse'):.6g}",
+            f"RMSE={metrics.get('rmse'):.6g}",
+            f"MAE={metrics.get('mae'):.6g}",
+            f"R2={metrics.get('r2'):.6g}",
+        ]
+        if "formula" in result:
+            parts.append(f"Formula={result['formula']}")
+        return ", ".join(parts)

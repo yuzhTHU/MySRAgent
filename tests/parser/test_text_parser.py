@@ -78,8 +78,8 @@ class TestTextParserParseResponse:
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "statistics_analysis"
-        assert actions[0][1] == {"x_vars": ["x1", "x2"], "y_var": "y"}
+        assert actions[0].name == "statistics_analysis"
+        assert actions[0].params == {"x_vars": ["x1", "x2"], "y_var": "y"}
 
     def test_parse_single_action_numeric_params(self):
         """测试解析单个 Action，数值参数。"""
@@ -89,9 +89,9 @@ class TestTextParserParseResponse:
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "polynomial_fit"
-        assert actions[0][1]["max_degree"] == 3
-        assert actions[0][1]["include_interactions"] is True
+        assert actions[0].name == "polynomial_fit"
+        assert actions[0].params["max_degree"] == 3
+        assert actions[0].params["include_interactions"] is True
 
     def test_parse_multiple_actions(self):
         """测试解析多个连续的 Action。"""
@@ -108,8 +108,8 @@ Action: evaluate_formula(eq='x1**2 + 1', y_var='y')
         actions = parser.parse_response(response)
 
         assert len(actions) == 2
-        assert actions[0][0] == "statistics_analysis"
-        assert actions[1][0] == "evaluate_formula"
+        assert actions[0].name == "statistics_analysis"
+        assert actions[1].name == "evaluate_formula"
 
     def test_parse_action_no_params(self):
         """测试解析没有参数的 Action。"""
@@ -119,8 +119,8 @@ Action: evaluate_formula(eq='x1**2 + 1', y_var='y')
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "statistics_analysis"
-        assert actions[0][1] == {}
+        assert actions[0].name == "statistics_analysis"
+        assert actions[0].params == {}
 
     def test_parse_action_with_nested_list(self):
         """测试解析包含嵌套列表的参数。"""
@@ -130,8 +130,8 @@ Action: evaluate_formula(eq='x1**2 + 1', y_var='y')
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "polynomial_fit"
-        blacklist = actions[0][1].get("interaction_blacklist", [])
+        assert actions[0].name == "polynomial_fit"
+        blacklist = actions[0].params.get("interaction_blacklist", [])
         assert len(blacklist) == 2
 
     def test_parse_action_with_float_values(self):
@@ -142,8 +142,8 @@ Action: evaluate_formula(eq='x1**2 + 1', y_var='y')
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "code_executor"
-        assert "3.14159" in actions[0][1].get("program", "")
+        assert actions[0].name == "code_executor"
+        assert "3.14159" in actions[0].params.get("program", "")
 
     def test_parse_ignores_non_action_lines(self):
         """测试非 Action 行被忽略。"""
@@ -158,7 +158,7 @@ Some more text here.
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "statistics_analysis"
+        assert actions[0].name == "statistics_analysis"
 
 
 class TestTextParserRobustness:
@@ -194,7 +194,7 @@ No tool calls here.
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "statistics_analysis"
+        assert actions[0].name == "statistics_analysis"
 
     def test_parse_action_with_extra_whitespace(self):
         """测试带有额外空格的 Action。"""
@@ -229,7 +229,7 @@ No tool calls here.
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert "1, 2, 3" in actions[0][1].get("program", "")
+        assert "1, 2, 3" in actions[0].params.get("program", "")
 
     def test_parse_mixed_quote_styles(self):
         """测试混合引号风格。"""
@@ -239,8 +239,8 @@ No tool calls here.
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][1].get("x_vars") == ["x1", "x2"]
-        assert actions[0][1].get("y_var") == "y"
+        assert actions[0].params.get("x_vars") == ["x1", "x2"]
+        assert actions[0].params.get("y_var") == "y"
 
     def test_parse_case_insensitive_param_names(self):
         """测试参数名不区分大小写（解析时会转小写）。"""
@@ -251,8 +251,8 @@ No tool calls here.
 
         assert len(actions) == 1
         # 参数名会被转换为小写
-        assert "x_vars" in actions[0][1]
-        assert "y_var" in actions[0][1]
+        assert "x_vars" in actions[0].params
+        assert "y_var" in actions[0].params
 
     def test_parse_complex_expression(self):
         """测试复杂表达式。"""
@@ -262,9 +262,9 @@ No tool calls here.
         actions = parser.parse_response(response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "evaluate_formula"
-        assert "x1**2" in actions[0][1].get("eq", "")
-        assert actions[0][1].get("fit") is True
+        assert actions[0].name == "evaluate_formula"
+        assert "x1**2" in actions[0].params.get("eq", "")
+        assert actions[0].params.get("fit") is True
 
     def test_parse_unterminated_string_gracefully(self):
         """测试未终止的字符串能优雅处理。"""
@@ -299,7 +299,7 @@ Action: statistics_analysis(x_vars=['x1', 'x2'], y_var='y')
         actions = parser.parse_response(sim_response)
 
         assert len(actions) == 1
-        assert actions[0][0] == "statistics_analysis"
+        assert actions[0].name == "statistics_analysis"
 
     def test_full_workflow_simulation(self):
         """模拟完整的工作流程。"""

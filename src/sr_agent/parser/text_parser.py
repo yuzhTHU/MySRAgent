@@ -7,6 +7,7 @@ from ast import literal_eval
 from logging import getLogger
 from typing import List, Dict, Any, Tuple
 from .base_parser import BaseParser
+from ..api.core import ToolCall
 from ..tools import BaseTool
 
 _logger = getLogger(f'sr_agent.{__name__}')
@@ -80,16 +81,16 @@ class TextParser(BaseParser):
 
         return "\n".join(lines)
 
-    def parse_response(self, response: str) -> List[Tuple[str, Dict[str, Any]]]:
+    def parse_response(self, response: str) -> List[ToolCall]:
         """从 LLM 响应中解析工具调用。
 
         Args:
             response: LLM 的原始响应文本。
 
         Returns:
-            工具调用列表，每个元素为 (tool_name, params) 元组。
+            工具调用列表。
         """
-        actions = []
+        tool_calls = []
         for line in response.strip().splitlines():
             line = line.strip()
             if line.startswith('Action:'):
@@ -100,10 +101,10 @@ class TextParser(BaseParser):
                         params = self._parse_params(params_str)
                     else:
                         params = {}
-                    actions.append((tool_name, params))
+                    tool_calls.append(ToolCall(name=tool_name, params=params, raw_str=line))
                 else:
                     _logger.warning(f"Failed to parse action line: '{line}'")
-        return actions
+        return tool_calls
 
     def _parse_params(self, params_str: str) -> Dict[str, Any]:
         """解析参数字符串为字典。

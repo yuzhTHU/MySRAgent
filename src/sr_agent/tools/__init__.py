@@ -4,7 +4,7 @@
 所有工具都应继承自 BaseTool，并实现 execute 方法。
 """
 
-from .base_tool import BaseTool, ToolMetadata
+from .base_tool import BaseTool, ToolMetadata, ToolCallResult
 from .statistics import StatisticsTool
 from .evaluate import EvaluateTool
 from .llm_tool import LLMTool
@@ -15,6 +15,7 @@ from .skill_document import SkillDocumentTool
 __all__ = [
     "BaseTool",
     "ToolMetadata",
+    "ToolCallResult",
     "StatisticsTool",
     "EvaluateTool",
     "LLMTool",

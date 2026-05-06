@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import time
+import traceback
 from logging import getLogger
+from datetime import datetime
 from dataclasses import dataclass
 from docstring_parser import DocstringStyle, parse
 from abc import ABC, abstractmethod
@@ -42,14 +44,23 @@ class ToolCallResult:
 
     Attributes:
         ok: 是否成功执行工具（当且仅当出现无法处理的报错时为 False）
-        result: 运行结果
-        result_str: 展示给 LLM 的结果字符串（对 result 格式化后的版本，可能会截断或简化）
+        result: 运行结果, 用于存档和后续分析
+        result_str: 对 result 格式化后的版本, 用于展示给 LLM 的结果字符串
         meta_data: 额外的元信息，如执行时间、日志等
+        exception: 工具运行过程中出现的异常信息列表
     """
     ok: bool
     result: Dict[str, Any]
     result_str: str
     meta_data: Dict[str, Any]
+    exception: List[str] | None = None
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dictionary-like access to the wrapped result for legacy callers."""
+        return self.result.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.result[key]
 
 
 class BaseTool(ABC, FactoryMixin):
@@ -75,7 +86,7 @@ class BaseTool(ABC, FactoryMixin):
         self.context = context
 
     @abstractmethod
-    def execute(self, *args, **kwargs) -> Dict[str, Any]:
+    def execute(self, *args, **kwargs) -> Tuple[Dict[str, Any], List[str]]:
         """ 执行工具。这个方法的参数列表需要由 LLM 生成，因此其参数应该尽量简单，复杂的上下文信息（如数据）可以通过工具实例的 context 属性传入。在实现时需要注意，此工具可能被多个进程/线程并行调用，需要保证线程安全
 
         Args:
@@ -83,7 +94,8 @@ class BaseTool(ABC, FactoryMixin):
             **kwargs: 传递给工具的关键词参数。
 
         Returns:
-            执行结果字典。
+            results: 执行结果字典。
+            exceptions: 执行过程中出现的异常信息列表。
         """
         pass
 
@@ -101,23 +113,35 @@ class BaseTool(ABC, FactoryMixin):
         """工具调用入口"""
         start_time = time.time()
         try:
-            result = self.execute(*args, **kwargs)
+            # Result: Dict[str, Any]: 工具运行的结果, 用于存档和后续分析
+            # Exception: List[str]: 工具运行过程中出现的异常, 用于日志记录和调试
+            # Result_str: str: 将 Result 格式化后得到的结果字符串, 用于反馈给 LLM 以指导后续决策
+            # Meta_data: Dict[str, Any]: 额外的元信息, 如执行时间、日志等, 用于存档和后续分析
+            output = self.execute(*args, **kwargs)
+            if (
+                isinstance(output, tuple)
+                and len(output) == 2
+                and isinstance(output[1], list)
+            ):
+                result, exception = output
+            else:
+                result, exception = output, []
             result_str = self.format_result_dict(result)
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
                 "tool": self.metadata.name
             }
-            return ToolCallResult(ok=True, result=result, result_str=result_str, meta_data=meta_data)
+            return ToolCallResult(ok=True, result=result, result_str=result_str, meta_data=meta_data, exception=exception)
         except Exception as e:
-            error_msg = f"Error executing {self.metadata.name}: [{type(e).__name__}] {e}"
+            error_msg = f"Error executing {self.metadata.name}: [{type(e).__name__}] {e}\n{traceback.format_exc()}"
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
                 "tool": self.metadata.name
             }
             _logger.error(error_msg)
-            return ToolCallResult(ok=False, result={}, result_str=error_msg, meta_data=meta_data)
+            return ToolCallResult(ok=False, result={}, result_str=error_msg, meta_data=meta_data, exception=[error_msg])
 
     @classmethod
     def to_tool_list(cls, tools_used: list[str] | None = None) -> list[dict]:
@@ -136,6 +160,29 @@ class BaseTool(ABC, FactoryMixin):
         return tool_list
 
     @classmethod
+    def load_tool_list(cls, tools_used: list[str] | None = None) -> list[dict]:
+        """加载兼容 legacy parser 的工具元数据列表。"""
+        tool_list = []
+        for name, tool_cls in cls.REGISTRY_DICT.items():
+            if tools_used is None or tool_cls.metadata.name in tools_used:
+                tool_list.append({
+                    "name": tool_cls.metadata.name,
+                    "description": tool_cls.metadata.description,
+                    "parameters": tool_cls.metadata.parameters,
+                    "category": tool_cls.metadata.category,
+                })
+        return tool_list
+
+    @classmethod
+    def load_tool_classes(cls, tools_used: list[str] | None = None) -> list[type["BaseTool"]]:
+        """加载工具类列表，供 LLM API 和 native function calling 使用。"""
+        tool_list = []
+        for name, tool_cls in cls.REGISTRY_DICT.items():
+            if tools_used is None or tool_cls.metadata.name in tools_used:
+                tool_list.append(tool_cls)
+        return tool_list
+
+    @classmethod
     def to_dict(cls) -> dict:
         """导出 OpenRouter/OpenAI function calling 工具定义。"""
         return {
@@ -146,7 +193,7 @@ class BaseTool(ABC, FactoryMixin):
                 "parameters": cls.metadata.parameters
             },
         }
-    
+
     @classmethod
     def infer_tool_description(cls) -> str:
         """从 execute 方法的 docstring (不含 ARGS 和 RETURNS) 自动提取工具描述。"""
@@ -254,7 +301,9 @@ class BaseTool(ABC, FactoryMixin):
             elif args[-1] is not Ellipsis:
                 return {
                     "type": "array",
-                    "prefixItems": item_schemas,
+                    # Draft 7 tuple validation uses an array-valued items.
+                    # Avoid prefixItems for broader OpenRouter/OpenAI compatibility.
+                    "items": item_schemas,
                     "minItems": len(item_schemas),
                     "maxItems": len(item_schemas),
                 }

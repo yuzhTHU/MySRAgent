@@ -1,0 +1,208 @@
+#!/usr/bin/env python
+"""Command-line entry point for running a small SRAgent experiment."""
+
+from __future__ import annotations
+
+import re
+import os
+import sys
+import json
+import math
+import shlex
+import random
+import logging
+import argparse
+import numpy as np
+import nd2py as nd
+from pathlib import Path
+from datetime import datetime
+from socket import gethostname
+from src.sr_agent import SRAgent
+from src.sr_agent.tools import BaseTool
+from src.sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, log_exception
+
+
+SCRIPT_NAME = Path(__file__).stem  # run_sr_agent
+_logger = logging.getLogger(f"src.{SCRIPT_NAME}")
+
+
+def build_argparser() -> argparse.ArgumentParser: # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
+    parser = argparse.ArgumentParser(
+        description="Run SRAgent on a synthetic symbolic-regression problem.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
+    parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
+    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
+    parser.add_argument("--equation", default="y = sin(x1 - x2)", help="Target equation. Example: 'y = sin(x1 - x2)'.")
+    parser.add_argument("--problem_description", default=None, help="Problem description passed to the agent. Defaults to one derived from --equation.")
+    parser.add_argument("--features", default=None, help="Optional comma-separated feature names. Defaults to variables parsed from --equation.")
+    parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
+    parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
+    parser.add_argument("--x_low", type=float, default=0.0, help="Lower bound for random features.")
+    parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
+    parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
+    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
+    parser.add_argument("--llm_model", default="qwen/qwen3.6-flash", help="LLM model name.")
+    parser.add_argument("--tools", default=None, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
+    parser.add_argument("--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
+    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
+    parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
+    parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
+    parser = add_minus_flags(parser)
+    parser = add_negation_flags(parser)
+    return parser
+
+
+def sanitize_filename(value: str) -> str:
+    value = re.compile(r'[ <>:"/\\|?*\x00-\x1f]').sub("_", value.strip())
+    return (value or "unnamed")[:255]
+
+
+def save_args(args, args_path: Path):
+    if args_path.exists():
+        i = 1
+        while args_path.with_suffix(f".json.{i}").exists():
+            i += 1
+        args_path.rename(args_path.with_suffix(f".json.{i}"))
+        _logger.warning(f"args.json already exists, backup to args.json.{i}")
+    with open(args_path, "w", encoding="utf-8") as f:
+        json.dump(vars(args), f, indent=4, ensure_ascii=False)
+
+
+def make_dataset(args):
+    if '=' in args.equation:
+        pass
+    elif 'target' in args.equation:
+        raise ValueError("It seems you provided an equation without '=', but it contains the word 'target'. Did you forget to format it like 'target = ...'?")
+    else:
+        args.equation = f'target = {args.equation}'
+    target, formula_str = args.equation.split('=')
+    target = target.strip()
+    formula_str = formula_str.strip()
+    formula = nd.parse(formula_str)
+    features = set(var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable))
+    features = sorted(list(features))
+
+    rng = np.random.default_rng(args.seed)
+    data = {}
+    for name in features:
+        assert name not in data
+        data[name] = rng.uniform(args.x_low, args.x_high, size=args.n_samples)
+    assert target not in data
+    data[target] = formula.eval(data)
+
+    if args.noise_std_ratio > 0:
+        data[target] += rng.normal(0.0, args.noise_std_ratio * np.std(data[target]), size=data[target].shape)
+
+    return features, target, formula, data
+
+
+def main(args: argparse.Namespace) -> dict:
+    features, target, formula, data = make_dataset(args)
+    X = {name: data[name] for name in features}
+    y = {target: data[target]}
+    problem_description = args.problem_description or (
+        f"Find the relationship {target} = f({', '.join(features)}). "
+        f"The synthetic target was generated from an unknown formula."
+    )
+    _logger.note(
+        f"Starting experiment {args.exp_name}\n"
+        f"Equation: {target} = {formula}\n"
+        f"Target variable: {target}; Feature variables: {', '.join(features)}\n"
+        f"Generated {args.n_samples} samples with seed {args.seed}\n"
+    )
+
+    agent = SRAgent(
+        llm_provider=args.llm_provider,
+        llm_model=args.llm_model,
+        tools=args.tools,
+        max_refinement_depth=args.max_refinement_depth,
+        verbose=args.verbose,
+        tool_parser=args.tool_parser,
+        save_path=args.save_path,
+    )
+
+    result = {
+        "start_time": datetime.now().isoformat(),
+        "duration_seconds": None,
+        "target_equation": f"{target} = {formula}",
+        "noise_std_ratio": args.noise_std_ratio,
+        "random_seed": args.seed,
+        "best_formula": None,
+        "best_score": None,
+        "iterations": 0,
+        "status": "not_started",
+    }
+    try:
+        result |= agent.fit(X=X, y=y, problem_description=problem_description)
+        result["status"] = "completed"
+    except KeyboardInterrupt:
+        _logger.note("Experiment interrupted by user.")
+        result["status"] = "interrupted"
+        # raise SystemExit(130)
+    except Exception as e:
+        _logger.error(f"Experiment failed with an exception: {log_exception(e)}")
+        result["status"] = "failed"
+        result["error"] = repr(e)
+        # raise SystemExit(1)
+        if args.debug:
+            raise e from e
+    finally:
+        result["duration_seconds"] = (datetime.now() - datetime.fromisoformat(result["start_time"])).total_seconds()
+        _logger.note("=" * 50)
+        _logger.note(
+            "Symbolic Regression Result\n"
+            f"Target Equation: {target} = {formula}\n"
+            f"LLM: {args.llm_model} @ {args.llm_provider}\n"
+            f"Tools: {args.tools}\n"
+            f"Best Formula: {result['best_formula']}\n"
+            f"Best Score (MSE): {result['best_score']}\n"
+            f"Total Iterations: {result['iterations']}\n"
+        )
+        _logger.note("=" * 50)
+
+        result_path = Path(args.save_path) / "result.jsonl"
+        with open(result_path, "a", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=True)
+        _logger.note(f"Result saved to {result_path}")
+
+    _logger.note(f"Experiment completed. Re-run the script with {args.command}")
+
+
+if __name__ == "__main__":
+    parser = build_argparser()
+    args, unknown = parser.parse_known_args()
+
+    if args.exp_name is None:
+        now = datetime.now()
+        args.exp_name = sanitize_filename(
+            f"{now:%Y%m%d}_{args.name}_{now:%H%M%S}_{gethostname()}"
+        )
+    else:
+        args.exp_name = sanitize_filename(args.exp_name)
+    if args.debug:
+        args.verbose = True
+    if args.seed == -1:
+        args.seed = int(datetime.now().timestamp() * 1000) % (2**32 - 1)
+    seed_all(args.seed)
+    save_path = Path(args.save_dir) / args.exp_name
+    save_path.mkdir(parents=True, exist_ok=True)
+    args.save_path = str(save_path)
+    args.command = " ".join(map(shlex.quote, [sys.executable, *sys.argv]))
+
+    setup_logging(
+        info_level="debug" if args.verbose else "info",
+        exp_name=args.exp_name,
+        save_path=save_path / "info.log",
+        force=True,
+    )
+
+    if unknown:
+        _logger.warning(f"Unknown args: {unknown}")
+    _logger.note(f"Args: {args}")    
+
+    save_args(args, save_path / "args.json")
+
+    main(args)

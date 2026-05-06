@@ -33,56 +33,49 @@ class PolynomialFitTool(BaseTool):
     - Polynomial feature generation in feature engineering
     """
 
-    metadata = ToolMetadata(
-        name="polynomial_fit",
-        description="Fit polynomial models to data with configurable degree and interaction terms. Returns fitted polynomials with statistical significance and fit quality metrics.",
-        category="regression",
-    )
+    metadata = ToolMetadata(name="polynomial_fit")
 
     def execute(
         self,
-        x_vars: Optional[List[str]] = None,
-        y_var: str = "y",
+        x_vars: List[str] = None,
+        y_var: str = None,
         max_degree: int = 2,
         include_interactions: bool = True,
-        interaction_blacklist: Optional[List[Tuple[str, str]]] = None,
-        interaction_whitelist: Optional[List[Tuple[str, str]]] = None,
+        interaction_blacklist: List[Tuple[str, str]] = None,
+        interaction_whitelist: List[Tuple[str, str]] = None,
         include_bias: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], List[str]]:
         """Execute polynomial fit.
 
         Args:
-            x_vars: List of input feature names, e.g., ["x1", "x2"].
-                None means use all features.
-            y_var: Target variable name, default is "y".
-            max_degree: Maximum polynomial degree, default is 2.
-            include_interactions: Whether to include interaction terms, default is True.
+            x_vars: List of input feature names, e.g., ["x1", "x2"]. Use all features by default.
+            y_var: Target variable name. Use target variable by default.
+            max_degree: Maximum polynomial degree.
+            include_interactions: Whether to include interaction terms.
             interaction_blacklist: List of variable pairs that should not interact.
                 E.g., [("x1", "x2")] means no interaction between x1 and x2.
             interaction_whitelist: Only allow specified variable pairs to interact.
-                If None, all pairs are allowed (unless in blacklist).
+                By default, all pairs are allowed (unless in blacklist).
                 If specified, only interactions in the whitelist are generated.
-            include_bias: Whether to include bias/intercept term, default is True.
+            include_bias: Whether to include bias/intercept term.
 
         Returns:
-            Dictionary containing:
-            - polynomial: Polynomial string expression
-            - terms: Detailed information for each term (coefficient, std_error, p_value, significance)
-            - fit_quality: Fit quality metrics (R^2, adjusted R^2, RMSE, MAE, AIC, BIC)
-            - residuals_summary: Summary statistics of residuals (min, max, mean, std)
-            - warnings: List of warning messages (e.g., multicollinearity, insufficient samples)
+            results:
+                polynomial: Polynomial string expression
+                terms: Detailed information for each term (coefficient, std_error, p_value, significance)
+                fit_quality: Fit quality metrics (R^2, adjusted R^2, RMSE, MAE, AIC, BIC)
+                residuals_summary: Summary statistics of residuals (min, max, mean, std)
+            exceptions: List of any exceptions that occurred during fitting.
         """
-        x = self.context['x']
-        y = self.context['y']
-
-        # 选择要使用的变量
+        data = self.context["data"]
+        if y_var is None:
+            y_var = self.context['target']
         if x_vars is None:
-            x_vars = list(x.keys())
+            x_vars = [var for var in data.keys() if var != y_var]
+        y = data[y_var]
+        x = {var: data[var] for var in x_vars}
 
-        # 从 context 中获取数据
-        x = {var: x[var] for var in x_vars}
-
-        warnings = []
+        exceptions = []
 
         # 数据验证
         y = np.asarray(y).flatten()
@@ -126,7 +119,7 @@ class PolynomialFitTool(BaseTool):
         n_params = design_matrix.shape[1]
 
         if matrix_rank < n_params:
-            warnings.append(
+            exceptions.append(
                 f"设计矩阵秩 deficient: 秩={matrix_rank}, 参数={n_params}。"
                 "可能存在多重共线性，结果可能不稳定。"
             )
@@ -155,10 +148,10 @@ class PolynomialFitTool(BaseTool):
                     # 如果矩阵奇异，使用伪逆
                     cov_matrix = mse * np.linalg.pinv(R.T @ R)
                     std_errors = np.sqrt(np.diag(cov_matrix))
-                    warnings.append("使用伪逆计算标准误差，结果可能不够精确。")
+                    exceptions.append("使用伪逆计算标准误差，结果可能不够精确。")
             else:
                 std_errors = np.full(n_params, np.nan)
-                warnings.append("样本数不足以计算标准误差。")
+                exceptions.append("样本数不足以计算标准误差。")
 
             # 计算 t 统计量和 p 值
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -170,7 +163,7 @@ class PolynomialFitTool(BaseTool):
 
         except Exception as e:
             # 降级到普通最小二乘
-            warnings.append(f"QR 分解失败，使用普通最小二乘法：{str(e)}")
+            exceptions.append(f"QR 分解失败，使用普通最小二乘法：{str(e)}")
             coefficients, residuals, rank, s = np.linalg.lstsq(
                 design_matrix, y, rcond=None
             )
@@ -182,16 +175,11 @@ class PolynomialFitTool(BaseTool):
         # 计算拟合质量指标
         ss_res = np.sum(residuals ** 2)
         ss_tot = np.sum((y - np.mean(y)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-
-        # Adjusted R^2
-        if n > p and ss_tot > 0:
-            adj_r_squared = 1 - (1 - r_squared) * (n - 1) / (n - p)
-        else:
-            adj_r_squared = np.nan
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
         # RMSE 和 MAE
-        rmse = np.sqrt(np.mean(residuals ** 2))
+        mse = np.mean(residuals ** 2)
+        rmse = np.sqrt(mse)
         mae = np.mean(np.abs(residuals))
 
         # AIC 和 BIC
@@ -247,12 +235,19 @@ class PolynomialFitTool(BaseTool):
             if polynomial_str.startswith("+"):
                 polynomial_str = polynomial_str[1:].strip()
 
-        return {
-            "polynomial": polynomial_str,
+        results = {
+            "formula": polynomial_str,
             "terms": terms_result,
             "fit_quality": {
-                "r_squared": float(r_squared),
-                "adjusted_r_squared": float(adj_r_squared) if not np.isnan(adj_r_squared) else None,
+                "r_squared": float(r2),
+                "rmse": float(rmse),
+                "mae": float(mae),
+                "aic": float(aic) if not np.isnan(aic) else None,
+                "bic": float(bic) if not np.isnan(bic) else None,
+            },
+            "metrics": {
+                "mse": float(mse),
+                "r2": float(r2),
                 "rmse": float(rmse),
                 "mae": float(mae),
                 "aic": float(aic) if not np.isnan(aic) else None,
@@ -264,8 +259,33 @@ class PolynomialFitTool(BaseTool):
                 "mean": float(np.mean(residuals)) if len(residuals) > 0 else None,
                 "std": float(np.std(residuals)) if len(residuals) > 0 else None,
             },
-            "warnings": warnings,
+            "warnings": "; ".join(exceptions) if exceptions else None,
         }
+        return results, exceptions
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format polynomial fit result for LLM consumption.
+
+        Args:
+            result: Tool execution result.
+        """
+        def fmt(value: Any) -> str:
+            return "N/A" if value is None else f"{value:.6g}"
+
+        metrics = result["metrics"]
+        warning_text = result.get("warnings") or "None"
+        lines = [
+            f"Polynomial: {result['formula']}",
+            (
+                "Fit quality: "
+                f"R2={fmt(metrics['r2'])}, "
+                f"RMSE={fmt(metrics['rmse'])}, "
+                f"MAE={fmt(metrics['mae'])}, "
+            ),
+            "Warnings: " + warning_text,
+        ]
+        return "\n".join(lines)
 
     def _get_allowed_interactions(
         self,

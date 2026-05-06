@@ -6,7 +6,7 @@ from openai import AzureOpenAI
 from openai.types.responses import Response
 from openai.types.chat import ChatCompletion
 from collections import defaultdict
-from typing import Generator, Tuple, List, Dict
+from typing import Generator, List, Dict
 from .llm_api import LLMAPI
 from ..utils import log_exception
 
@@ -19,20 +19,19 @@ class OpenAIAPI(LLMAPI):
         "gpt-5-mini",
     ]
 
-    def __init__(self, model='gpt-5-mini', max_tokens=4096, n=1, temperature=1.0, top_p=1.0, use_chat_completions=False):
-        self.n = n
-        self.top_p = top_p
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.use_chat_completions = use_chat_completions
+    def __init__(self, model='gpt-5-mini', **kwargs):
+        super().__init__(model=model, **kwargs)
         self.dummy_message = 'Please proofread the message above and say "I have received it."'
 
-        if model == 'gpt-4o-mini' and not self.use_chat_completions:
-            self.use_chat_completions = True
-            _logger.warning("Turn to use create_chat_completions for gpt-4o-mini model to save token cost.")
-
-    def _request(self, messages: List|str, **kwargs) -> Generator[str, None, Dict]:
+    def _request(
+        self,
+        messages: List[Dict[str, str]],
+        n=1,
+        max_tokens=4096,
+        temperature=1.0,
+        top_p=1.0,
+        use_chat_completions=False,
+    ) -> Generator[str, None, Dict]:
         """
         Keyword Args:
             model (str): The model name to use. Default is 'gpt-4o-mini'.
@@ -41,21 +40,48 @@ class OpenAIAPI(LLMAPI):
             top_p (float): Nucleus sampling probability. Default is 1.0.
             n (int): Number of completions to generate. Default is 1.
         """
-        if self.use_chat_completions:
-            results = yield from self.create_chat_completions(messages, **kwargs)
+        if self.model == 'gpt-4o-mini' and not use_chat_completions:
+            use_chat_completions = True
+            _logger.warning("Turn to use create_chat_completions for gpt-4o-mini model to save token cost.")
+
+        if use_chat_completions:
+            results = yield from self.create_chat_completions(
+                messages, n=n, max_tokens=max_tokens, temperature=temperature, top_p=top_p
+            )
             return results
         else:
-            results = yield from self.create_responses(messages, **kwargs)
+            results = yield from self.create_responses(
+                messages, n=n, max_tokens=max_tokens, temperature=temperature, top_p=top_p
+            )
             return results
 
-    def create_responses(self, messages: List|str, **kwargs) -> Generator[str, None, Dict]:
+    def build_native_tool_description(self, use_chat_completions=False) -> List[Dict]:
+        tools = self.tool_description_json
+        if use_chat_completions:
+            return tools
+        return [
+            {
+                "type": "function",
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "parameters": tool["function"].get("parameters", {"type": "object", "properties": {}}),
+            }
+            for tool in tools
+        ]
+
+    def create_responses(
+        self,
+        messages: List[Dict[str, str]],
+        n=1,
+        max_tokens=4096,
+        temperature=1.0,
+        top_p=1.0,
+    ) -> Generator[str, None, Dict]:
         """ OpenAI 的最新 API, 建议新项目使用这个接口 (https://platform.openai.com/docs/guides/migrate-to-responses)
         但看起来它还缺了一些功能 (比如 n parameter), 而且也无法缓存 gpt-4o-mini 的 prompt token, 所以依然保留了 create_chat_completions 接口
         """
         ## Ensure this is a generator
         yield from []
-        if isinstance(messages, str):
-            messages = [{"role": "user", "content": messages}]
         client = AzureOpenAI(
             api_version=os.environ["OPENAI_API_VERSION"],
             azure_endpoint=os.environ["OPENAI_ENDPOINT"],
@@ -64,39 +90,55 @@ class OpenAIAPI(LLMAPI):
         payload = {
             "input": deepcopy(messages), # 因为后面可能要 pop, 所以 deepcopy 一下
             "reasoning": {"summary": "auto"},
-            "model": (model := kwargs.get('model', self.model)),
-            "top_p": kwargs.get('top_p', self.top_p),
-            "max_output_tokens": kwargs.get('max_tokens', self.max_tokens),
-            "temperature": kwargs.get('temperature', self.temperature),
+            "model": (model := self.model),
+            "top_p": top_p,
+            "max_output_tokens": max_tokens,
+            "temperature": temperature,
             # "prompt_cache_retention": "24h"  # 官网上说有这个参数可以延长 cache 保存时间，但实际用起来会报错
             # "n": n,  # OpenAI Response API 不支持 parameter n
         }
+        if not self.tool_list:
+            pass
+        elif self.tool_parser:
+            payload["input"] = self.add_tool_description(payload["input"])
+        else:
+            payload["tools"] = self.build_native_tool_description()
+            payload["tool_choice"] = "auto"
         if payload['input'][0]['role'] == 'system':
             ## instruction 无法在多轮对话中保留，不好用
             # payload['instructions'] = payload['input'].pop(0)['content']
             ## 改用据说效果与 instruction 等价的 developer 角色
             payload['input'][0]['role'] = 'developer'
 
-        n = kwargs.get('n', self.n)
         if n == 1:
             try:
                 response = client.responses.create(**payload)
-                yield response.output_text
+                response_dict = response.to_dict()
                 usage = self.parse_usage(response)
+                message = response.choices[0].message
+                content = response.output_text
+                if not self.tool_list:
+                    tool_call = None
+                elif self.tool_parser:
+                    tool_call = self.tool_parser.parse_response(content)
+                else:
+                    tool_call = self.normalize_native_tool_calls(self.extract_native_tool_calls(response_dict))
+                yield {'content': content, 'tool_call': tool_call, 'message': message}
                 results = {
                     'usage': usage,
-                    'messages': messages,
-                    'contents': response.output_text,
-                    'response': response.to_dict(),
+                    'contents': [content],
+                    'tool_calls': [tool_call],
+                    'responses': [response_dict],
                 }
             except Exception as e:
                 _logger.error(f"Error requesting {type(self).__name__}({model}) since: {log_exception(e)}")
-                results = {"usage": {"token": {}, "price": {}}, "messages": messages, "contents": [], "response": None}
+                results = {"usage": {"token": {}, "price": {}}, "contents": [], "tool_calls": [], "responses": []}
             finally:
                 return results
         else:
             try:
                 responses = []
+                details = []
                 ## 构造 payload 将除最后一条 message 之外的所有前置信息输入模型
                 assert payload['input'][-1]['role'] == 'user', "When n > 1, the last message must be from user."
                 last_message = payload['input'].pop(-1)
@@ -111,30 +153,50 @@ class OpenAIAPI(LLMAPI):
                 for _ in range(n):
                     child_response = client.responses.create(**child_payload)
                     responses.append(child_response)
-                    yield child_response.output_text
+                    child_response_dict = child_response.to_dict()
+                    content = child_response.output_text
+                    if not self.tool_list:
+                        tool_call = None
+                    elif self.tool_parser:
+                        tool_call = self.tool_parser.parse_response(content)
+                    else:
+                        tool_call = self.normalize_native_tool_calls(self.extract_native_tool_calls(child_response_dict))
+                    yield {'content': content, 'tool_call': tool_call, 'message': child_response.choices[0].message}
                     new_usage = self.parse_usage(child_response)
                     for k, v in new_usage['token'].items():
                         usage['token'][k] = usage['token'].get(k, 0) + v
                     for k, v in new_usage['price'].items():
                         usage['price'][k] = usage['price'].get(k, 0) + v
+                    details.append({
+                        'content': content,
+                        'tool_call': tool_call,
+                        'token_usage': dict(new_usage.get('token', {})),
+                        'price_usage': dict(new_usage.get('price', {})),
+                        'response': child_response_dict,
+                    })
                 results = {
                     'usage': usage,
-                    'messages': messages,
-                    'contents': [resp.output_text for resp in responses[1:]],  # 排除第一条前置信息的回复
-                    'response': [resp.to_dict() for resp in responses],
+                    'contents': [detail['content'] for detail in details],
+                    'tool_calls': [detail['tool_call'] for detail in details],
+                    'responses': [resp.to_dict() for resp in responses],
                 }
             except Exception as e:
                 _logger.error(f"Error requesting {type(self).__name__}({model}) since: {log_exception(e)}")
-                results = {"usage": {"token": {}, "price": {}}, "messages": messages, "contents": [], "response": None}
+                results = {"usage": {"token": {}, "price": {}}, "contents": [], "tool_calls": [], "responses": []}
             finally:
                 return results
 
-    def create_chat_completions(self, messages: List|str, **kwargs) -> Generator[str, None, Dict]:
+    def create_chat_completions(
+        self,
+        messages: List[Dict[str, str]],
+        n=1,
+        max_tokens=4096,
+        temperature=1.0,
+        top_p=1.0,
+    ) -> Generator[str, None, Dict]:
         """ OpenAI 的旧版 API, 建议新项目使用 create_responses 接口 """
         ## Ensure this is a generator
         yield from []
-        if isinstance(messages, str):
-            messages = [{"role": "user", "content": messages}]
         client = AzureOpenAI(
             api_version=os.environ['OPENAI_API_VERSION'],
             azure_endpoint=os.environ["OPENAI_OLDTIME_ENDPOINT"],
@@ -142,28 +204,55 @@ class OpenAIAPI(LLMAPI):
         )
         payload = {
             "messages": messages,
-            "n": kwargs.get('n', self.n),
-            "model": (model := kwargs.get('model', self.model)),
-            "top_p": kwargs.get('top_p', self.top_p),
-            "max_tokens": kwargs.get('max_tokens', self.max_tokens),
-            "temperature": kwargs.get('temperature', self.temperature),
+            "n": n,
+            "model": (model := self.model),
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         }
+        if not self.tool_list:
+            pass
+        elif self.tool_parser:
+            payload["messages"] = self.add_tool_description(payload["messages"])
+        else:
+            payload["tools"] = self.tool_description_json
+            payload["tool_choice"] = "auto"
         assert model == 'gpt-4o-mini', "Only gpt-4o-mini model is supported in chat_completions."
 
         try:
             response = client.chat.completions.create(**payload)
+            details = []
             for choice in response.choices:
-                yield choice.message.content
+                response_dict = {"choices": [{"message": choice.message.to_dict()}]}
+                message = choice.message
+                content = message.content or ""
+                if not self.tool_list:
+                    tool_call = None
+                elif self.tool_parser:
+                    tool_call = self.tool_parser.parse_response(content)
+                else:
+                    tool_call = self.normalize_native_tool_calls(choice.message.tool_calls)
+                details.append({
+                    'content': content,
+                    'tool_call': tool_call,
+                    'token_usage': {},
+                    'price_usage': {},
+                    'response': response_dict,
+                })
+                yield {'content': content, 'tool_call': tool_call, 'message': message}
             usage = self.parse_chat_completions_usage(response)
+            for detail in details:
+                detail['token_usage'] = dict(usage.get('token', {}))
+                detail['price_usage'] = dict(usage.get('price', {}))
             results = {
                 'usage': usage,
-                'messages': messages,
-                'contents': [choice.message.content for choice in response.choices],
-                'response': response.to_dict(),
+                'contents': [detail['content'] for detail in details],
+                'tool_calls': [detail['tool_call'] for detail in details],
+                'responses': [response.to_dict()],
             }
         except Exception as e:
             _logger.error(f"Error requesting {type(self).__name__}({model}) since: {log_exception(e)}")
-            results = {"usage": {"token": {}, "price": {}}, "messages": messages, "contents": [], "response": None}
+            results = {"usage": {"token": {}, "price": {}}, "contents": [], "tool_calls": [], "responses": []}
         finally:
             return results
 
@@ -181,6 +270,7 @@ class OpenAIAPI(LLMAPI):
             usage['price']['reason'] = 2.0   * reason_tokens / 1e6
             usage['price']['answer'] = 2.0   * answer_tokens / 1e6
         elif response.model.startswith('gpt-4o-mini'):
+            cached_tokens = 0
             usage['token']['prompt'] += (prompt_tokens := response.usage.prompt_tokens)
             usage['token']['reason'] += (reason_tokens := response.usage.completion_tokens_details.reasoning_tokens)
             usage['token']['answer'] += (answer_tokens := response.usage.completion_tokens - reason_tokens)
