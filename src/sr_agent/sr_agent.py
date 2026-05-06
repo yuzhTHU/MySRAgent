@@ -148,7 +148,6 @@ class SRAgent(FactoryMixin):
         })
 
         ## 开始迭代
-        history = []
         best_record = None
         for L in range(1, self.max_refinement_depth + 1):
             _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
@@ -177,16 +176,8 @@ class SRAgent(FactoryMixin):
             _logger.info(f"Action result: {results}")
 
             # Step 4: 基于 Response Content、Tool Calls 和 Results 更新 Buffer
-            self.update_buffer(content, tool_calls, results, message)
-
-            # 记录历史
-            history.append({
-                "iteration": L,
-                "messages": prompt,
-                "response": content,
-                "actions": [self._serialize_tool_call(tool_call) for tool_call in tool_calls],
-                "results": [self._serialize_tool_result(result) for result in results],
-            })
+            self.buffer.append(message)
+            self.buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
 
             # 更新最优结果
             for act, res in zip(tool_calls, results):
@@ -235,24 +226,19 @@ class SRAgent(FactoryMixin):
         return {
             "best_formula": best_record['formula'] if best_record else None,
             "best_score": best_record['score'] if best_record else None,
-            "iterations": len(history),
+            "iterations": L,
         }
 
     def record_llm_result(self, llm_result) -> Dict[str, Any] | None:
         """记录最近一次 LLM 请求的返回值和用量统计。"""
-        returned = llm_result.returned if isinstance(llm_result.returned, dict) else {}
-        assistant_message = self.llm_api.extract_assistant_message(
-            returned.get("responses") or returned.get("response")
-        )
-        usage = returned.get("usage", {})
-        for name, num in usage.get('token', {}).items():
+        usage = llm_result.returned['usage']
+        for name, num in usage['token'].items():
             self.token_counter.add(name, num)
-        for name, num in usage.get('price', {}).items():
+        for name, num in usage['price'].items():
             self.money_counter.add(name, num)
         if self.save_path is not None:
-            with open(Path(self.save_path) / 'response.json', 'w') as f:
-                json.dump(returned.get("responses", returned.get("response")), f)
-        return assistant_message
+            with open(Path(self.save_path) / 'response.jsonl', 'a') as f:
+                json.dump(llm_result.returned["responses"], f)
 
     def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
         """执行 Action。
@@ -292,39 +278,3 @@ class SRAgent(FactoryMixin):
                 results.append(result)
 
         return results
-
-    def _serialize_tool_result(self, result: ToolCallResult | None) -> Any:
-        if not isinstance(result, ToolCallResult):
-            return result
-        return {
-            "ok": result.ok,
-            "result": result.result,
-            "result_str": result.result_str,
-            "meta_data": result.meta_data,
-            "exception": result.exception,
-        }
-
-    def _serialize_tool_call(self, tool_call: ToolCall) -> Dict[str, Any]:
-        return {
-            "name": tool_call.name,
-            "params": tool_call.params,
-            "id": tool_call.id,
-            "raw": tool_call.raw,
-            "raw_str": tool_call.raw_str,
-        }
-
-    def update_buffer(
-        self,
-        content: str,
-        tool_calls: List[ToolCall],
-        results: List[ToolCallResult | None],
-        message: Dict[str, Any] | None,
-    ) -> None:
-        """根据 Action 和结果更新 Buffer。
-
-        Args:
-            tool_calls: 执行的 Action。
-            results: 执行结果。
-        """
-        self.buffer.append(message)
-        self.buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
