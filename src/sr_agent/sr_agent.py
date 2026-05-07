@@ -154,21 +154,33 @@ class SRAgent(FactoryMixin):
 
             # Step 1: 根据 Buffer 创建 Prompt
             prompt = self.buffer
-            _logger.info(f"Built prompt with {len(prompt)} messages")
-            log = []
+            _logger.info(f"Built prompt with {len(prompt)} messages.")
+            logs = []
             for msg in prompt:
-                role = tag2ansi(f"[red bold][{msg['role']}]: [reset]")
-                content = render_markdown(msg['content'] or "(empty)")
-                if 'tool_calls' in msg:
-                    content += "\n".join(f"- {tool_call['function']['name']}({tool_call['function']['arguments']})" for tool_call in msg['tool_calls'])
-                log.append(f"{role}{content}")
-            _logger.debug(f"Messages:\n" + '\n---\n'.join(log))
+                msg = msg.copy()
+                order = ['role', 'tool_call_id', 'reasoning', 'content', 'tool_call']
+                order = [k for k in order if k in msg] + [k for k in msg if k not in order]
+                msg = { k: msg[k] for k in order }
+
+                log = ''
+                log += tag2ansi(f"[red bold][{msg.pop('role')}][reset]")
+                for k, v in msg.items():
+                    if k == 'content':
+                        v = render_markdown(v or "(empty)")
+                    v = str(v).strip()
+                    if '\n' in v:
+                        v = '\n        '.join(['', *v.splitlines()])
+                    log += tag2ansi(f"\n    [blue]{k}[reset]") + '=' + v
+                logs.append(log)
+            _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
 
             # Step 2: 请求 LLM 得到 Content 和 Tool Calls
             for content, tool_calls, message in (llm_result := self.llm_api(prompt, n=1)):
                 pass
             self.record_llm_result(llm_result)
-            _logger.info(f"LLM response content:\n{render_markdown(content or "(empty)")}")
+            tmp = render_markdown(content.strip() or "(empty)")
+            if '\n' in tmp: tmp = '\n        '.join(['', *tmp.splitlines()])
+            _logger.info(f"LLM response content: {tmp}")
             _logger.info(f"LLM tool calls: {tool_calls or "(None)"}")
 
             # Step 3: 执行 Tool Calls 得到 Result
@@ -239,6 +251,7 @@ class SRAgent(FactoryMixin):
         if self.save_path is not None:
             with open(Path(self.save_path) / 'response.jsonl', 'a') as f:
                 json.dump(llm_result.returned["responses"], f)
+                f.write('\n')
 
     def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
         """执行 Action。
