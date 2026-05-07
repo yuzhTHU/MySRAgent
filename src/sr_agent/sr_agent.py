@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 import json
+import heapq
 import logging
 import numpy as np
 from pathlib import Path
@@ -142,21 +143,28 @@ class SRAgent(FactoryMixin):
             )
                 
         ## 开始迭代
-        best_record = None
+        topk_records = []
         for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
-            _logger.info(f"Start Restart Loop {R}/{self.max_restart_loop}")
+            _logger.info(f"Start Restart Loop ({R}/{self.max_restart_loop})")
 
             # 用平凡结果或者历史最佳结果构建新的 initial prompt
-            initial_prompt = self.build_initial_prompt(problem_description, X, y, best_record)
+            initial_prompt = self.build_initial_prompt(problem_description, X, y, topk_records)
 
             for C in range(1, self.global_width + 1):  # C 次独立重复对话
-                _logger.info(f"Start Global Branch {C}/{self.global_width}")
+                _logger.info(
+                    f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
+                    f"Global Branch ({C}/{self.global_width})"
+                )
             
                 # 用 initial prompt 初始化 buffer
                 buffer = deepcopy(initial_prompt)
 
                 for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
-                    _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
+                    _logger.info(
+                        f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
+                        f"Global Branch ({C}/{self.global_width}) - "
+                        f"Refinement Step ({L}/{self.max_refinement_depth})"
+                    )
 
                     # Step 1: 根据 Buffer 创建 Prompt
                     prompt = self.build_prompt(buffer)
@@ -170,17 +178,18 @@ class SRAgent(FactoryMixin):
                     # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
                     buffer = self.update_buffer(buffer, response_list, results_list)
 
-                    # Step 5: 更新最优结果
-                    best_record = self.update_best(best_record, response_list, results_list)
+                    # Step 5: 更新 top-k 最优结果
+                    topk_records = self.update_topk(topk_records, response_list, results_list)
 
                     # Step 6: 打印本轮日志
-                    self.log_info(response_list, best_record)
+                    self.log_info(response_list, topk_records)
 
-        self.log_info([], best_record)
+        best_record = topk_records[0][-1] if topk_records else {}
         return {f'best_{k}': v for k, v in best_record.items()}
 
-    def build_initial_prompt(self, problem_description, X, y, best_record):
+    def build_initial_prompt(self, problem_description, X, y, topk_record):
         """根据历史最佳结果构建新的 initial prompt。"""
+        topk_record = heapq.nsmallest(self.restart_top_k, topk_record)
         initial_prompt = []
         # 构建 system prompt - 告知 LLM 它的角色和目标
         initial_prompt.append({
@@ -227,12 +236,12 @@ class SRAgent(FactoryMixin):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
         llm_result = self.llm_api(prompt, n=self.local_sample_size)
-        for K, (content, tool_calls, message) in enumerate(llm_result): # K 次重复采样
+        for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()
             content_for_log = '\n        '.join(['', *content_for_log.splitlines()]) if '\n' in content_for_log else content_for_log
             _logger.info(
-                f"LLM branch: {len(response_list) + 1}/{self.local_sample_size}\n"
+                f"Local Sample ({K}/{self.local_sample_size})\n"
                 f"LLM response content: {content_for_log}\n"
                 f"LLM tool calls: {tool_calls or "(None)"}"
             )
@@ -282,13 +291,13 @@ class SRAgent(FactoryMixin):
                         extra_content_added = True
         content = '\n\n'.join(part for part in content_parts if part)
         message['content'] = content
-        _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(response_list)}")
+        _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
         buffer.append(message)
         buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
         return buffer
 
-    def update_best(self, best_record, response_list, results_list):
-        """根据 LLM Response 和 Tool Results 更新最优结果。"""
+    def update_topk(self, topk_records, response_list, results_list):
+        """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
         for idx in range(len(response_list)):
             for act, res in zip(response_list[idx][1], results_list[idx]):
                 if res is None:
@@ -303,19 +312,20 @@ class SRAgent(FactoryMixin):
                     continue
                 elif (mse := res.result['metrics']['mse']) is None:
                     continue
-                elif best_record is not None and mse >= best_record['mse']:
-                    continue
                 else:
-                    best_record = {
+                    record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
                         "mse": mse,
                         "rmse": res.result['metrics'].get('rmse'),
                         "mae": res.result['metrics'].get('mae'),
                         "r2": res.result['metrics'].get('r2'),
                     }
-        return best_record
+                    priority = mse # 按照 mse 排序 (越小越重要)
+                    sequence = len(topk_records) # 相同 priority 时按照 sequence 排序 (越小越重要)
+                    heapq.heappush(topk_records, (priority, sequence, record))
+        return topk_records
     
-    def log_info(self, response_list, best_record):
+    def log_info(self, response_list, topk_records):
         """打印本轮日志, response_list 是用来统计本轮新增工具调用次数的。"""
         new_count = defaultdict(int)
         for _, tool_calls, _ in response_list:
@@ -325,6 +335,7 @@ class SRAgent(FactoryMixin):
             f"{name}: {count} ({new_count[name]} new)" 
             for name, count in self.tools_counter.named_count.items()
         )
+        best_record = topk_records[0][-1] if topk_records else {}
         log = {
             "Best": f"{best_record['formula']} (MSE={best_record['mse']:.6g})" if best_record else "None",
             "Tool Calls": tool_calls_str,
