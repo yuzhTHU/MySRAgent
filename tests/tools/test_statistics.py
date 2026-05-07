@@ -11,7 +11,6 @@ class TestStatisticsToolMetadata:
     def test_metadata_is_inferred_from_execute_docstring(self):
         assert StatisticsTool.metadata.name == "statistics_analysis"
         assert StatisticsTool.metadata.description == "Execute statistical analysis."
-        assert StatisticsTool.metadata.category == "default"
 
     def test_parameters_schema_is_inferred_from_execute_signature_and_docstring(self):
         assert StatisticsTool.metadata.parameters == {

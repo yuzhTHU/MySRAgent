@@ -17,7 +17,6 @@ class TestLLMTool:
         tool = LLMTool()
         assert tool.metadata is not None
         assert tool.metadata.name == "call_llm"
-        assert tool.metadata.category == "llm"
 
     def test_execute_qwen3_8b(self):
         """测试使用 Qwen3-8B 模型（免费）。"""

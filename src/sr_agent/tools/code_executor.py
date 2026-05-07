@@ -373,7 +373,6 @@ class CodeExecutorTool(BaseTool):
             "json.loads(input_data_str)` to access it. Do not create sample data "
             "manually."
         ),
-        category="computation",
     )
 
     def execute(

@@ -216,4 +216,3 @@ print(f"Length: {len(data)}")
     def test_tool_metadata(self):
         """测试工具元数据。"""
         assert self.tool.metadata.name == "code_executor"
-        assert self.tool.metadata.category == "computation"

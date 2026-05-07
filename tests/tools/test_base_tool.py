@@ -11,7 +11,7 @@ from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
 
 @BaseTool.register("unit_sample_tool")
 class UnitSampleTool(BaseTool):
-    metadata = ToolMetadata(name="unit_sample_tool", category="unit")
+    metadata = ToolMetadata(name="unit_sample_tool")
 
     def execute(
         self,
@@ -58,7 +58,6 @@ class UnitManualSchemaTool(BaseTool):
             "properties": {"value": {"type": "string"}},
             "required": ["value"],
         },
-        category="manual",
     )
 
     def execute(self, value: str) -> Dict[str, Any]:
@@ -82,7 +81,6 @@ class TestToolMetadata:
         assert metadata.name == "demo"
         assert metadata.description is None
         assert metadata.parameters is None
-        assert metadata.category == "default"
 
 
 class TestToolCallResult:

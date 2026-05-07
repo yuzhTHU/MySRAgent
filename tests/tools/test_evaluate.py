@@ -117,7 +117,6 @@ class TestEvaluateTool:
         tool = EvaluateTool(x={"x": np.array([1.0])}, y=np.array([1.0]))
         assert tool.metadata is not None
         assert tool.metadata.name == "evaluate_formula"
-        assert tool.metadata.category == "evaluation"
 
     def test_x_vars_subset(self):
         """测试 x_vars 参数可以选择子集。"""

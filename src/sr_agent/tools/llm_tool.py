@@ -31,7 +31,7 @@ class LLMTool(BaseTool):
     - manual: Manual input (for testing)
     """
 
-    metadata = ToolMetadata(name="call_llm", category="llm")
+    metadata = ToolMetadata(name="call_llm")
 
     def execute(
         self,

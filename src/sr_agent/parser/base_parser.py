@@ -39,7 +39,6 @@ class BaseParser(ABC, FactoryMixin):
                     "name": tool.metadata.name,
                     "description": tool.metadata.description,
                     "parameters": tool.metadata.parameters,
-                    "category": tool.metadata.category,
                 }
                 for tool in tool_list
             ]
@@ -49,7 +48,6 @@ class BaseParser(ABC, FactoryMixin):
                     "name": tool.metadata.name,
                     "description": tool.metadata.description,
                     "parameters": tool.metadata.parameters,
-                    "category": tool.metadata.category,
                 }
                 for tool in tool_list
             ]

@@ -248,7 +248,6 @@ class TestPolynomialFitTool:
         """Test that metadata exists."""
         assert self.tool.metadata is not None
         assert self.tool.metadata.name == "polynomial_fit"
-        assert self.tool.metadata.category == "regression"
         assert "polynomial" in self.tool.metadata.description.lower()
 
     def test_multicollinearity_warning(self):

@@ -163,7 +163,6 @@ class TestSkillDocumentTool:
         """测试元数据存在。"""
         assert self.tool.metadata is not None
         assert self.tool.metadata.name == "skill_document"
-        assert self.tool.metadata.category == "knowledge"
         assert "list" in self.tool.metadata.description.lower()
         assert "read" in self.tool.metadata.description.lower()
 

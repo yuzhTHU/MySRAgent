@@ -30,12 +30,10 @@ class ToolMetadata:
             设置为 None 以从 execute 方法的 docstring 中自动提取工具描述。
         parameters: OpenAI/OpenRouter function calling 兼容的 JSON Schema。
             设置为 None 以从 execute 方法的签名和 docstring 中自动推断基础 schema。
-        category: 工具类别，用于兼容旧版工具元数据和分类展示。
     """
     name: str
     description: str | None = None
     parameters: Dict[str, Any] | None = None
-    category: str = "default"
 
 
 @dataclass
@@ -169,7 +167,6 @@ class BaseTool(ABC, FactoryMixin):
                     "name": tool_cls.metadata.name,
                     "description": tool_cls.metadata.description,
                     "parameters": tool_cls.metadata.parameters,
-                    "category": tool_cls.metadata.category,
                 })
         return tool_list
 

@@ -36,7 +36,7 @@ class EvaluateTool(BaseTool):
     - Variable names should match keys in input dictionary X
     """
 
-    metadata = ToolMetadata(name="evaluate_formula", category="evaluation")
+    metadata = ToolMetadata(name="evaluate_formula")
 
     def execute(
         self,
