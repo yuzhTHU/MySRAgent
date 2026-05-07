@@ -43,7 +43,7 @@ def build_argparser() -> argparse.ArgumentParser: # 这个函数已经经过人�
     parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
     parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.6-flash", help="LLM model name.")
+    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
     parser.add_argument("--tools", default=None, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--local_sample_size", type=int, default=1, help="Number of LLM samples to generate for each branch.")
     parser.add_argument("--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
@@ -133,15 +133,18 @@ def main(args: argparse.Namespace) -> dict:
     )
 
     result = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "duration_seconds": None,
-        "target_equation": f"{target} = {formula}",
+        "target_formula": f"{target} = {formula}",
         "noise_std_ratio": args.noise_std_ratio,
         "random_seed": args.seed,
         "best_formula": None,
         "best_mse": None,
-        "iterations": 0,
         "status": "not_started",
+        "token_usage": None,
+        "money_usage": None,
+        "tools_usage": None,
+        "llm_model": f"{args.llm_model} @ {args.llm_provider}",
     }
     try:
         result |= agent.fit(X=X, y=y, problem_description=problem_description)
@@ -154,26 +157,25 @@ def main(args: argparse.Namespace) -> dict:
         _logger.error(f"Experiment failed with an exception: {log_exception(e)}")
         result["status"] = "failed"
         result["error"] = repr(e)
-        # raise SystemExit(1)
-        if args.debug:
-            raise e from e
+        if args.debug: raise e from e
     finally:
-        result["duration_seconds"] = (datetime.now() - datetime.fromisoformat(result["start_time"])).total_seconds()
+        result["duration_seconds"] = (datetime.now() - datetime.strptime(result["start_time"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+        result["token_usage"] = agent.token_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
+        result["money_usage"] = agent.money_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
+        result["tools_usage"] = agent.tools_counter.to_str(mode='count', mode_of_detail='count', mode_of_percent='by_count')
+        # 打印日志
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items()])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
-            f"[red]Target Equation[reset]: {target} = {formula}\n"
-            f"[red]LLM[reset]: {args.llm_model} @ {args.llm_provider}\n"
-            f"[red]Tools[reset]: {args.tools}\n"
-            f"[red]Best Formula[reset]: {result['best_formula']}\n"
-            f"[red]Best MSE[reset]: {result['best_mse']}\n"
-            f"[red]Total Iterations[reset]: {result['iterations']}\n"
+            f"{log}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
-
+        # 保存文件
         result_path = Path(args.save_path) / "result.jsonl"
         with open(result_path, "a", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=True)
+            f.write("\n")
         _logger.note(f"Result saved to {result_path}")
 
     _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.command}[reset]"))

@@ -78,7 +78,6 @@ class SRAgent(FactoryMixin):
         self.restart_top_k = restart_top_k
 
         # 关键组件
-        self.buffer = []
         self.tool_cls_list = BaseTool.load_tool_classes(tools)
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
@@ -88,7 +87,7 @@ class SRAgent(FactoryMixin):
         self.named_timer = NamedTimer() # 用时统计
         self.token_counter = ParallelTimer(unit='token') # token 统计
         self.money_counter = ParallelTimer(unit='$') # 费用统计
-        self.tool_call_counter = ParallelTimer(unit='call') # 工具调用统计
+        self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
 
         _logger.info(f"Initialized {self.__class__.__name__}")
@@ -142,16 +141,54 @@ class SRAgent(FactoryMixin):
                 f"{self.llm_api.tool_description_text}"
             )
                 
+        ## 开始迭代
+        best_record = None
+        for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
+            _logger.info(f"Start Restart Loop {R}/{self.max_restart_loop}")
 
-        ## 初始化 Buffer
-        self.buffer.clear()
+            # 用平凡结果或者历史最佳结果构建新的 initial prompt
+            initial_prompt = self.build_initial_prompt(problem_description, X, y, best_record)
+
+            for C in range(1, self.global_width + 1):  # C 次独立重复对话
+                _logger.info(f"Start Global Branch {C}/{self.global_width}")
+            
+                # 用 initial prompt 初始化 buffer
+                buffer = deepcopy(initial_prompt)
+
+                for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
+                    _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
+
+                    # Step 1: 根据 Buffer 创建 Prompt
+                    prompt = self.build_prompt(buffer)
+
+                    # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组
+                    response_list = self.request_llm(prompt)
+
+                    # Step 3: 执行 Tool Calls 得到 Results
+                    results_list = self.get_results(response_list)
+
+                    # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
+                    buffer = self.update_buffer(buffer, response_list, results_list)
+
+                    # Step 5: 更新最优结果
+                    best_record = self.update_best(best_record, response_list, results_list)
+
+                    # Step 6: 打印本轮日志
+                    self.log_info(response_list, best_record)
+
+        self.log_info([], best_record)
+        return {f'best_{k}': v for k, v in best_record.items()}
+
+    def build_initial_prompt(self, problem_description, X, y, best_record):
+        """根据历史最佳结果构建新的 initial prompt。"""
+        initial_prompt = []
         # 构建 system prompt - 告知 LLM 它的角色和目标
-        self.buffer.append({
+        initial_prompt.append({
             "role": "system",
             "content": """You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas that explain the relationship between feature variables and the target variable."""
         })
         # 构建 user prompt - 告知具体问题和数据信息
-        self.buffer.append({
+        initial_prompt.append({
             "role": "user",
             "content": (
                 f"{problem_description}\n\n"
@@ -160,52 +197,11 @@ class SRAgent(FactoryMixin):
                 f"Please start by analyzing the data to understand the relationship between features and target."
             )
         })
-
-        ## 开始迭代
-        best_record = None
-        for R in range(1, self.max_restart_loop + 1):
-            _logger.info(f"Start Restart Loop {R}/{self.max_restart_loop}")
-            for L in range(1, self.max_refinement_depth + 1):
-                _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
-
-                # Step 1: 根据 Buffer 创建 Prompt
-                prompt = self.build_prompt(self.buffer)
-
-                # Step 2: 请求 LLM 得到 Content 和 Tool Calls
-                response_list = self.request_llm(prompt)
-
-                # Step 3: 执行 Tool Calls 得到 Result
-                results_list = self.get_results(response_list)
-
-                # Step 4: 基于 Response Content、Tool Calls 和 Results 更新 Buffer
-                self.update_buffer(response_list, results_list)
-
-                # Step 5: 更新最优结果
-                best_record = self.update_best(best_record, response_list, results_list)
-
-                # Step 6: 打印本轮日志
-                self.log_info(response_list, best_record)
-
-        # ========== 后处理阶段 ==========
-        if best_record is None:
-            best_record = {}
-            _logger.warning("No valid formula found during fitting.")
-        else:
-            _logger.note(
-                "Fit completed. Best Record:" +
-                ', '.join(tag2ansi(f"[red bold]{k}[reset]={v}") for k, v in best_record.items())
-            )
-
-        return {
-            "best_formula": best_record.get('formula', None),
-            "best_mse": best_record.get('mse', None),
-            "best_record": best_record,
-            "iterations": L,
-        }
+        return initial_prompt
 
     def build_prompt(self, buffer: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
-        prompt = self.buffer
+        prompt = buffer
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
         for msg in prompt:
@@ -230,19 +226,21 @@ class SRAgent(FactoryMixin):
     def request_llm(self, prompt: List[Dict[str, Any]]):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
-        for content, tool_calls, message in (llm_result := self.llm_api(prompt, n=self.local_sample_size)):
-            tmp = render_markdown(content or "(empty)").strip()
-            tmp = '\n        '.join(['', *tmp.splitlines()]) if '\n' in tmp else tmp
+        llm_result = self.llm_api(prompt, n=self.local_sample_size)
+        for K, (content, tool_calls, message) in enumerate(llm_result): # K 次重复采样
+            response_list.append((content, tool_calls, message))
+            content_for_log = render_markdown(content or "(empty)").strip()
+            content_for_log = '\n        '.join(['', *content_for_log.splitlines()]) if '\n' in content_for_log else content_for_log
             _logger.info(
                 f"LLM branch: {len(response_list) + 1}/{self.local_sample_size}\n"
-                f"LLM response content: {tmp}\n"
+                f"LLM response content: {content_for_log}\n"
                 f"LLM tool calls: {tool_calls or "(None)"}"
             )
-            response_list.append((content, tool_calls, message))
         self.record_llm_result(llm_result)
         return response_list
     
     def get_results(self, response_list):
+        """执行 Tool Calls 得到 Results。"""
         all_tool_calls = []
         num_tool_calls = []
         for _, tool_calls, _ in response_list:
@@ -254,7 +252,8 @@ class SRAgent(FactoryMixin):
         _logger.info(f"Action result: {all_results}")
         return results_list
     
-    def update_buffer(self, response_list, results_list):
+    def update_buffer(self, buffer, response_list, results_list):
+        """根据 LLM Response 和 Tool Results 更新 Buffer。"""
         selected_idx = 0
         selected_mse = float('inf')
         for results_idx, results in enumerate(results_list):
@@ -284,10 +283,12 @@ class SRAgent(FactoryMixin):
         content = '\n\n'.join(part for part in content_parts if part)
         message['content'] = content
         _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(response_list)}")
-        self.buffer.append(message)
-        self.buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
-    
+        buffer.append(message)
+        buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+        return buffer
+
     def update_best(self, best_record, response_list, results_list):
+        """根据 LLM Response 和 Tool Results 更新最优结果。"""
         for idx in range(len(response_list)):
             for act, res in zip(response_list[idx][1], results_list[idx]):
                 if res is None:
@@ -295,6 +296,8 @@ class SRAgent(FactoryMixin):
                 elif not isinstance(res.result, dict):
                     continue
                 elif 'metrics' not in res.result:
+                    continue
+                elif not isinstance(res.result['metrics'], dict):
                     continue
                 elif 'mse' not in res.result['metrics']:
                     continue
@@ -313,14 +316,14 @@ class SRAgent(FactoryMixin):
         return best_record
     
     def log_info(self, response_list, best_record):
-        # 统计本轮工具调用次数
+        """打印本轮日志, response_list 是用来统计本轮新增工具调用次数的。"""
         new_count = defaultdict(int)
         for _, tool_calls, _ in response_list:
             for tool_call in tool_calls or []:
                 new_count[tool_call.name] += 1
         tool_calls_str = ', '.join(
             f"{name}: {count} ({new_count[name]} new)" 
-            for name, count in self.tool_call_counter.named_count.items()
+            for name, count in self.tools_counter.named_count.items()
         )
         log = {
             "Best": f"{best_record['formula']} (MSE={best_record['mse']:.6g})" if best_record else "None",
@@ -346,14 +349,7 @@ class SRAgent(FactoryMixin):
                 f.write('\n')
 
     def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
-        """执行 Action。
-
-        Args:
-            actions: LLM 返回的 Action 列表，每个 Action 包含 name 和 params。
-
-        Returns:
-            执行结果列表。
-        """
+        """执行 Action。"""
         results = []
         tool_map = {tool.metadata.name: tool for tool in self.tools}
         for tool_call in actions:
@@ -367,6 +363,6 @@ class SRAgent(FactoryMixin):
                 )
             else:
                 result = tool(**tool_call.params)
-                self.tool_call_counter.add(tool_call.name)
+                self.tools_counter.add(tool_call.name)
             results.append(result)
         return results
