@@ -35,6 +35,13 @@ class _FakeOpenRouterMessage:
         self.content = content
         self.tool_calls = tool_calls or []
 
+    def to_dict(self):
+        return {
+            "role": "assistant",
+            "content": self.content,
+            "tool_calls": self.tool_calls,
+        }
+
 
 class _FakeOpenRouterChoice:
     def __init__(self, message: _FakeOpenRouterMessage):
@@ -125,7 +132,12 @@ def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypat
     assert payload["model"] == "qwen/qwen3.6-flash"
     assert payload["tools"][0]["function"]["name"] == "demo_tool"
     assert payload["tool_choice"] == "auto"
-    assert chunks == [("ready", [ToolCall("demo_tool", {"x": 1}, id="call_1", raw=_FakeOpenRouterClient.message["tool_calls"][0])])]
+    expected_message = {
+        "role": "assistant",
+        "content": "ready",
+        "tool_calls": _FakeOpenRouterClient.message["tool_calls"],
+    }
+    assert chunks == [("ready", [ToolCall("demo_tool", {"x": 1}, id="call_1", raw=_FakeOpenRouterClient.message["tool_calls"][0])], expected_message)]
     assert return_value["response_message"] == "ready"
     assert return_value["tool_calls"] == [ToolCall("demo_tool", {"x": 1}, id="call_1", raw=_FakeOpenRouterClient.message["tool_calls"][0])]
 
@@ -208,5 +220,14 @@ def test_siliconflow_qwen_native_tools_are_sent_and_tool_calls_are_extracted(mon
             }
         ],
     })["choices"][0]["message"]["tool_calls"][0])]
-    assert chunks == [("ready", expected)]
+    assert chunks == [("ready", expected, {
+        "role": "assistant",
+        "content": "ready",
+        "tool_calls": [
+            {
+                "type": "function",
+                "function": {"name": "demo_tool", "arguments": '{"x": 4}'},
+            }
+        ],
+    })]
     assert return_value["tool_calls"] == expected

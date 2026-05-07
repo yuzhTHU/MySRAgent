@@ -158,7 +158,7 @@ def main(args: argparse.Namespace) -> dict:
             f"[red]LLM[reset]: {args.llm_model} @ {args.llm_provider}\n"
             f"[red]Tools[reset]: {args.tools}\n"
             f"[red]Best Formula[reset]: {result['best_formula']}\n"
-            f"[red]Best Score (MSE)[reset]: {result['best_score']}\n"
+            f"[red]Best MSE[reset]: {result['best_mse']}\n"
             f"[red]Total Iterations[reset]: {result['iterations']}\n"
             f'[gray]{"=" * 50}[reset]'
         ))

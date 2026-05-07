@@ -2,6 +2,7 @@
 import os
 import logging
 import requests
+from dotenv import load_dotenv
 from collections import defaultdict
 from typing import Generator, List, Dict
 from .llm_api import LLMAPI
@@ -29,6 +30,7 @@ class SiliconFlowAPI(LLMAPI):
     ) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         yield from []
+        load_dotenv()
         url = 'https://api.siliconflow.cn/v1/chat/completions'
         headers = {
             'Authorization': f"Bearer {os.environ['SILICONFLOW_API_KEY']}",
@@ -97,7 +99,7 @@ class SiliconFlowAPI(LLMAPI):
                 "price_usage": {},
                 "response": {"choices": [choice]},
             })
-            yield content, tool_call
+            yield {"content": content, "tool_call": tool_call, "message": choice["message"]}
         usage = {'token': {}, 'price': {}}
         usage['token']['prompt'] = (prompt_tokens := responses["usage"]["prompt_tokens"])
         usage['token']['reason'] = (reason_tokens := responses["usage"].get("completion_tokens_details", {}).get("reasoning_tokens", 0))
