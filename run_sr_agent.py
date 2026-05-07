@@ -45,6 +45,9 @@ def build_argparser() -> argparse.ArgumentParser: # 这个函数已经经过人�
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.6-flash", help="LLM model name.")
     parser.add_argument("--tools", default=None, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
+    parser.add_argument("--max_restart_loop", type=int, default=3, help="Maximum number of best-solution restart loops.")
+    parser.add_argument("--global_width", type=int, default=1, help="Number of independent branches per restart loop.")
+    parser.add_argument("--restart_top_k", type=int, default=3, help="Number of previous best formulas to inject into the next restart prompt.")
     parser.add_argument("--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
     parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
     parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
@@ -118,6 +121,9 @@ def main(args: argparse.Namespace) -> dict:
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         tools=args.tools,
+        max_restart_loop=args.max_restart_loop,
+        global_width=args.global_width,
+        restart_top_k=args.restart_top_k,
         max_refinement_depth=args.max_refinement_depth,
         verbose=args.verbose,
         tool_parser=args.tool_parser,

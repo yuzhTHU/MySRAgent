@@ -7,8 +7,9 @@ from __future__ import annotations
 import json
 import logging
 import numpy as np
-from collections import defaultdict
 from pathlib import Path
+from copy import deepcopy
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from .api.llm_api import LLMAPI
 from .parser import BaseParser
@@ -41,7 +42,10 @@ class SRAgent(FactoryMixin):
         verbose: bool = False,
         tool_parser: str | BaseParser = 'text',
         save_path: Optional[str] = None,
-        max_refinement_depth: int = 20
+        max_refinement_depth: int = 20,
+global_width: int = 1,
+        max_restart_loop: int = 1,
+        restart_top_k: int = 3,
     ):
         """初始化 Agent。
 
@@ -53,6 +57,9 @@ class SRAgent(FactoryMixin):
             tool_parser: 工具解析器，可以是字符串（'text', 'json'）或 BaseParser 实例。
             save_path: 日志文件保存路径。None 表示不保存到文件。
             max_refinement_depth: 最大迭代次数。
+global_width: 每个 restart turn 中独立对话分支数量。
+            max_restart_loop: best-solution restarts 次数
+restart_top_k: 下一轮 restart prompt 中保留的历史最佳结果数量。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=save_path, force=False)
@@ -61,13 +68,16 @@ class SRAgent(FactoryMixin):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser
-        self.parser = None
         self.max_refinement_depth = max_refinement_depth
+self.global_width = global_width
+        self.max_restart_loop = max_restart_loop
+self.restart_top_k = restart_top_k
 
         # 关键组件
         self.buffer = []
         self.tool_cls_list = BaseTool.load_tool_classes(tools)
         self.tools = None # 延迟实例化, 因为需要 content 上下文
+        self.parser = None # 延迟实例化, 因为需要 tools 工具列表
         self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表
 
         # 附属组件
@@ -149,91 +159,93 @@ class SRAgent(FactoryMixin):
 
         ## 开始迭代
         best_record = None
-        for L in range(1, self.max_refinement_depth + 1):
-            _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
+        for R in range(1, self.max_restart_loop + 1):
+            _logger.info(f"Start Restart Loop {R}/{self.max_restart_loop}")
+            for L in range(1, self.max_refinement_depth + 1):
+                _logger.info(f"Start Refinement Step {L}/{self.max_refinement_depth}")
 
-            # Step 1: 根据 Buffer 创建 Prompt
-            prompt = self.buffer
-            _logger.info(f"Built prompt with {len(prompt)} messages.")
-            logs = []
-            for msg in prompt:
-                msg = msg.copy()
-                order = ['role', 'tool_call_id', 'reasoning', 'content', 'tool_call']
-                order = [k for k in order if k in msg] + [k for k in msg if k not in order]
-                msg = { k: msg[k] for k in order }
+                # Step 1: 根据 Buffer 创建 Prompt
+                prompt = self.buffer
+                _logger.info(f"Built prompt with {len(prompt)} messages.")
+                logs = []
+                for msg in prompt:
+                    msg = msg.copy()
+                    order = ['role', 'tool_call_id', 'reasoning', 'content', 'tool_call']
+                    order = [k for k in order if k in msg] + [k for k in msg if k not in order]
+                    msg = { k: msg[k] for k in order }
 
-                log = ''
-                log += tag2ansi(f"[red bold][{msg.pop('role')}][reset]")
-                for k, v in msg.items():
-                    if k == 'content':
-                        v = render_markdown(v or "(empty)")
-                    v = str(v).strip()
-                    if '\n' in v:
-                        v = '\n        '.join(['', *v.splitlines()])
-                    log += tag2ansi(f"\n    [blue]{k}[reset]") + '=' + v
-                logs.append(log)
-            _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
+                    log = ''
+                    log += tag2ansi(f"[red bold][{msg.pop('role')}][reset]")
+                    for k, v in msg.items():
+                        if k == 'content':
+                            v = render_markdown(v or "(empty)")
+                        v = str(v).strip()
+                        if '\n' in v:
+                            v = '\n        '.join(['', *v.splitlines()])
+                        log += tag2ansi(f"\n    [blue]{k}[reset]") + '=' + v
+                    logs.append(log)
+                _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
 
-            # Step 2: 请求 LLM 得到 Content 和 Tool Calls
-            for content, tool_calls, message in (llm_result := self.llm_api(prompt, n=1)):
-                pass
-            self.buffer.append(message)
-            self.record_llm_result(llm_result)
-            tmp = render_markdown(content.strip() or "(empty)")
-            if '\n' in tmp: tmp = '\n        '.join(['', *tmp.splitlines()])
-            _logger.info(f"LLM response content: {tmp}")
-            _logger.info(f"LLM tool calls: {tool_calls or "(None)"}")
+                # Step 2: 请求 LLM 得到 Content 和 Tool Calls
+                for content, tool_calls, message in (llm_result := self.llm_api(prompt, n=1)):
+                    pass
+                self.buffer.append(message)
+                self.record_llm_result(llm_result)
+                tmp = render_markdown(content or "(empty)").strip()
+                if '\n' in tmp: tmp = '\n        '.join(['', *tmp.splitlines()])
+                _logger.info(f"LLM response content: {tmp}")
+                _logger.info(f"LLM tool calls: {tool_calls or "(None)"}")
 
-            # Step 3: 执行 Tool Calls 得到 Result
-            results = self.execute_action(tool_calls)
-            _logger.info(f"Action result: {results}")
+                # Step 3: 执行 Tool Calls 得到 Result
+                results = self.execute_action(tool_calls)
+                _logger.info(f"Action result: {results}")
 
-            # Step 4: 基于 Response Content、Tool Calls 和 Results 更新 Buffer
-            self.buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+                # Step 4: 基于 Response Content、Tool Calls 和 Results 更新 Buffer
+                self.buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
 
-            # 更新最优结果
-            for act, res in zip(tool_calls, results):
-                if res is None:
-                    continue
-                elif not isinstance(res.result, dict):
-                    continue
-                elif 'metrics' not in res.result:
-                    continue
-                elif 'mse' not in res.result['metrics']:
-                    continue
-                elif (mse := res.result['metrics']['mse']) is None:
-                    continue
-                elif best_record is not None and mse >= best_record['mse']:
-                    continue
-                else:
-                    best_record = {
-                        "formula": res.result.get('formula') or act.params.get('eq'),
-                        "mse": mse,
-                        "rmse": res.result['metrics'].get('rmse'),
-                        "mae": res.result['metrics'].get('mae'),
-                        "r2": res.result['metrics'].get('r2'),
-                    }
+                # 更新最优结果
+                for act, res in zip(tool_calls, results):
+                    if res is None:
+                        continue
+                    elif not isinstance(res.result, dict):
+                        continue
+                    elif 'metrics' not in res.result:
+                        continue
+                    elif 'mse' not in res.result['metrics']:
+                        continue
+                    elif (mse := res.result['metrics']['mse']) is None:
+                        continue
+                    elif best_record is not None and mse >= best_record['mse']:
+                        continue
+                    else:
+                        best_record = {
+                            "formula": res.result.get('formula') or act.params.get('eq'),
+                            "mse": mse,
+                            "rmse": res.result['metrics'].get('rmse'),
+                            "mae": res.result['metrics'].get('mae'),
+                            "r2": res.result['metrics'].get('r2'),
+                        }
 
-            # 统计本轮工具调用次数
-            new_count = defaultdict(int)
-            for tool_call in tool_calls:
-                new_count[tool_call.name] += 1
-            tool_calls_str = ', '.join(
-                f"{name}: {count} ({new_count[name]} new)" 
-                for name, count in self.tool_call_counter.named_count.items()
-            )
+                # 统计本轮工具调用次数
+                new_count = defaultdict(int)
+                for tool_call in tool_calls:
+                    new_count[tool_call.name] += 1
+                tool_calls_str = ', '.join(
+                    f"{name}: {count} ({new_count[name]} new)" 
+                    for name, count in self.tool_call_counter.named_count.items()
+                )
 
-            # 打印本轮日志
-            log = {
-                "Best": f"{best_record['formula']} (MSE={best_record['mse']:.6g})" if best_record else "None",
-                "Tool Calls": tool_calls_str,
-                "Speed": self.named_timer.to_str('pace', None, None),
-                "Time Usage": self.named_timer.to_str('time', 'pace', 'by_time'),
-                "Token Usage": self.token_counter.to_str('count', 'speed', 'by_count'),
-                "Price Usage": self.money_counter.to_str('count', 'speed', 'by_count'),
-            }
-            msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
-            _logger.info(tag2ansi(msg))
+                # 打印本轮日志
+                log = {
+                    "Best": f"{best_record['formula']} (MSE={best_record['mse']:.6g})" if best_record else "None",
+                    "Tool Calls": tool_calls_str,
+                    "Speed": self.named_timer.to_str('pace', None, None),
+                    "Time Usage": self.named_timer.to_str('time', 'pace', 'by_time'),
+                    "Token Usage": self.token_counter.to_str('count', 'speed', 'by_count'),
+                    "Price Usage": self.money_counter.to_str('count', 'speed', 'by_count'),
+                }
+                msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
+                _logger.info(tag2ansi(msg))
 
         # ========== 后处理阶段 ==========
         if best_record is None:
