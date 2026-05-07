@@ -47,7 +47,7 @@ class SRAgent(FactoryMixin):
         max_refinement_depth: int = 20,
         global_width: int = 1,
         max_restart_loop: int = 1,
-        restart_top_k: int = 3,
+        restart_top_k: int = 1,
     ):
         """初始化 Agent。
 
