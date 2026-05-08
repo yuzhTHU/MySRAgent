@@ -49,13 +49,40 @@ _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    parser = build_sragent_argparser()
-    parser.description = "LLM-SRBench Evaluation Script"
-    parser.set_defaults(name=SCRIPT_NAME)
-    parser.set_defaults(save_dir=f"./logs/{SCRIPT_NAME}")
+    from src.sr_agent.tools import BaseTool
+    parser = argparse.ArgumentParser(
+        description="LLM-SRBench Evaluation Script.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
+    parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
+    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
+    parser.add_argument("-f", "--equation", default="y = sin(x1 - x2)", help="Target equation. Example: 'y = sin(x1 - x2)'.")
+    parser.add_argument("--problem_description", default=None, help="Problem description passed to the agent. Defaults to one derived from --equation.")
+    parser.add_argument("--features", default=None, help="Optional comma-separated feature names. Defaults to variables parsed from --equation.")
+    parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
+    parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
+    parser.add_argument("--x_low", type=float, default=0.0, help="Lower bound for random features.")
+    parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
+    parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
+    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
+    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
+    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
+    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
+    parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help="Maximum agent refinement depth.")
+    parser.add_argument("-C", "--global_width", type=int, default=2, help="Number of independent branches per restart loop.")
+    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help="Maximum number of best-solution restart loops.")
+    parser.add_argument("--restart_top_k", type=int, default=1, help="Number of previous best formulas to inject into the next restart prompt.")
+    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
+    parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
+    parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
+    parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
+
     parser.add_argument("--data_root", type=str, default=str(Path(__file__).parent / "data" / "llm-srbench-data"), help="HDF5 数据文件所在目录")
     parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help="数据集名称, 默认评估全部数据集")
     parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
+    parser.add_argument("--skip_existing", action="store_true", default=True, help="如果结果文件已存在则跳过评估")
     return parser
 
 
@@ -322,7 +349,7 @@ def conclude_results(llmsr_datasets: List[str], save_path: str):
     lines = []
     lines.extend([
         f'[gray]{"=" * 50}[reset]',
-        f"[red bold]Summary of {'/'.join(llmsr_datasets)} ({summary['total_problems']} problems)[reset]",
+        f"[red bold]Summary of {'|'.join(llmsr_datasets)} ({summary['total_problems']} problems)[reset]",
         f'[gray]{"-" * 50}[reset]',
         f"  [red]Avg search time:[reset] {summary['avg_search_time']:.2f}s",
         f"  [red]Avg R2   (In-Domain):[reset] {summary['id_metrics']['avg_r2']:.6f}",
@@ -371,7 +398,7 @@ def main(args: argparse.Namespace) -> dict:
         _logger.note(f"[{i+1}/{len(problems)}] {problem.equation_idx}: {problem.expression}")
         exp_path = Path(args.save_path) / "results" / f"{problem.dataset_identifier}_{problem.equation_idx}.jsonl"
         exp_path.parent.mkdir(parents=True, exist_ok=True)
-        if exp_path.exists():
+        if exp_path.exists() and args.skip_existing:
             _logger.note(f"Result already exists at {exp_path}, skipping...")
             continue
         try:
