@@ -166,12 +166,16 @@ class PolynomialFitTool(BaseTool):
         #         "significant_at_0.01": bool(p_val < 0.01) if not np.isnan(p_val) else None,
         #     })
 
+        # 检查是否为有效的候选目标公式
+        is_candidate = (y == self.context['target']) and (y not in x)
+
         results = {
             "formula": polynomial.to_str(),
             "metrics": self.evaluate(y_pred=y_pred, y_true=data_y) | {
                 "adjusted_r2": adjusted_r2, "aic": aic, "bic": bic,
             },
             # "terms": terms_result,
+            "is_candidate": is_candidate,
             "exceptions": exceptions,
         }
         return results

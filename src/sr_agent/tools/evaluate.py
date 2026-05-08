@@ -44,9 +44,15 @@ class EvaluateTool(BaseTool):
             nd.BFGSFit(eq_f).fit(data, y_true)
 
         y_pred = eq_f.eval(data)
+
+        # 检查是否为有效的候选目标公式
+        variables = set(var.name for var in eq_f.iter_preorder() if isinstance(var, nd.Variable))
+        is_candidate = (y == self.context['target']) and (y not in variables)
+
         return {
             "formula": eq_f.to_str(),
             "metrics": self.evaluate(y_pred=y_pred, y_true=y_true),
+            "is_candidate": is_candidate,
         }
 
 @BaseTool.register('submit_formula')

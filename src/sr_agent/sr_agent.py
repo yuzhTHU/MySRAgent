@@ -368,7 +368,7 @@ class SRAgent(FactoryMixin):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
         for idx in range(len(response_list)):
             for act, res in zip(response_list[idx][1], results_list[idx]):
-                if isinstance(res.result.get('metrics'), dict):
+                if res.result.get('is_candidate'):
                     record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
                         "mse": res.result['metrics']['mse'],
