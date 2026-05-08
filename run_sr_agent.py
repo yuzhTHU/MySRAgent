@@ -180,8 +180,6 @@ def main(args: argparse.Namespace) -> dict:
             f.write("\n")
         _logger.note(f"Result saved to {result_path}")
 
-    _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.command}[reset]"))
-
 
 if __name__ == "__main__":
     parser = build_argparser()
@@ -218,3 +216,4 @@ if __name__ == "__main__":
     save_args(args, save_path / "args.json")
 
     main(args)
+    _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.command}[reset]"))
