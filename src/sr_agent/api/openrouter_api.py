@@ -65,12 +65,12 @@ class OpenRouterAPI(LLMAPI):
         for idx in range(1, n + 1):
             try:
                 completion = client.chat.completions.create(**payload)
+                response_dict = completion.to_dict()
+                message = completion.choices[0].message.to_dict()
+                content = message['content'] or ""
             except Exception as e:
                 _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e)}")
                 continue
-            response_dict = completion.to_dict()
-            message = completion.choices[0].message.to_dict()
-            content = message['content'] or ""
 
             token_usage = {}
             price_usage = {}

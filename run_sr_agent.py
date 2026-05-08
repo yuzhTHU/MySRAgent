@@ -141,6 +141,7 @@ def main(args: argparse.Namespace) -> dict:
         "best_formula": None,
         "best_mse": None,
         "status": "not_started",
+        "progress": None,
         "token_usage": None,
         "money_usage": None,
         "tools_usage": None,
@@ -148,16 +149,14 @@ def main(args: argparse.Namespace) -> dict:
     }
     try:
         result |= agent.fit(X=X, y=y, problem_description=problem_description)
-        result["status"] = "completed"
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as e:
         _logger.note("Experiment interrupted by user.")
-        result["status"] = "interrupted"
-        # raise SystemExit(130)
+        result |= getattr(e, "partial_result", {"status": "interrupted"})
     except Exception as e:
         _logger.error(f"Experiment failed with an exception: {log_exception(e)}")
-        result["status"] = "failed"
+        result |= getattr(e, "partial_result", {"status": "failed"})
         result["error"] = repr(e)
-        if args.debug: raise e from e
+        if args.debug: raise
     finally:
         result["duration_seconds"] = (datetime.now() - datetime.strptime(result["start_time"], "%Y-%m-%d %H:%M:%S")).total_seconds()
         result["token_usage"] = agent.token_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)

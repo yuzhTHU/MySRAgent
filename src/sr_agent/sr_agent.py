@@ -23,6 +23,8 @@ from .utils import render_python, render_markdown, tag2ansi
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
 
+class FitEarlyStop(Exception):
+    pass
 
 class SRAgent(FactoryMixin):
     """符号回归 Agent。
@@ -144,48 +146,73 @@ class SRAgent(FactoryMixin):
                 
         ## 开始迭代
         topk_records = []
-        for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
-            _logger.info(f"Start Restart Loop ({R}/{self.max_restart_loop})")
+        R = C = L = None
+        try:
+            for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
+                _logger.info(f"Start Restart Loop ({R}/{self.max_restart_loop})")
 
-            # 用平凡结果或者历史最佳结果构建新的 initial prompt
-            initial_prompt = self.build_initial_prompt(problem_description, X, y, topk_records)
+                # 用平凡结果或者历史最佳结果构建新的 initial prompt
+                initial_prompt = self.build_initial_prompt(problem_description, X, y, topk_records)
 
-            for C in range(1, self.global_width + 1):  # C 次独立重复对话
-                _logger.info(
-                    f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
-                    f"Global Branch ({C}/{self.global_width})"
-                )
-            
-                # 用 initial prompt 初始化 buffer
-                buffer = deepcopy(initial_prompt)
-
-                for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
+                for C in range(1, self.global_width + 1):  # C 次独立重复对话
                     _logger.info(
                         f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
-                        f"Global Branch ({C}/{self.global_width}) - "
-                        f"Refinement Step ({L}/{self.max_refinement_depth})"
+                        f"Global Branch ({C}/{self.global_width})"
                     )
+                
+                    # 用 initial prompt 初始化 buffer
+                    buffer = deepcopy(initial_prompt)
 
-                    # Step 1: 根据 Buffer 创建 Prompt
-                    prompt = self.build_prompt(buffer)
+                    for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
+                        _logger.info(
+                            f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
+                            f"Global Branch ({C}/{self.global_width}) - "
+                            f"Refinement Step ({L}/{self.max_refinement_depth})"
+                        )
 
-                    # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组
-                    response_list = self.request_llm(prompt)
+                        # Step 1: 根据 Buffer 创建 Prompt
+                        prompt = self.build_prompt(buffer)
 
-                    # Step 3: 执行 Tool Calls 得到 Results
-                    results_list = self.get_results(response_list)
+                        # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组
+                        response_list = self.request_llm(prompt)
 
-                    # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
-                    buffer = self.update_buffer(buffer, response_list, results_list)
+                        # Step 3: 执行 Tool Calls 得到 Results
+                        results_list = self.get_results(response_list)
 
-                    # Step 5: 更新 top-k 最优结果
-                    topk_records = self.update_topk(topk_records, response_list, results_list)
+                        # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
+                        buffer = self.update_buffer(buffer, response_list, results_list)
 
-                    # Step 6: 打印本轮日志
-                    self.log_info(response_list, topk_records)
+                        # Step 5: 更新 top-k 最优结果
+                        topk_records = self.update_topk(topk_records, response_list, results_list)
 
-        best_record = topk_records[0][-1] if topk_records else {}
-        return {f'best_{k}': v for k, v in best_record.items()}
+                        # Step 6: 打印本轮日志
+                        self.log_info(response_list, topk_records)
+
+                        if topk_records and topk_records[0][-1]['mse'] == 0.0:
+                            raise FitEarlyStop()
+
+            _logger.note(f"Finished all iterations. Returning best result.")
+            best_record = topk_records[0][-1] if topk_records else {}
+            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': progress}
+        
+        except FitEarlyStop as e:
+            _logger.note(f"Early stopping triggered by perfect solution. Returning best result.")
+            best_record = topk_records[0][-1] if topk_records else {}
+            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': progress}
+
+        except KeyboardInterrupt as e:
+            best_record = topk_records[0][-1] if topk_records else {}
+            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': progress}
+            raise
+
+        except Exception as e:
+            best_record = topk_records[0][-1] if topk_records else {}
+            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': progress}
+            raise
 
     def build_initial_prompt(self, problem_description, X, y, topk_record):
         """根据历史最佳结果构建新的 initial prompt。"""
@@ -267,34 +294,41 @@ class SRAgent(FactoryMixin):
     
     def update_buffer(self, buffer, response_list, results_list):
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
+        # 选择产生了最佳 mse 的 tool_call 所在的 response 分支
         selected_idx = 0
         selected_mse = float('inf')
         for results_idx, results in enumerate(results_list):
             for result in results:
-                if result.get('formula') is not None and result['metrics']['mse'] < selected_mse:
+                metrics = result.get('metrics') if result is not None else None
+                if metrics is not None and metrics['mse'] < selected_mse:
                     selected_idx = results_idx
-                    selected_mse = result['metrics']['mse']
+                    selected_mse = metrics['mse']
         content, tool_calls, message = response_list[selected_idx]
         results = results_list[selected_idx]
+        # 将其他分支中不涉及 formula & metrics 的 tool_call 和 result 也加入 buffer, 以免丢失有用信息
         content_parts = [content]
         tool_calls = list(tool_calls or [])
         results = list(results)
         message_tool_calls = message.get('tool_calls')
-        for results_idx, ((extra_content, extra_tool_calls, _), extra_results) in enumerate(zip(response_list, results_list)):
-            if results_idx == selected_idx:
+        for idx, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list)):
+            if idx == selected_idx:
                 continue
             extra_content_added = False
             for extra_tool_call, extra_result in zip(extra_tool_calls or [], extra_results):
-                if extra_result.get('formula') is not None:
+                if (
+                    extra_result is not None
+                    and extra_result.get('formula') is None
+                    and extra_result.get('metrics') is None
+                ):
                     tool_calls.append(extra_tool_call)
                     results.append(extra_result)
                     if message_tool_calls is not None and extra_tool_call.raw is not None:
                         message_tool_calls.append(extra_tool_call.raw)
-                    if not extra_content_added:
-                        content_parts.append(extra_content)
+                    elif not extra_content_added and extra_tool_call.raw_str:
+                        content_parts.append(extra_tool_call.raw_str)
                         extra_content_added = True
-        content = '\n\n'.join(part for part in content_parts if part)
-        message['content'] = content
+        if message_tool_calls is None:
+            message['content'] = '\n\n'.join(part for part in content_parts if part)
         _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
         buffer.append(message)
         buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
