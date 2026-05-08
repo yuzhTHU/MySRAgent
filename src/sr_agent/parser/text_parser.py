@@ -106,6 +106,21 @@ class TextParser(BaseParser):
                     _logger.warning(f"Failed to parse action line: '{line}'")
         return tool_calls
 
+    def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
+        """将工具调用列表格式化为字符串，供 LLM 参考。
+
+        Args:
+            tool_calls: 工具调用列表。
+
+        Returns:
+            格式化后的工具调用字符串。
+        """
+        lines = []
+        for tool_call in tool_calls:
+            params_str = ', '.join(f"{k}={v!r}" for k, v in tool_call.params.items())
+            lines.append(f"Action: {tool_call.name}({params_str})")
+        return "\n".join(lines)
+
     def _parse_params(self, params_str: str) -> Dict[str, Any]:
         """解析参数字符串为字典。
 

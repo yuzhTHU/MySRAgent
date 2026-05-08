@@ -266,7 +266,7 @@ class SRAgent(FactoryMixin):
                 f"LLM response content: {content_for_log}\n"
                 f"LLM tool calls: {tool_calls_for_log}"
             )
-        self.record_llm_result(llm_result)
+        self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list
     
     def get_results(self, response_list, R: int, L: int, C: int):
@@ -276,7 +276,7 @@ class SRAgent(FactoryMixin):
         for _, tool_calls, _ in response_list:
             all_tool_calls.extend(tool_calls)
             num_tool_calls.append(len(tool_calls))
-        all_results = self.execute_action(all_tool_calls)
+        all_results = self.execute_action(all_tool_calls, R=R, L=L, C=C)
         results_iter = iter(all_results)
         results_list = [list(islice(results_iter, l)) for l in num_tool_calls]
         all_results_for_log = '\n'.join(str(result) for result in all_results or [])
@@ -286,6 +286,7 @@ class SRAgent(FactoryMixin):
     
     def update_buffer(self, buffer, response_list, results_list, R: int, L: int, C: int): # TODO: 此函数逻辑较复杂，尚未经过充分的人工审核
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
+        # 如果没有成功的回复，跳过本轮更新
         if len(response_list) == 0:
             return buffer
         # 选择产生了最佳 mse 的 tool_call 所在的 response 分支
@@ -293,31 +294,29 @@ class SRAgent(FactoryMixin):
         selected_mse = float('inf')
         for results_idx, results in enumerate(results_list):
             for result in results:
-                if (metrics := result.get('metrics', None)) is not None and metrics['mse'] < selected_mse:
+                if (metrics := result.get('metrics')) is not None and metrics['mse'] < selected_mse:
                     selected_idx = results_idx
                     selected_mse = metrics['mse']
-        content, tool_calls, message = response_list[selected_idx]
+        _, tool_calls, message = response_list[selected_idx]
         results = results_list[selected_idx]
-        # 将其他分支中不涉及 formula & metrics 的 tool_call 和 result 也加入 buffer, 以免丢失有用信息
-        content_parts = [content]
-        tool_calls = [*tool_calls] # 复制一份，避免后续对它的 append 影响 response_list
-        results = [*results]
-        message_tool_calls = message.get('tool_calls')
+        tool_calls = tool_calls.copy()
+        message = deepcopy(message)
+        results = results.copy()
+        # 将其他 (tool_call, result) pairs 中不涉及 formula & metrics 的 pair 也加入 buffer, 以免丢失有用信息
         for idx, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list)):
-            if idx == selected_idx:
-                continue
-            extra_content_added = False
-            for extra_tool_call, extra_result in zip(extra_tool_calls, extra_results):
-                if extra_result.get('metrics') is None:
-                    tool_calls.append(extra_tool_call)
-                    results.append(extra_result)
-                    if extra_tool_call.raw is not None and message_tool_calls is not None:
-                        message_tool_calls.append(extra_tool_call.raw)
-                    elif not extra_content_added and extra_tool_call.raw_str:
-                        content_parts.append(extra_tool_call.raw_str)
-                        extra_content_added = True
-        if message_tool_calls is None:
-            message['content'] = '\n\n'.join(part for part in content_parts if part)
+            for tool_call, result in zip(extra_tool_calls, extra_results):
+                # 只考虑不涉及 formula & metrics 的工具调用结果
+                if idx == selected_idx or result.get('metrics') is not None:
+                    continue
+                tool_calls.append(tool_call)
+                results.append(result)
+                # 对于 openai parser, 将 extra_message['tool_calls'] 拼到 message 中
+                if self.tool_parser == 'openai':
+                    message['tool_calls'].append(tool_call.raw)
+                # 对于 non-openai parser, 将 tool_calls 拼到 content 中
+                else:
+                    message['content'] += "\n\n" + tool_call.raw_str
+
         _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
         buffer.append(message)
         buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
@@ -327,7 +326,7 @@ class SRAgent(FactoryMixin):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
         for idx in range(len(response_list)):
             for act, res in zip(response_list[idx][1], results_list[idx]):
-                if 'metrics' in res.result:
+                if isinstance(res.result.get('metrics'), dict):
                     record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
                         "mse": res.result['metrics']['mse'],
@@ -363,7 +362,7 @@ class SRAgent(FactoryMixin):
         msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
         _logger.info(tag2ansi(msg))
 
-    def record_llm_result(self, llm_result) -> Dict[str, Any] | None:
+    def record_llm_result(self, llm_result, R: int, L: int, C: int) -> Dict[str, Any] | None:
         """记录最近一次 LLM 请求的返回值和用量统计。"""
         usage = llm_result.returned['usage']
         for name, num in usage['token'].items():
@@ -373,14 +372,15 @@ class SRAgent(FactoryMixin):
         if self.save_path is not None:
             with open(Path(self.save_path) / 'response.jsonl', 'a') as f:
                 json.dump({
-                    **llm_result.returned["responses"],
+                    "responses": llm_result.returned["responses"],
                     "progress": self.format_progress(R, L, C),
                     "usage": usage,
                 }, f)
                 f.write('\n')
 
-    def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
+    def execute_action(self, actions: List[ToolCall], R: int, L: int, C: int) -> List[ToolCallResult|None]:
         """执行 Action。"""
+        # TODO: 目前是顺序执行，后续可以考虑并行执行这些工具调用
         results = []
         tool_map = {tool.metadata.name: tool for tool in self.tools}
         for tool_call in actions:
@@ -396,8 +396,10 @@ class SRAgent(FactoryMixin):
                 result = tool(**tool_call.params)
                 self.tools_counter.add(tool_call.name)
             results.append(result)
-            if self.save_path is not None:
-                with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
+        # 记录工具调用结果
+        if self.save_path is not None:
+            with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
+                for tool_call, result in zip(actions, results):
                     json.dump({
                         "progress": self.format_progress(R, L, C),
                         'name': tool_call.name, 

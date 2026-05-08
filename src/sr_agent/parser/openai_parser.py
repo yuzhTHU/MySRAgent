@@ -23,6 +23,9 @@ class OpenAIParser(BaseParser):
     def parse_response(self, response: str) -> List[ToolCall]:
         raise NotImplementedError("OpenAIParser.parse_response() is not implemented yet.")
 
+    def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
+        pass # 不需要这个方法
+
     def format_tool_result_messages(
         self,
         tool_calls: List[ToolCall],

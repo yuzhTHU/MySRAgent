@@ -77,6 +77,18 @@ class BaseParser(ABC, FactoryMixin):
         """
         pass
 
+    @abstractmethod
+    def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
+        """将工具调用列表格式化为字符串。
+
+        Args:
+            tool_calls: 工具调用列表。
+
+        Returns:
+            格式化后的字符串。
+        """
+        pass
+
     def format_tool_result_messages(
         self,
         tool_calls: List[ToolCall],
@@ -85,7 +97,6 @@ class BaseParser(ABC, FactoryMixin):
         """将工具调用结果格式化为可追加到 messages 的消息。"""
         lines = []
         for tool_call, result in zip(tool_calls, results):
-            result_str = result.result_str if isinstance(result, ToolCallResult) else str(result)
-            lines.append(f"Assistant called `{tool_call.name}` with params `{tool_call.params}`.")
-            lines.append(f"Result: `{result_str}`")
+            lines.append(f"=== Results for `{tool_call.name}` with params `{tool_call.params}` ===")
+            lines.append(result.result_str)
         return [{"role": "user", "content": "\n".join(lines)}] if lines else []

@@ -68,14 +68,10 @@ class JSONParser(BaseParser):
         lines.append("Respond with a JSON object in the following format:")
         lines.append("")
         lines.append("```json")
-        lines.append("{")
-        lines.append('  "actions": [')
-        lines.append('    {"tool": "tool_name", "params": {"param1": "value1", "param2": "value2"}}')
-        lines.append('  ]')
-        lines.append("}")
+        lines.append('{"tool": "tool_name", "params": {"param1": "value1", "param2": "value2"}}')
         lines.append("```")
         lines.append("")
-        lines.append("You can include multiple actions in the actions array.")
+        lines.append("You can include multiple tool call blocks in one response if needed.")
 
         return "\n".join(lines)
 
@@ -107,3 +103,18 @@ class JSONParser(BaseParser):
             tool_calls.append(ToolCall(name=action["tool"], params=action["params"], raw_str=json_str))
 
         return tool_calls
+
+    def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
+        """将工具调用列表格式化为 JSON 字符串。
+
+        Args:
+            tool_calls: 工具调用列表。
+
+        Returns:
+            格式化后的 JSON 字符串。
+        """
+        lines = []
+        for call in tool_calls:
+            action = {"tool": call.name, "params": call.params}
+            lines.append("```json\n" + json.dumps(action) + "\n```")
+        return "\n".join(lines)
