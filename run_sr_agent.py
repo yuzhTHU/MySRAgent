@@ -26,7 +26,7 @@ SCRIPT_NAME = Path(__file__).stem  # run_sr_agent
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
 
-def build_argparser() -> argparse.ArgumentParser: # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
+def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run SRAgent on a synthetic symbolic-regression problem.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

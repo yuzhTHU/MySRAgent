@@ -145,12 +145,12 @@ class SRAgent(FactoryMixin):
             tool_parser=self.tool_parser,
         )
         if self.tool_parser == 'openai':
-            _logger.note(
+            _logger.debug(
                 f"Using OpenAI function calling as tool parser. Tools will be described in the system prompt as follows:\n"
                 f"{json.dumps(self.llm_api.tool_description_json, indent=2)}"
             )
         else:
-            _logger.note(
+            _logger.debug(
                 f"Using {self.tool_parser} as tool parser. Tools will be described in the system prompt as follows:\n"
                 f"{self.llm_api.tool_description_text}"
             )
@@ -286,8 +286,9 @@ class SRAgent(FactoryMixin):
             _logger.info(
                 f"(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × (L={L}/{self.max_refinement_depth}) × Local Sample (K={K}/{self.local_sample_size})\n"
                 f"LLM response content: {content_for_log}\n"
-                f"LLM tool calls: {tool_calls_for_log}"
+                f"LLM tool calls: ({len(tool_calls)} tool calls)"
             )
+            _logger.debug(tool_calls_for_log)
         self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list
     
@@ -308,7 +309,7 @@ class SRAgent(FactoryMixin):
         # 打印工具调用结果
         all_results_for_log = '\n'.join(str(result) for result in all_results or [])
         all_results_for_log = '\n        '.join(['', *all_results_for_log.splitlines()]) if '\n' in all_results_for_log else all_results_for_log
-        _logger.info(f"Action result: {all_results_for_log}")
+        _logger.debug(f"Action result: {all_results_for_log}")
         # 记录工具调用结果
         if self.save_path is not None:
             with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
@@ -338,6 +339,7 @@ class SRAgent(FactoryMixin):
                 if (metrics := result.get('metrics')) is not None and metrics['mse'] < selected_mse:
                     selected_idx = results_idx
                     selected_mse = metrics['mse']
+        _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
         _, tool_calls, message = response_list[selected_idx]
         results = results_list[selected_idx]
         tool_calls = tool_calls.copy()
@@ -357,8 +359,7 @@ class SRAgent(FactoryMixin):
                 # 对于 non-openai parser, 将 tool_calls 拼到 content 中
                 else:
                     message['content'] += "\n\n" + tool_call.raw_str
-
-        _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
+        # 将 message 和 (tool_call, result) pairs 加入 buffer
         buffer.append(message)
         buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
         return buffer

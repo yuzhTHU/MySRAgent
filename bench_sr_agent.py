@@ -29,12 +29,13 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 from socket import gethostname
-from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from scipy.stats import kendalltau
 from sklearn.metrics import mean_absolute_percentage_error
 from src.sr_agent.utils import setup_logging, log_exception, tag2ansi, seed_all
 from run_sr_agent import build_argparser as build_sragent_argparser, sanitize_filename, save_args
+from src.llmsr_bench.core import SEDTask, SRResult, Problem
+from src.llmsr_bench.algorithms import get_update_parser, get_algorithm, list_algorithms
 
 DATASET_SPLITS = {
     "lsrtransform": "lsr_transform",
@@ -49,112 +50,27 @@ _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    from src.sr_agent.tools import BaseTool
     parser = argparse.ArgumentParser(
         description="LLM-SRBench Evaluation Script.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument("algorithm", nargs="?", default="my_sr_agent", choices=list_algorithms(), help="符号回归算法名称")
     parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
     parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
     parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
-    parser.add_argument("-f", "--equation", default="y = sin(x1 - x2)", help="Target equation. Example: 'y = sin(x1 - x2)'.")
-    parser.add_argument("--problem_description", default=None, help="Problem description passed to the agent. Defaults to one derived from --equation.")
-    parser.add_argument("--features", default=None, help="Optional comma-separated feature names. Defaults to variables parsed from --equation.")
-    parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
-    parser.add_argument("--x_low", type=float, default=0.0, help="Lower bound for random features.")
-    parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
-    parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
-    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
-    parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help="Maximum agent refinement depth.")
-    parser.add_argument("-C", "--global_width", type=int, default=2, help="Number of independent branches per restart loop.")
-    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help="Maximum number of best-solution restart loops.")
-    parser.add_argument("--restart_top_k", type=int, default=1, help="Number of previous best formulas to inject into the next restart prompt.")
-    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
     parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
-    parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
-    parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
-
+    parser.add_argument("--debug", action="store_true", default=False, help="Enable debug mode (verbose + raise caught exceptions).")
     parser.add_argument("--data_root", type=str, default=str(Path(__file__).parent / "data" / "llm-srbench-data"), help="HDF5 数据文件所在目录")
     parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help="数据集名称, 默认评估全部数据集")
     parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
-    parser.add_argument("--skip_existing", action="store_true", default=True, help="如果结果文件已存在则跳过评估")
+    parser.add_argument("--skip_existing", action="store_true", default=False, help="如果结果文件已存在则跳过评估")
+    # 解析 --alg 参数以获取对应的 update_parser
+    args, _ = parser.parse_known_args()
+    if (update_parser_fn := get_update_parser(args.algorithm)):
+        parser = update_parser_fn(parser)
     return parser
-
-
-@dataclass
-class SEDTask:
-    """
-    符号回归任务的输入 — 传递给 SR 方法的最大 input set
-
-    注意: 原始 benchmark 的搜索器方法有以下资源限制, 公平比较时需声明:
-    - LLMSR: global_max_sample_num=1000 (LLM 生成的公式骨架数量上限)
-    - LaSR: max_num_samples=2000 (训练数据样本数上限, 非LLM调用次数)
-    - SGA: num_iters=25 × population (进化代数 × 种群大小)
-    - evaluate_timeout_seconds=30 (每个公式执行超时)
-    """
-    name: str
-    symbols: List[str]
-    symbol_descs: List[str]
-    symbol_properties: List[str]
-    train_X: np.ndarray        # shape: (n_train, n_input_vars)
-    train_y: np.ndarray        # shape: (n_train,)
-    desc: Optional[str] = None
-
-
-@dataclass
-class SRResult:
-    """
-    符号回归方法的输出 — 最小 output set
-
-    注意: 原始 benchmark (LLMSR) 会对返回的公式做常数优化:
-    - 使用 BFGS 在训练数据上优化最多 10 个参数
-    - 如果你的方法未做常数优化, 结果可能较差
-    """
-    predict: Callable[[np.ndarray], np.ndarray]  # 输入 X(n, d) → y_pred(n,)
-    expression: Optional[str] = None  # 发现的公式字符串 (可选, 用于记录)
-
-
-@dataclass
-class Problem:
-    """一个完整的 benchmark 问题, 包含训练/测试数据"""
-    dataset_identifier: str
-    equation_idx: str
-    symbols: List[str]
-    symbol_descs: List[str]
-    symbol_properties: List[str]
-    expression: str  # ground truth 表达式 (如 "8*pi*Ef*epsilon*r**3/(3*sin(2*theta))")
-    samples: Dict[str, np.ndarray]  # {"train": ..., "test": ..., "ood_test"?}
-    desc: Optional[str] = None
-
-    @property
-    def train_samples(self) -> np.ndarray:
-        return self.samples["train"]
-
-    @property
-    def test_samples(self) -> np.ndarray:
-        return self.samples["test"]
-
-    @property
-    def ood_test_samples(self) -> Optional[np.ndarray]:
-        return self.samples.get("ood_test", None)
-
-    def create_task(self) -> SEDTask:
-        """将 Problem 转换为 SEDTask (SR 方法的输入)"""
-        data = self.train_samples
-        return SEDTask(
-            name=self.equation_idx,
-            symbols=self.symbols,
-            symbol_descs=self.symbol_descs,
-            symbol_properties=self.symbol_properties,
-            train_X=data[:, 1:],
-            train_y=data[:, 0],
-            desc=self.desc,
-        )
 
 
 def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-srbench") -> List[Problem]:
@@ -208,36 +124,6 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
     return problems
 
 
-def foo(args, task: SEDTask) -> SRResult:
-    """ 符号回归方法的 placeholder。
-
-    Args: SEDTask 包含了 SR 方法需要的所有输入信息, 可以根据需要使用其中的任意部分:
-    - task.name: str                    — 问题标识符
-    - task.symbols: List[str]           — 所有符号名, 第一个为输出变量
-    - task.symbol_descs: List[str]      — 符号的自然语言描述
-    - task.symbol_properties: List[str] — 符号属性 ('O'=输出, 'V'=输入变量, 'C'=常数)
-    - task.train_X: np.ndarray          — 训练输入, shape=(n_samples, n_input_vars)
-    - task.train_y: np.ndarray          — 训练输出, shape=(n_samples,)
-    - task.desc: Optional[str]          — 问题描述
-
-    Returns: SRResult 包含了 SR 方法的输出:
-    - predict: Callable[[np.ndarray], np.ndarray] — 输入 X, shape=(n, n_input_vars); 输出 y, shape=(n,)
-    - expression: Optional[str]                   — 发现的公式字符串 (可选, 用于记录)
-    """
-    # 简单线性回归
-    from numpy.linalg import lstsq
-    X_aug = np.column_stack([task.train_X, np.ones(len(task.train_X))])
-    coeffs, _, _, _ = lstsq(X_aug, task.train_y, rcond=None)
-
-    def predict(X: np.ndarray) -> np.ndarray:
-        X_aug = np.column_stack([X, np.ones(len(X))])
-        return X_aug @ coeffs
-
-    expr_parts = " + ".join(f"{c:.4f}*{s}" for c, s in zip(coeffs[:-1], task.symbols[1:]))
-    expression = f"{expr_parts} + {coeffs[-1]:.4f}"
-    return SRResult(predict=predict, expression=expression)
-
-
 def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
     """计算 ID/OOD 测试集上的评估指标"""
     mask = ~np.isnan(y_pred) # 原始的 LLM-SRBench 就是这么做的，可能导致潜在的问题，但为了保持一致，我们也采用相同的过滤方式。
@@ -260,7 +146,7 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
         }
 
 
-def evaluate_problem(args, problem: Problem, sr_fn: Callable[[SEDTask], SRResult]) -> Dict:
+def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
     """对单个问题运行 SR 方法并评估"""
     task = problem.create_task()
 
@@ -393,6 +279,9 @@ def main(args: argparse.Namespace) -> dict:
             _logger.error("No valid problems found after filtering. Check your --problem_names.")
             return
 
+    # 获取算法的 run 函数
+    sr_fn = get_algorithm(args.algorithm)
+
     # 逐个问题运行 SR 并评估
     for i, problem in enumerate(problems):
         _logger.note(f"[{i+1}/{len(problems)}] {problem.equation_idx}: {problem.expression}")
@@ -402,7 +291,7 @@ def main(args: argparse.Namespace) -> dict:
             _logger.note(f"Result already exists at {exp_path}, skipping...")
             continue
         try:
-            result = evaluate_problem(args, problem, foo)
+            result = evaluate_problem(args, problem, sr_fn)
             _logger.note(
                 f"R2={result["id_metrics"]['r2']:.6f}, "
                 f"NMSE={result["id_metrics"]['nmse']:.6f}, "
@@ -433,6 +322,7 @@ def main(args: argparse.Namespace) -> dict:
             }
             with open(exp_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(result, default=str, allow_nan=True) + "\n")
+            if args.debug: raise
 
     # 汇总结果
     for dataset in args.datasets:
