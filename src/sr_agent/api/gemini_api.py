@@ -1,6 +1,7 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 import os
 import logging
+from collections import defaultdict
 from typing import Generator, List, Dict
 from datetime import datetime, timezone, timedelta
 from google import genai
@@ -67,20 +68,22 @@ class GeminiAPI(LLMAPI):
                     continue
                 else:
                     if not self.tool_list:
-                        tool_call = None
+                        tool_call = []
                     elif not self.tool_parser:
                         _logger.warning("Received tool call but no tool parser is set. Ignoring tool call.")
-                        tool_call = None
+                        tool_call = []
                     else:
                         tool_call = self.tool_parser.parse_response(content)
+                    message = {"role": "assistant", "content": content}
                     details.append({
                         "content": content,
                         "tool_call": tool_call,
                         "token_usage": usage,
                         "price_usage": price_usage,
                         "response": candidate.to_json_dict(),
+                        "message": message,
                     })
-                    yield content, tool_call
+                    yield {"content": content, "tool_call": tool_call, "message": message}
                     break
         token_usage = defaultdict(float)
         for detail in details:

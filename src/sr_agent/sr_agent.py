@@ -258,7 +258,7 @@ class SRAgent(FactoryMixin):
         for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()
-            tool_calls_for_log = '\n'.join(str(tool_call) for tool_call in tool_calls or [])
+            tool_calls_for_log = '\n'.join(str(tool_call) for tool_call in tool_calls)
             content_for_log = '\n        '.join(['', *content_for_log.splitlines()]) if '\n' in content_for_log else content_for_log
             tool_calls_for_log = '\n        '.join(['', *tool_calls_for_log.splitlines()]) if '\n' in tool_calls_for_log else tool_calls_for_log
             _logger.info(
@@ -274,8 +274,8 @@ class SRAgent(FactoryMixin):
         all_tool_calls = []
         num_tool_calls = []
         for _, tool_calls, _ in response_list:
-            all_tool_calls.extend(tool_calls or [])
-            num_tool_calls.append(len(tool_calls or []))
+            all_tool_calls.extend(tool_calls)
+            num_tool_calls.append(len(tool_calls))
         all_results = self.execute_action(all_tool_calls)
         results_iter = iter(all_results)
         results_list = [list(islice(results_iter, l)) for l in num_tool_calls]
@@ -301,14 +301,13 @@ class SRAgent(FactoryMixin):
         results = results_list[selected_idx]
         # 将其他分支中不涉及 formula & metrics 的 tool_call 和 result 也加入 buffer, 以免丢失有用信息
         content_parts = [content]
-        tool_calls = list(tool_calls or [])
         results = list(results)
         message_tool_calls = message.get('tool_calls')
         for idx, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list)):
             if idx == selected_idx:
                 continue
             extra_content_added = False
-            for extra_tool_call, extra_result in zip(extra_tool_calls or [], extra_results):
+            for extra_tool_call, extra_result in zip(extra_tool_calls, extra_results):
                 if (
                     extra_result is not None
                     and extra_result.get('formula') is None
@@ -361,7 +360,7 @@ class SRAgent(FactoryMixin):
         """打印本轮日志, response_list 是用来统计本轮新增工具调用次数的。"""
         new_count = defaultdict(int)
         for _, tool_calls, _ in response_list:
-            for tool_call in tool_calls or []:
+            for tool_call in tool_calls:
                 new_count[tool_call.name] += 1
         tool_calls_str = ', '.join(
             f"{name}: {count} ({new_count[name]} new)" 

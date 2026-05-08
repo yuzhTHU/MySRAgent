@@ -87,11 +87,11 @@ class SiliconFlowAPI(LLMAPI):
         for choice in responses["choices"]:
             content = choice["message"]["content"]
             if not self.tool_list:
-                tool_call = None
+                tool_call = []
             elif self.tool_parser:
                 tool_call = self.tool_parser.parse_response(content)
             else:
-                tool_call = self.normalize_native_tool_calls(choice["message"].get("tool_calls"))
+                tool_call = self.normalize_openai_tool_calls(choice["message"].get("tool_calls"))
             details.append({
                 "content": content,
                 "tool_call": tool_call,
@@ -150,11 +150,11 @@ class SiliconFlowAPI(LLMAPI):
             message = response["choices"][0]["message"]
             content = message["content"] or ""
             if not self.tool_list:
-                tool_call = None
+                tool_call = []
             elif self.tool_parser:
                 tool_call = self.tool_parser.parse_response(content)
             else:
-                tool_call = self.normalize_native_tool_calls(message.get("tool_calls"))
+                tool_call = self.normalize_openai_tool_calls(message.get("tool_calls"))
             details.append({
                 "content": content,
                 "tool_call": tool_call,

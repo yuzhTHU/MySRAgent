@@ -118,11 +118,11 @@ class OpenAIAPI(LLMAPI):
                 message = response.choices[0].message
                 content = response.output_text
                 if not self.tool_list:
-                    tool_call = None
+                    tool_call = []
                 elif self.tool_parser:
                     tool_call = self.tool_parser.parse_response(content)
                 else:
-                    tool_call = self.normalize_native_tool_calls(self.extract_native_tool_calls(response_dict))
+                    tool_call = self.normalize_openai_tool_calls(message["tool_calls"])
                 yield {'content': content, 'tool_call': tool_call, 'message': message}
                 results = {
                     'usage': usage,
@@ -154,14 +154,15 @@ class OpenAIAPI(LLMAPI):
                     child_response = client.responses.create(**child_payload)
                     responses.append(child_response)
                     child_response_dict = child_response.to_dict()
-                    content = child_response.output_text
+                    message = child_response.choices[0].message.to_dict()
+                    content = message["content"]
                     if not self.tool_list:
-                        tool_call = None
+                        tool_call = []
                     elif self.tool_parser:
                         tool_call = self.tool_parser.parse_response(content)
                     else:
-                        tool_call = self.normalize_native_tool_calls(self.extract_native_tool_calls(child_response_dict))
-                    yield {'content': content, 'tool_call': tool_call, 'message': child_response.choices[0].message}
+                        tool_call = self.normalize_openai_tool_calls(message["tool_calls"])
+                    yield {'content': content, 'tool_call': tool_call, 'message': message}
                     new_usage = self.parse_usage(child_response)
                     for k, v in new_usage['token'].items():
                         usage['token'][k] = usage['token'].get(k, 0) + v
@@ -224,14 +225,14 @@ class OpenAIAPI(LLMAPI):
             details = []
             for choice in response.choices:
                 response_dict = {"choices": [{"message": choice.message.to_dict()}]}
-                message = choice.message
-                content = message.content or ""
+                message = choice.message.to_dict()
+                content = message['content']
                 if not self.tool_list:
-                    tool_call = None
+                    tool_call = []
                 elif self.tool_parser:
                     tool_call = self.tool_parser.parse_response(content)
                 else:
-                    tool_call = self.normalize_native_tool_calls(choice.message.tool_calls)
+                    tool_call = self.normalize_openai_tool_calls(message["tool_calls"])
                 details.append({
                     'content': content,
                     'tool_call': tool_call,

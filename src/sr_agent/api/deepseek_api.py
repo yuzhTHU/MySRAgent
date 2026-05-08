@@ -60,11 +60,11 @@ class DeepSeekAPI(LLMAPI):
             message = response.choices[0].message
             content = message.content or ""
             if not self.tool_list:
-                tool_call = None
+                tool_call = []
             elif self.tool_parser:
                 tool_call = self.tool_parser.parse_response(content)
             else:
-                tool_call = self.normalize_native_tool_calls(message.tool_calls)
+                tool_call = self.normalize_openai_tool_calls(message.tool_calls)
 
             token_usage = {"prompt": prompt_tokens, "answer": answer_tokens}
             details.append({

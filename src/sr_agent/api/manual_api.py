@@ -42,9 +42,10 @@ class ManualAPI(LLMAPI): # 这个类已经经过人工审核，任何 Coding Age
             prompt_tokens = len(encoding.encode(prompt))
             answer_tokens = len(encoding.encode(content))
             token_usage = {"prompt": prompt_tokens, "answer": answer_tokens}
-            tool_call = self.tool_parser.parse_response(content) if self.tool_parser else None
-            details.append({'content': content, 'tool_call': tool_call, 'token_usage': token_usage})
-            yield content, tool_call
+            tool_call = self.tool_parser.parse_response(content) if self.tool_parser else []
+            message = {"role": "assistant", "content": content}
+            details.append({'content': content, 'tool_call': tool_call, 'token_usage': token_usage, 'message': message})
+            yield {'content': content, 'tool_call': tool_call, 'message': message}
         token_usage = {'prompt': 0, 'answer': 0}
         for detail in details:
             token_usage['prompt'] += detail['token_usage']['prompt']

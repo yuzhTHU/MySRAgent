@@ -83,11 +83,11 @@ class OpenRouterAPI(LLMAPI):
                 price_usage['total'] = getattr(usage, "cost", 0)
 
             if not self.tool_list:
-                tool_call = None
+                tool_call = []
             elif self.tool_parser:
                 tool_call = self.tool_parser.parse_response(content)
             elif 'tool_calls' in message:
-                tool_call = self.normalize_native_tool_calls(message['tool_calls'])
+                tool_call = self.normalize_openai_tool_calls(message['tool_calls'])
             else:
                 tool_call = []
                 
