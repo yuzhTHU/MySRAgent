@@ -370,8 +370,7 @@ class CodeExecutorTool(BaseTool):
             "printed output. If the tool is configured with dataset context, the data "
             "is available from stdin as a JSON object mapping variable names to arrays. "
             "Use `import sys, json; input_data_str = sys.stdin.read(); data_dict = "
-            "json.loads(input_data_str)` to access it. Do not create sample data "
-            "manually."
+            "json.loads(input_data_str)` to access it."
         ),
     )
 
