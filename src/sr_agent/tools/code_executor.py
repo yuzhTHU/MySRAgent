@@ -496,6 +496,18 @@ def _sandbox_worker(
     )
 
 
+def _get_sandbox_multiprocessing_context() -> mp.context.BaseContext:
+    """Return a stdlib multiprocessing context for the sandbox worker.
+
+    Joblib's loky backend mutates multiprocessing's default context inside
+    worker processes. Using explicit stdlib contexts keeps code_executor's
+    nested sandbox process independent from loky internals.
+    """
+    if os.name == "nt":
+        return mp.get_context("spawn")
+    return mp.get_context("fork")
+
+
 @BaseTool.register("code_executor")
 class CodeExecutorTool(BaseTool):
     metadata = ToolMetadata(name="code_executor")
@@ -541,8 +553,9 @@ class CodeExecutorTool(BaseTool):
         if not is_safe:
             return self._failure("security_error", f"代码安全检查失败：{error_msg}")
 
-        result_queue: mp.Queue = mp.Queue(maxsize=1)
-        process = mp.Process(
+        mp_context = _get_sandbox_multiprocessing_context()
+        result_queue: mp.Queue = mp_context.Queue(maxsize=1)
+        process = mp_context.Process(
             target=_sandbox_worker,
             args=(
                 program,

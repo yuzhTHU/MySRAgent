@@ -13,6 +13,7 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
+from joblib import Parallel, delayed
 from .api.llm_api import LLMAPI
 from .parser import BaseParser
 from .api.core import ToolCall
@@ -25,6 +26,12 @@ _logger = logging.getLogger(f'sr_agent.{__name__}')
 
 class FitEarlyStop(Exception):
     pass
+
+
+def _execute_tool_call_in_subprocess(tool: BaseTool, tool_call: ToolCall) -> ToolCallResult:
+    """Execute one tool call in a worker process."""
+    return tool(**tool_call.params)
+
 
 class SRAgent(FactoryMixin):
     """符号回归 Agent。
@@ -51,6 +58,7 @@ class SRAgent(FactoryMixin):
         global_width: int = 1,
         max_restart_loop: int = 1,
         restart_top_k: int = 1,
+        max_workers: int = 0,
     ):
         """初始化 Agent。
 
@@ -66,6 +74,7 @@ class SRAgent(FactoryMixin):
             global_width: 每个 restart turn 中独立对话分支数量。
             max_restart_loop: best-solution restarts 次数
             restart_top_k: 下一轮 restart prompt 中保留的历史最佳结果数量。
+            max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=save_path, force=False)
@@ -79,6 +88,7 @@ class SRAgent(FactoryMixin):
         self.global_width = global_width
         self.max_restart_loop = max_restart_loop
         self.restart_top_k = restart_top_k
+        self.max_workers = max_workers
 
         # 关键组件
         self.tool_cls_list = BaseTool.load_tool_classes(tools)
@@ -283,17 +293,36 @@ class SRAgent(FactoryMixin):
     
     def get_results(self, response_list, R: int, L: int, C: int):
         """执行 Tool Calls 得到 Results。"""
+        # 合并 - 调用 - 分割
         all_tool_calls = []
         num_tool_calls = []
         for _, tool_calls, _ in response_list:
             all_tool_calls.extend(tool_calls)
             num_tool_calls.append(len(tool_calls))
-        all_results = self.execute_action(all_tool_calls, R=R, L=L, C=C)
+        if self.max_workers and len(all_tool_calls) > 1:
+            all_results = self.execute_action_parallel(all_tool_calls, max_workers=self.max_workers)
+        else:
+            all_results = self.execute_action(all_tool_calls)
         results_iter = iter(all_results)
         results_list = [list(islice(results_iter, l)) for l in num_tool_calls]
+        # 打印工具调用结果
         all_results_for_log = '\n'.join(str(result) for result in all_results or [])
         all_results_for_log = '\n        '.join(['', *all_results_for_log.splitlines()]) if '\n' in all_results_for_log else all_results_for_log
         _logger.info(f"Action result: {all_results_for_log}")
+        # 记录工具调用结果
+        if self.save_path is not None:
+            with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
+                for tool_call, result in zip(all_tool_calls, all_results):
+                    json.dump({
+                        "progress": self.format_progress(R, L, C),
+                        'name': tool_call.name, 
+                        'params': tool_call.params,
+                        "ok": result.ok, 
+                        "result": result.result, 
+                        "result_str": result.result_str, 
+                        "meta_data": result.meta_data,
+                    }, f)
+                    f.write('\n')
         return results_list
     
     def update_buffer(self, buffer, response_list, results_list, R: int, L: int, C: int):
@@ -390,9 +419,8 @@ class SRAgent(FactoryMixin):
                 }, f)
                 f.write('\n')
 
-    def execute_action(self, actions: List[ToolCall], R: int, L: int, C: int) -> List[ToolCallResult|None]:
+    def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
         """执行 Action。"""
-        # TODO: 目前是顺序执行，后续可以考虑并行执行这些工具调用
         results = []
         tool_map = {tool.metadata.name: tool for tool in self.tools}
         for tool_call in actions:
@@ -408,20 +436,31 @@ class SRAgent(FactoryMixin):
                 result = tool(**tool_call.params)
                 self.tools_counter.add(tool_call.name)
             results.append(result)
-        # 记录工具调用结果
-        if self.save_path is not None:
-            with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
-                for tool_call, result in zip(actions, results):
-                    json.dump({
-                        "progress": self.format_progress(R, L, C),
-                        'name': tool_call.name, 
-                        'params': tool_call.params,
-                        "ok": result.ok, 
-                        "result": result.result, 
-                        "result_str": result.result_str, 
-                        "meta_data": result.meta_data,
-                    }, f)
-                    f.write('\n')
+        return results
+
+    def execute_action_parallel(self, actions: List[ToolCall], max_workers: int) -> List[ToolCallResult]:
+        """使用多进程并行执行 Action。"""
+        tasks = []
+        results = [None] * len(actions)
+        tool_map = {tool.metadata.name: tool for tool in self.tools}
+        for idx, tool_call in enumerate(actions):
+            if (tool := tool_map.get(tool_call.name)) is None:
+                _logger.trace(f'Unknown tool call: {tool_call.name}. Skipping execution.')
+                results[idx] = ToolCallResult(
+                    ok=False,
+                    result={},
+                    result_str=f'Unknown tool calling for "{tool_call.name}"',
+                    meta_data={"tool": tool_call.name},
+                )
+            else:
+                tasks.append((idx, delayed(_execute_tool_call_in_subprocess)(tool, tool_call)))
+                self.tools_counter.add(tool_call.name)
+
+        if tasks:
+            workers = Parallel(n_jobs=max_workers, backend='loky')
+            task_results = workers(task for _, task in tasks)
+            for (idx, _), result in zip(tasks, task_results):
+                results[idx] = result
         return results
 
     def format_progress(self, R: int, L: int, C: int):

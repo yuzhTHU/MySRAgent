@@ -54,6 +54,7 @@ def build_argparser() -> argparse.ArgumentParser: # 这个函数已经经过人�
     parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
     parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
+    parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
     return parser
@@ -130,6 +131,7 @@ def main(args: argparse.Namespace) -> dict:
         verbose=args.verbose,
         tool_parser=args.tool_parser,
         save_path=args.save_path,
+        max_workers=args.max_workers,
     )
 
     result = {
