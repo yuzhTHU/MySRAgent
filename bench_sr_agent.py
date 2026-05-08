@@ -10,9 +10,7 @@ LLM-SRBench 评估脚本 (浓缩版)
 Usage:
     python bench_sr_agent.py --exp_name test_some_algorithm --dataset lsrtransform --problem_names II.6.15b_1_0
     python bench_sr_agent.py --exp_name test_some_algorithm --dataset bio_pop_growth
-    python bench_sr_agent.py --exp_name test_some_algorithm --dataset chem_react
-    python bench_sr_agent.py --exp_name test_some_algorithm --dataset matsci
-    python bench_sr_agent.py --exp_name test_some_algorithm --dataset phys_osc
+    python bench_sr_agent.py --exp_name test_some_algorithm
 """
 
 from __future__ import annotations
@@ -132,11 +130,6 @@ class Problem:
         )
 
 
-# ──────────────────────────────────────────────
-# 1. 数据读取与预处理
-# ──────────────────────────────────────────────
-
-
 def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-srbench") -> List[Problem]:
     """
     从 HuggingFace + HDF5 加载指定数据集的所有问题
@@ -188,28 +181,23 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
     return problems
 
 
-def foo(task: SEDTask) -> SRResult:
-    """
-    符号回归方法的 placeholder。
+def foo(args, task: SEDTask) -> SRResult:
+    """ 符号回归方法的 placeholder。
 
-    ─── 最大 Input Set (SEDTask) ───
-    - task.name: str              — 问题标识符
-    - task.symbols: List[str]     — 所有符号名, 第一个为输出变量
-    - task.symbol_descs: List[str]— 符号的自然语言描述
+    Args: SEDTask 包含了 SR 方法需要的所有输入信息, 可以根据需要使用其中的任意部分:
+    - task.name: str                    — 问题标识符
+    - task.symbols: List[str]           — 所有符号名, 第一个为输出变量
+    - task.symbol_descs: List[str]      — 符号的自然语言描述
     - task.symbol_properties: List[str] — 符号属性 ('O'=输出, 'V'=输入变量, 'C'=常数)
-    - task.train_X: np.ndarray    — 训练输入, shape (n_samples, n_input_vars)
-    - task.train_y: np.ndarray    — 训练输出, shape (n_samples,)
-    - task.desc: Optional[str]    — 问题描述
+    - task.train_X: np.ndarray          — 训练输入, shape=(n_samples, n_input_vars)
+    - task.train_y: np.ndarray          — 训练输出, shape=(n_samples,)
+    - task.desc: Optional[str]          — 问题描述
 
-    ─── 最小 Output Set (SRResult) ───
-    - predict: Callable[[np.ndarray], np.ndarray]
-        输入 X shape (n, n_input_vars) → 输出 y_pred shape (n,)
-    - expression: Optional[str]   — 发现的公式字符串 (可选, 用于记录)
-
-    ────────────────────────────────────────────
-    替换此函数为你的 SR 方法实现。
+    Returns: SRResult 包含了 SR 方法的输出:
+    - predict: Callable[[np.ndarray], np.ndarray] — 输入 X, shape=(n, n_input_vars); 输出 y, shape=(n,)
+    - expression: Optional[str]                   — 发现的公式字符串 (可选, 用于记录)
     """
-    # Placeholder: 简单线性回归
+    # 简单线性回归
     from numpy.linalg import lstsq
     X_aug = np.column_stack([task.train_X, np.ones(len(task.train_X))])
     coeffs, _, _, _ = lstsq(X_aug, task.train_y, rcond=None)
@@ -218,12 +206,9 @@ def foo(task: SEDTask) -> SRResult:
         X_aug = np.column_stack([X, np.ones(len(X))])
         return X_aug @ coeffs
 
-    expr_parts = " + ".join(
-        f"{c:.4f}*{s}" for c, s in zip(coeffs[:-1], task.symbols[1:])
-    )
-    expr = f"{expr_parts} + {coeffs[-1]:.4f}"
-
-    return SRResult(predict=predict, expression=expr)
+    expr_parts = " + ".join(f"{c:.4f}*{s}" for c, s in zip(coeffs[:-1], task.symbols[1:]))
+    expression = f"{expr_parts} + {coeffs[-1]:.4f}"
+    return SRResult(predict=predict, expression=expression)
 
 
 def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
@@ -248,12 +233,12 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
         }
 
 
-def evaluate_problem(problem: Problem, sr_fn: Callable[[SEDTask], SRResult]) -> Dict:
+def evaluate_problem(args, problem: Problem, sr_fn: Callable[[SEDTask], SRResult]) -> Dict:
     """对单个问题运行 SR 方法并评估"""
     task = problem.create_task()
 
     start_time = time.time()
-    result = sr_fn(task)
+    result = sr_fn(args, task)
     search_time = time.time() - start_time
 
     # ID test
@@ -390,7 +375,7 @@ def main(args: argparse.Namespace) -> dict:
             _logger.note(f"Result already exists at {exp_path}, skipping...")
             continue
         try:
-            result = evaluate_problem(problem, foo)
+            result = evaluate_problem(args, problem, foo)
             _logger.note(
                 f"R2={result["id_metrics"]['r2']:.6f}, "
                 f"NMSE={result["id_metrics"]['nmse']:.6f}, "
