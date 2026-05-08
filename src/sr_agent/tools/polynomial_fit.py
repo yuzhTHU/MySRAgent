@@ -1,38 +1,16 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""多项式拟合工具。
-
-提供对输入数据的多项式拟合功能，支持自定义最高阶次数、交叉项控制等。
-"""
+"""多项式拟合工具。提供对输入变量或表达式的多项式拟合功能，支持自定义最高阶次数、交叉项控制等。"""
 
 import numpy as np
+import nd2py as nd
 from itertools import combinations, product
+from functools import reduce
 from typing import Dict, Any, List, Optional, Tuple, Set
-
 from .base_tool import BaseTool, ToolMetadata
 
 
 @BaseTool.register('polynomial_fit')
 class PolynomialFitTool(BaseTool):
-    """Fit polynomial models to data.
-
-    This tool uses least squares regression to fit polynomials to input data,
-    supporting:
-    - Configurable maximum degree
-    - Option to include interaction terms
-    - Interaction blacklist (which variable pairs should not interact)
-    - Interaction whitelist (only allow specified variable pairs to interact)
-
-    Returned results include:
-    - Fitted polynomial expression
-    - Coefficient values and their statistical significance
-    - Overall fit quality metrics (R^2, adjusted R^2, RMSE, etc.)
-
-    Use cases:
-    - Exploring nonlinear relationships between variables
-    - Preprocessing or baseline for symbolic regression
-    - Polynomial feature generation in feature engineering
-    """
-
     metadata = ToolMetadata(name="polynomial_fit")
 
     def execute(
@@ -44,11 +22,12 @@ class PolynomialFitTool(BaseTool):
         interaction_blacklist: List[Tuple[str, str]] = None,
         interaction_whitelist: List[Tuple[str, str]] = None,
         include_bias: bool = True,
-    ) -> Tuple[Dict[str, Any], List[str]]:
+    ) -> Dict[str, Any]:
         """Execute polynomial fit.
 
         Args:
-            x_vars: List of input feature names, e.g., ["x1", "x2"]. Use all features by default.
+            x_vars: List of input feature names, e.g., ["x1", "x2"]. Use all features other than y_var by default.
+                Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2"].
             y_var: Target variable name. Use target variable by default.
             max_degree: Maximum polynomial degree.
             include_interactions: Whether to include interaction terms.
@@ -58,61 +37,38 @@ class PolynomialFitTool(BaseTool):
                 By default, all pairs are allowed (unless in blacklist).
                 If specified, only interactions in the whitelist are generated.
             include_bias: Whether to include bias/intercept term.
-
-        Returns:
-            results:
-                polynomial: Polynomial string expression
-                terms: Detailed information for each term (coefficient, std_error, p_value, significance)
-                fit_quality: Fit quality metrics (R^2, adjusted R^2, RMSE, MAE, AIC, BIC)
-                residuals_summary: Summary statistics of residuals (min, max, mean, std)
-            exceptions: List of any exceptions that occurred during fitting.
         """
         data = self.context["data"]
-        if y_var is None:
-            y_var = self.context['target']
-        if x_vars is None:
-            x_vars = [var for var in data.keys() if var != y_var]
-        y = data[y_var]
-        x = {var: data[var] for var in x_vars}
-
+        y_var = y_var or self.context['target']
+        x_vars = x_vars or [var for var in data if var != y_var]
+        y = data[y_var].flatten()
+        n = len(y)
+        features = []
         exceptions = []
+        for x_var in x_vars:
+            try:
+                feature = nd.parse(x_var)
+                feature_value = feature.eval(data).flatten()
+                assert len(feature_value) == n, f"Variable '{x_var}' length ({len(feature_value)}) does not match target length ({n})."
+                features.append(feature)
+            except Exception as e:
+                exceptions.append(f"Failed to compute '{x_var}': {str(e)}")
 
-        # 数据验证
-        y = np.asarray(y).flatten()
-        n_samples = len(y)
-
-        var_names = list(x.keys())
-        n_features = len(var_names)
-
-        if n_features == 0:
-            raise ValueError("至少需要一个输入特征")
-
-        # 确保所有特征长度一致
-        for name, arr in x.items():
-            arr_checked = np.asarray(arr).flatten()
-            if len(arr_checked) != n_samples:
-                raise ValueError(f"特征 {name} 的长度 ({len(arr_checked)}) 与 y 的长度 ({n_samples}) 不一致")
-            x[name] = arr_checked
+        if len(features) == 0:
+            raise ValueError(
+                "No valid input variables available for fitting.\n" +
+                "Other exceptions: " +
+                "; ".join(exceptions)
+            )
 
         # 生成交叉项限制
         allowed_interactions = self._get_allowed_interactions(
-            var_names,
-            include_interactions,
-            interaction_blacklist,
-            interaction_whitelist
+            features, include_interactions, interaction_blacklist, interaction_whitelist
         )
 
-        # 生成所有多项式项的幂次组合
-        term_powers = self._generate_term_powers(
-            var_names,
-            max_degree,
-            allowed_interactions
-        )
-
-        # 构建设计矩阵和项名称
-        design_matrix, term_info = self._build_design_matrix(
-            x, var_names, term_powers, include_bias
-        )
+        # 构建总次数不超过 max_degree 的符号项，并统一计算设计矩阵
+        terms = self.generate_terms(features, max_degree, allowed_interactions, include_bias)
+        design_matrix = self._build_design_matrix(data, terms, n)
 
         # 检查设计矩阵的秩
         matrix_rank = np.linalg.matrix_rank(design_matrix)
@@ -125,7 +81,6 @@ class PolynomialFitTool(BaseTool):
             )
 
         # 使用最小二乘法拟合
-        n = n_samples
         p = n_params
 
         try:
@@ -176,11 +131,7 @@ class PolynomialFitTool(BaseTool):
         ss_res = np.sum(residuals ** 2)
         ss_tot = np.sum((y - np.mean(y)) ** 2)
         r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-
-        # RMSE 和 MAE
-        mse = np.mean(residuals ** 2)
-        rmse = np.sqrt(mse)
-        mae = np.mean(np.abs(residuals))
+        adjusted_r2 = 1 - (1 - r2) * (n - 1) / (n - p) if n > p else np.nan
 
         # AIC 和 BIC
         if n > p and ss_res > 0:
@@ -191,105 +142,35 @@ class PolynomialFitTool(BaseTool):
             aic = np.nan
             bic = np.nan
 
-        # 构建结果
-        terms_result = []
-        polynomial_parts = []
+        # 构建多项式
+        polynomial_parts = [float(coef) * term for coef, term in zip(coefficients, terms) if coef != 0]
+        polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else nd.parse("0")
 
-        for i, (term_str, coef, std_err, t_stat, p_val) in enumerate(
-            zip(term_info, coefficients, std_errors, t_stats, p_values)
-        ):
-            term_result = {
-                "term": term_str,
-                "coefficient": float(coef),
-                "std_error": float(std_err) if not np.isnan(std_err) else None,
-                "t_statistic": float(t_stat) if not np.isnan(t_stat) else None,
-                "p_value": float(p_val) if not np.isnan(p_val) else None,
-                "significant_at_0.05": bool(p_val < 0.05) if not np.isnan(p_val) else None,
-                "significant_at_0.01": bool(p_val < 0.01) if not np.isnan(p_val) else None,
-            }
-            terms_result.append(term_result)
-
-            # 构建多项式字符串部分
-            if term_str == "1":
-                polynomial_parts.insert(0, f"{coef:.6f}")
-            elif coef != 0:
-                if coef < 0:
-                    sign = "-"
-                    abs_coef = abs(coef)
-                else:
-                    sign = "+" if polynomial_parts else ""
-                    abs_coef = coef
-
-                if abs_coef == 1:
-                    term_display = f"{sign} {term_str}"
-                else:
-                    term_display = f"{sign} {abs_coef:.6f}*{term_str}"
-                polynomial_parts.append(term_display.strip())
-
-        # 构建多项式字符串
-        if not polynomial_parts:
-            polynomial_str = "0"
-        else:
-            polynomial_str = " ".join(polynomial_parts)
-            # 处理开头的 "+"
-            if polynomial_str.startswith("+"):
-                polynomial_str = polynomial_str[1:].strip()
+        # terms_result = []
+        # for term, coef, std_err, t_stat, p_val in zip(terms, coefficients, std_errors, t_stats, p_values):
+        #     terms_result.append({
+        #         "term": term.to_str(),
+        #         "coefficient": float(coef),
+        #         "std_error": float(std_err) if not np.isnan(std_err) else None,
+        #         "t_statistic": float(t_stat) if not np.isnan(t_stat) else None,
+        #         "p_value": float(p_val) if not np.isnan(p_val) else None,
+        #         "significant_at_0.05": bool(p_val < 0.05) if not np.isnan(p_val) else None,
+        #         "significant_at_0.01": bool(p_val < 0.01) if not np.isnan(p_val) else None,
+        #     })
 
         results = {
-            "formula": polynomial_str,
-            "terms": terms_result,
-            "fit_quality": {
-                "r_squared": float(r2),
-                "rmse": float(rmse),
-                "mae": float(mae),
-                "aic": float(aic) if not np.isnan(aic) else None,
-                "bic": float(bic) if not np.isnan(bic) else None,
+            "formula": polynomial.to_str(),
+            "metrics": self.evaluate(y_pred=y_pred, y_true=y) | {
+                "adjusted_r2": adjusted_r2, "aic": aic, "bic": bic,
             },
-            "metrics": {
-                "mse": float(mse),
-                "r2": float(r2),
-                "rmse": float(rmse),
-                "mae": float(mae),
-                "aic": float(aic) if not np.isnan(aic) else None,
-                "bic": float(bic) if not np.isnan(bic) else None,
-            },
-            "residuals_summary": {
-                "min": float(np.min(residuals)) if len(residuals) > 0 else None,
-                "max": float(np.max(residuals)) if len(residuals) > 0 else None,
-                "mean": float(np.mean(residuals)) if len(residuals) > 0 else None,
-                "std": float(np.std(residuals)) if len(residuals) > 0 else None,
-            },
-            "warnings": "; ".join(exceptions) if exceptions else None,
+            # "terms": terms_result,
+            "exceptions": exceptions,
         }
-        return results, exceptions
-
-    @classmethod
-    def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        """Format polynomial fit result for LLM consumption.
-
-        Args:
-            result: Tool execution result.
-        """
-        def fmt(value: Any) -> str:
-            return "N/A" if value is None else f"{value:.6g}"
-
-        metrics = result["metrics"]
-        warning_text = result.get("warnings") or "None"
-        lines = [
-            f"Polynomial: {result['formula']}",
-            (
-                "Fit quality: "
-                f"R2={fmt(metrics['r2'])}, "
-                f"RMSE={fmt(metrics['rmse'])}, "
-                f"MAE={fmt(metrics['mae'])}, "
-            ),
-            "Warnings: " + warning_text,
-        ]
-        return "\n".join(lines)
+        return results
 
     def _get_allowed_interactions(
         self,
-        var_names: List[str],
+        features: List[nd.Symbol],
         include_interactions: bool,
         blacklist: Optional[List[Tuple[str, str]]],
         whitelist: Optional[List[Tuple[str, str]]],
@@ -297,7 +178,7 @@ class PolynomialFitTool(BaseTool):
         """Get allowed interaction term combinations.
 
         Args:
-            var_names: List of variable names.
+            features: List of symbolic features.
             include_interactions: Whether to include interaction terms.
             blacklist: List of variable pairs to exclude from interactions.
             whitelist: List of variable pairs to allow for interactions.
@@ -309,7 +190,7 @@ class PolynomialFitTool(BaseTool):
             return set()
 
         # 生成所有可能的变量对
-        all_pairs = set(combinations(sorted(var_names), 2))
+        all_pairs = set(combinations(sorted([f.to_str() for f in features]), 2))
 
         if whitelist is not None:
             # 白名单模式：只允许白名单中的组合
@@ -329,144 +210,59 @@ class PolynomialFitTool(BaseTool):
 
         return allowed
 
-    def _generate_term_powers(
+    def generate_terms(
         self,
-        var_names: List[str],
+        features: List[nd.Symbol],
         max_degree: int,
         allowed_interactions: Set[Tuple[str, str]],
-    ) -> List[Tuple[int, ...]]:
-        """Generate all polynomial term power combinations.
-
-        Generates all power combinations satisfying total degree <= max_degree.
-
-        Args:
-            var_names: List of variable names.
-            max_degree: Maximum polynomial degree.
-            allowed_interactions: Set of allowed variable pair combinations.
-
-        Returns:
-            List of power combinations, each as a tuple representing
-            the power of each variable.
-        """
-        n_vars = len(var_names)
-        term_powers = []
-
-        # 生成所有可能的幂次组合（使用 product 生成笛卡尔积）
-        for powers in product(range(max_degree + 1), repeat=n_vars):
+        include_bias: bool,
+    ) -> List[nd.Symbol]:
+        """Generate symbolic terms whose total degree is no more than max_degree."""
+        n_vars = len(features)
+        terms = []
+        for powers in sorted(product(range(max_degree + 1), repeat=n_vars), key=lambda p: (sum(p), p)):
             total_degree = sum(powers)
             if total_degree == 0:
-                # 截距项，总是添加
-                term_powers.append(powers)
-            elif total_degree <= max_degree:
-                # 检查是否满足交叉项约束
-                if self._check_interaction_constraint(
-                    powers, var_names, allowed_interactions
-                ):
-                    term_powers.append(powers)
+                if not include_bias:
+                    continue
+                terms.append(nd.parse("1"))
+                continue
+            if total_degree > max_degree:
+                continue
 
-        # 按总次数排序，确保截距项在第一
-        term_powers.sort(key=lambda p: (sum(p), p))
+            non_zero_indices = [i for i, power in enumerate(powers) if power > 0]
+            if not allowed_interactions and len(non_zero_indices) > 1:
+                continue
+            if allowed_interactions:
+                allowed = True
+                for i, j in combinations(non_zero_indices, 2):
+                    pair = tuple(sorted((features[i].to_str(), features[j].to_str())))
+                    if pair not in allowed_interactions:
+                        allowed = False
+                        break
+                if not allowed:
+                    continue
 
-        return term_powers
-
-    def _check_interaction_constraint(
-        self,
-        powers: Tuple[int, ...],
-        var_names: List[str],
-        allowed_interactions: Set[Tuple[str, str]],
-    ) -> bool:
-        """Check if power combination satisfies interaction constraints.
-
-        Args:
-            powers: Tuple of powers for each variable.
-            var_names: List of variable names.
-            allowed_interactions: Set of allowed variable pair combinations.
-
-        Returns:
-            True if constraints are satisfied, False otherwise.
-        """
-        if not allowed_interactions:
-            # 不允许任何交叉项，检查是否有多于一个变量非零
-            non_zero_count = sum(1 for p in powers if p > 0)
-            return non_zero_count <= 1
-
-        # 找出所有同时非零的变量对
-        non_zero_indices = [i for i, p in enumerate(powers) if p > 0]
-
-        for i, j in combinations(non_zero_indices, 2):
-            pair = tuple(sorted((var_names[i], var_names[j])))
-            if pair not in allowed_interactions:
-                return False
-
-        return True
+            factors = []
+            for feature, power in zip(features, powers):
+                if power > 0:
+                    factors.append(feature if power == 1 else feature ** power)
+            terms.append(reduce(lambda a, b: a * b, factors))
+        return terms
 
     def _build_design_matrix(
         self,
-        x: Dict[str, np.ndarray],
-        var_names: List[str],
-        term_powers: List[Tuple[int, ...]],
-        include_bias: bool,
-    ) -> Tuple[np.ndarray, List[str]]:
-        """Build design matrix.
-
-        Args:
-            x: Input feature dictionary.
-            var_names: List of variable names.
-            term_powers: List of power combinations.
-            include_bias: Whether to include bias/intercept term.
-
-        Returns:
-            Design matrix and list of term names.
-        """
-        n_samples = len(next(iter(x.values())))
-        term_info = []
+        data: Dict[str, np.ndarray],
+        terms: List[nd.Symbol],
+        n_samples: int,
+    ) -> np.ndarray:
+        """Evaluate symbolic terms to build the design matrix."""
         columns = []
-
-        # 添加所有多项式项
-        for powers in term_powers:
-            # 跳过截距项（如果不需要）
-            if all(p == 0 for p in powers):
-                if not include_bias:
-                    continue
-                # 添加截距项
-                term_info.append("1")
-                columns.append(np.ones(n_samples))
-                continue
-
-            # 计算当前项的值
-            term_values = np.ones(n_samples)
-            for var_idx, power in enumerate(powers):
-                if power > 0:
-                    var_name = var_names[var_idx]
-                    term_values *= x[var_name] ** power
-
-            columns.append(term_values)
-            term_info.append(self._powers_to_string(powers, var_names))
-
-        design_matrix = np.column_stack(columns) if columns else np.zeros((n_samples, 0))
-        return design_matrix, term_info
-
-    def _powers_to_string(
-        self,
-        powers: Tuple[int, ...],
-        var_names: List[str],
-    ) -> str:
-        """Convert power combination to string representation.
-
-        Args:
-            powers: Tuple of powers.
-            var_names: List of variable names.
-
-        Returns:
-            String representation, e.g., "x1**2*x2".
-        """
-        parts = []
-        for var_name, power in zip(var_names, powers):
-            if power == 0:
-                continue
-            elif power == 1:
-                parts.append(var_name)
+        for term in terms:
+            values = np.asarray(term.eval(data))
+            if values.ndim == 0:
+                values = np.full(n_samples, float(values))
             else:
-                parts.append(f"{var_name}**{power}")
-
-        return "*".join(parts) if parts else "1"
+                values = values.flatten()
+            columns.append(values)
+        return np.column_stack(columns) if columns else np.zeros((n_samples, 0))

@@ -1,50 +1,43 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""数据统计分析工具。
-
-提供数据分布的基本统计量计算，包括最小值、最大值、均值、方差等。
-"""
+"""数据统计分析工具。计算变量或表达式的基本统计量，包括最小值、最大值、均值、方差等。"""
 import numpy as np
-from typing import Dict, Any, List, Tuple
+import nd2py as nd
+from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata
 
 
 @BaseTool.register('statistics_analysis')
 class StatisticsTool(BaseTool):
-    """Compute descriptive statistics for input data and target variable.
-
-    This tool is used to quickly understand the basic distribution characteristics
-    of data, helping LLM form an initial understanding of the data.
-    Returned statistics include: min, max, mean, std, variance, median, sample count.
-
-    Use cases:
-    - Starting point for data analysis tasks
-    - Data exploration before symbolic regression
-    - Detecting outliers or data quality issues
-    """
     metadata = ToolMetadata('statistics_analysis')
 
-    def execute(
-        self,
-        variables: List[str] = None,
-    ) -> Tuple[Dict[str, Any], List[str]]:
+    def execute(self, variables: List[str] = None) -> Dict[str, Any]:
         """Execute statistical analysis.
 
         Args:
             variables: List of variable names to analyze, e.g., ["x1", "x2", "y"].
                 Use all variables (including the target variable) by default.
-
-        Returns:
-            results:
-                statistics: statistics for each variable, including min, max, mean, variance, std, median, q1, q3, sample count.
-            exceptions: List of any exceptions that occurred during analysis.
+                Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2", "sin(y+x1)"].
         """
         data = self.context['data'] # {str: np.ndarray}, 包括 input variables & target variable
         if variables is None:
             variables = list(data.keys())
-        results = {
-            'statistics': {var: self.get_stats(data[var]) for var in variables}
+        statistics = {}
+        exceptions = []
+        for item in variables:
+            if item in data:
+                x = data[item]
+            else:
+                try:
+                    f = nd.parse(item)
+                    x = f.eval(data)
+                except Exception as e:
+                    exceptions.append(f"Failed to compute '{item}': {str(e)}")
+                    continue
+            statistics[item] = self.get_stats(x)
+        return {
+            'statistics': statistics,
+            'exceptions': exceptions
         }
-        return results, []
     
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
@@ -57,6 +50,8 @@ class StatisticsTool(BaseTool):
                 f"std={stat['std']:.4f}, median={stat['median']:.4f}, "
                 f"q1={stat['q1']:.4f}, q3={stat['q3']:.4f}\n"
             )
+        if result['exceptions']:
+            result_str += "Exceptions:\n" + "\n".join(result['exceptions'])
         return result_str
 
     def get_stats(self, arr: np.ndarray) -> Dict[str, Any]:

@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import time
 import traceback
+import numpy as np
+import nd2py as nd
 from logging import getLogger
 from datetime import datetime
 from dataclasses import dataclass
+from scipy import stats
 from docstring_parser import DocstringStyle, parse
 from abc import ABC, abstractmethod
 from types import NoneType, UnionType
@@ -45,13 +48,11 @@ class ToolCallResult:
         result: 运行结果, 用于存档和后续分析
         result_str: 对 result 格式化后的版本, 用于展示给 LLM 的结果字符串
         meta_data: 额外的元信息，如执行时间、日志等
-        exception: 工具运行过程中出现的异常信息列表
     """
     ok: bool
     result: Dict[str, Any]
     result_str: str
     meta_data: Dict[str, Any]
-    exception: List[str] | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dictionary-like access to the wrapped result for legacy callers."""
@@ -84,16 +85,18 @@ class BaseTool(ABC, FactoryMixin):
         self.context = context
 
     @abstractmethod
-    def execute(self, *args, **kwargs) -> Tuple[Dict[str, Any], List[str]]:
-        """ 执行工具。这个方法的参数列表需要由 LLM 生成，因此其参数应该尽量简单，复杂的上下文信息（如数据）可以通过工具实例的 context 属性传入。在实现时需要注意，此工具可能被多个进程/线程并行调用，需要保证线程安全
-
-        Args:
-            *args: 传递给工具的参数。
-            **kwargs: 传递给工具的关键词参数。
-
-        Returns:
-            results: 执行结果字典。
-            exceptions: 执行过程中出现的异常信息列表。
+    def execute(self) -> Dict[str, Any]:
+        """ 执行工具并返回运行结果
+        1) 这个方法的参数列表需要由 LLM 生成，因此其参数应该尽量简单
+        2) 复杂的上下文信息（如数据）可以通过工具实例的 context 属性传入
+        3) 在实现时需要注意，此工具可能被多个进程/线程并行调用，需要保证线程安全
+        4) execute 方法的 docstring 将被用于解析生成 metadata.description 和 metadata.parameters
+            docstring 中 Args: 之前的部分被用于生成 metadata.description
+            Args: 之后的部分被用于生成 metadata.parameters 的 description 字段
+        5) execute 方法的 signature 和 type hints 将被用于解析生成 metadata.parameters 的 schema 字段
+            目前支持 int / float / str / bool / List / Dict 以及它们的组合
+            不支持 *args 和 **kwargs 这类不定参数，也不支持 Optional / Union / Literal 等复杂类型的自动解析
+            对于复杂的参数类型，建议直接在 ToolMetadata.parameters 中手动指定完整的 JSON Schema
         """
         pass
 
@@ -111,26 +114,14 @@ class BaseTool(ABC, FactoryMixin):
         """工具调用入口"""
         start_time = time.time()
         try:
-            # Result: Dict[str, Any]: 工具运行的结果, 用于存档和后续分析
-            # Exception: List[str]: 工具运行过程中出现的异常, 用于日志记录和调试
-            # Result_str: str: 将 Result 格式化后得到的结果字符串, 用于反馈给 LLM 以指导后续决策
-            # Meta_data: Dict[str, Any]: 额外的元信息, 如执行时间、日志等, 用于存档和后续分析
-            output = self.execute(*args, **kwargs)
-            if (
-                isinstance(output, tuple)
-                and len(output) == 2
-                and isinstance(output[1], list)
-            ):
-                result, exception = output
-            else:
-                result, exception = output, []
+            result = self.execute(*args, **kwargs)
             result_str = self.format_result_dict(result)
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
                 "tool": self.metadata.name
             }
-            return ToolCallResult(ok=True, result=result, result_str=result_str, meta_data=meta_data, exception=exception)
+            return ToolCallResult(ok=True, result=result, result_str=result_str, meta_data=meta_data)
         except Exception as e:
             error_msg = f"Error executing {self.metadata.name}: [{type(e).__name__}] {e}\n{traceback.format_exc()}"
             meta_data = {
@@ -139,7 +130,7 @@ class BaseTool(ABC, FactoryMixin):
                 "tool": self.metadata.name
             }
             _logger.error(error_msg)
-            return ToolCallResult(ok=False, result={}, result_str=error_msg, meta_data=meta_data, exception=[error_msg])
+            return ToolCallResult(ok=False, result={'error': error_msg}, result_str=error_msg, meta_data=meta_data)
 
     @classmethod
     def to_tool_list(cls, tools_used: list[str] | None = None) -> list[dict]:
@@ -338,3 +329,54 @@ class BaseTool(ABC, FactoryMixin):
         if value_type is dict:
             return "object"
         return ""
+
+    def evaluate(self, eq: str = None, y_pred: np.ndarray = None, y_true: np.ndarray = None) -> Dict[str, float]:
+        """Evaluate predictions or a formula against the target in context.
+
+        When ``eq`` is provided, the formula is evaluated with variables from
+        ``self.context["data"]`` and target name ``self.context["target"]``.
+        Legacy contexts using ``x`` and ``y`` are also supported.
+        """
+        if eq is not None:
+            data, target = self.context['data'], self.context['target']
+            f = nd.parse(eq.replace("^", "**"))
+            y_pred = f.eval(data)
+            y_true = data[target]
+        elif y_pred is None or y_true is None:
+            raise ValueError("Either eq or both y_pred and y_true must be provided.")
+
+        y_pred = y_pred + 0 * y_true # broadcast to target shape if needed
+
+        residuals = y_pred - y_true
+        mse = float(np.mean(residuals ** 2))
+        rmse = float(np.sqrt(mse))
+        mae = float(np.mean(np.abs(residuals)))
+        if np.any(non_zero := ~np.isclose(y_true, 0.0)):
+            mape = float(np.mean(np.abs(residuals[non_zero] / y_true[non_zero])))
+        else:
+            mape = 0.0 if np.allclose(y_pred, y_true) else float("inf")
+        ss_res = float(np.sum(residuals ** 2))
+        ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+        r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+        finite = np.isfinite(y_pred) & np.isfinite(y_true)
+        y_pred_finite = y_pred[finite]
+        y_true_finite = y_true[finite]
+        if np.count_nonzero(finite) < 2:
+            pearson_r = float("nan")
+            spearman_r = float("nan")
+        elif np.std(y_pred_finite) == 0 or np.std(y_true_finite) == 0:
+            pearson_r = float("nan")
+            spearman_r = float("nan")
+        else:
+            pearson_r = float(np.corrcoef(y_true_finite, y_pred_finite)[0, 1])
+            spearman_r = float(stats.spearmanr(y_true_finite, y_pred_finite).statistic)
+        return {
+            "mse": mse,
+            "rmse": rmse,
+            "mae": mae,
+            "mape": mape,
+            "r2": r2,
+            "pearson_r": pearson_r,
+            "spearman_r": spearman_r,
+        }

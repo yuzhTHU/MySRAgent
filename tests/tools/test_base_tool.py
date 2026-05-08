@@ -238,7 +238,7 @@ class TestBaseToolExportAndCall:
         result = UnitErrorTool()()
 
         assert result.ok is False
-        assert result.result == {}
+        assert "error" in result.result
         assert "RuntimeError" in result.result_str
         assert "boom" in result.result_str
         assert result.meta_data["tool"] == "unit_error_tool"

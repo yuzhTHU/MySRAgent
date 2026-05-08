@@ -22,7 +22,7 @@ class DemoTool(BaseTool):
     )
 
     def execute(self, x: int):
-        return {"x": x}, []
+        return {"x": x}
 
 
 class _FakeUsage:

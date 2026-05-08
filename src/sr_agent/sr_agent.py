@@ -149,15 +149,15 @@ class SRAgent(FactoryMixin):
         R = C = L = None
         try:
             for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
-                _logger.info(f"Start Restart Loop ({R}/{self.max_restart_loop})")
+                _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
                 # 用平凡结果或者历史最佳结果构建新的 initial prompt
                 initial_prompt = self.build_initial_prompt(problem_description, X, y, topk_records)
 
                 for C in range(1, self.global_width + 1):  # C 次独立重复对话
                     _logger.info(
-                        f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
-                        f"Global Branch ({C}/{self.global_width})"
+                        f"Start Restart Loop (R={R}/{self.max_restart_loop}) - "
+                        f"Global Branch (C={C}/{self.global_width})"
                     )
                 
                     # 用 initial prompt 初始化 buffer
@@ -165,9 +165,9 @@ class SRAgent(FactoryMixin):
 
                     for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
                         _logger.info(
-                            f"Start Restart Loop ({R}/{self.max_restart_loop}) - "
-                            f"Global Branch ({C}/{self.global_width}) - "
-                            f"Refinement Step ({L}/{self.max_refinement_depth})"
+                            f"Start Restart Loop (R={R}/{self.max_restart_loop}) - "
+                            f"Global Branch (C={C}/{self.global_width}) - "
+                            f"Refinement Step (L={L}/{self.max_refinement_depth})"
                         )
 
                         # Step 1: 根据 Buffer 创建 Prompt
@@ -193,24 +193,24 @@ class SRAgent(FactoryMixin):
 
             _logger.note(f"Finished all iterations. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            progress = f'(R={R}/{self.max_restart_loop})x(C={C}/{self.global_width})x(L={L}/{self.max_refinement_depth})x(K={self.local_sample_size})'
             return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': progress}
         
         except FitEarlyStop as e:
             _logger.note(f"Early stopping triggered by perfect solution. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            progress = f'(R={R}/{self.max_restart_loop})x(C={C}/{self.global_width})x(L={L}/{self.max_refinement_depth})x(K={self.local_sample_size})'
             return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': progress}
 
         except KeyboardInterrupt as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            progress = f'(R={R}/{self.max_restart_loop})x(C={C}/{self.global_width})x(L={L}/{self.max_refinement_depth})x(K={self.local_sample_size})'
             e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': progress}
             raise
 
         except Exception as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            progress = f'({R}/{self.max_restart_loop})-({C}/{self.global_width})-({L}/{self.max_refinement_depth})'
+            progress = f'(R={R}/{self.max_restart_loop})x(C={C}/{self.global_width})x(L={L}/{self.max_refinement_depth})x(K={self.local_sample_size})'
             e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': progress}
             raise
 
@@ -270,7 +270,7 @@ class SRAgent(FactoryMixin):
             content_for_log = '\n        '.join(['', *content_for_log.splitlines()]) if '\n' in content_for_log else content_for_log
             tool_calls_for_log = '\n        '.join(['', *tool_calls_for_log.splitlines()]) if '\n' in tool_calls_for_log else tool_calls_for_log
             _logger.info(
-                f"Local Sample ({K}/{self.local_sample_size})\n"
+                f"Local Sample (K={K}/{self.local_sample_size})\n"
                 f"LLM response content: {content_for_log}\n"
                 f"LLM tool calls: {tool_calls_for_log}"
             )
@@ -294,6 +294,8 @@ class SRAgent(FactoryMixin):
     
     def update_buffer(self, buffer, response_list, results_list):
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
+        if len(response_list) == 0:
+            return buffer
         # 选择产生了最佳 mse 的 tool_call 所在的 response 分支
         selected_idx = 0
         selected_mse = float('inf')

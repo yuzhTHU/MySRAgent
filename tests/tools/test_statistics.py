@@ -21,7 +21,8 @@ class TestStatisticsToolMetadata:
                     "items": {"type": "string"},
                     "description": (
                         'List of variable names to analyze, e.g., ["x1", "x2", "y"].\n'
-                        "None means analyze all variables (including the target variable)."
+                        "Use all variables (including the target variable) by default.\n"
+                        'Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2", "sin(y+x1)"].'
                     ),
                     "default": None,
                 }
@@ -52,8 +53,9 @@ class TestStatisticsToolExecution:
     def test_execute_analyzes_all_variables_by_default(self):
         result = self.tool.execute()
 
-        assert set(result.keys()) == {"statistics"}
+        assert set(result.keys()) == {"statistics", "exceptions"}
         assert set(result["statistics"].keys()) == {"x1", "x2", "y"}
+        assert result["exceptions"] == []
 
     def test_execute_analyzes_selected_variables(self):
         result = self.tool.execute(variables=["x2", "y"])
@@ -67,11 +69,12 @@ class TestStatisticsToolExecution:
 
         assert list(result["statistics"].keys()) == ["y", "x1"]
 
-    def test_execute_raises_for_unknown_variable(self):
+    def test_execute_records_unknown_variable_exception(self):
         result = self.tool(variables=["missing"])
 
-        assert result.ok is False
-        assert "KeyError" in result.result_str
+        assert result.ok is True
+        assert result.result["statistics"] == {}
+        assert result.result["exceptions"]
         assert "missing" in result.result_str
 
     def test_call_wraps_successful_result(self):
@@ -133,7 +136,8 @@ class TestStatisticsToolFormatting:
                     "q1": 1.75,
                     "q3": 3.25,
                 }
-            }
+            },
+            "exceptions": [],
         }
 
         assert StatisticsTool.format_result_dict(result) == (
@@ -167,7 +171,8 @@ class TestStatisticsToolFormatting:
                     "q1": 2.0,
                     "q3": 2.0,
                 },
-            }
+            },
+            "exceptions": [],
         }
 
         formatted = StatisticsTool.format_result_dict(result)

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Literal
 from .base_tool import BaseTool, ToolMetadata
 
-
+# @BaseTool.register('skill_document') # 不注册这个工具，因为它用处不大
 class SkillDocumentTool(BaseTool):
     """Browse and read Skill documentation files.
 

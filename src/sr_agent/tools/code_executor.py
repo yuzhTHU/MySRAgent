@@ -345,34 +345,7 @@ def _sandbox_worker(
 
 @BaseTool.register("code_executor")
 class CodeExecutorTool(BaseTool):
-    """Execute given Python code and return printed output.
-
-    This tool provides a restricted Python execution environment that only
-    allows importing safe, computation-related modules.
-
-    Use cases:
-    - Numerical computation and data processing
-    - Mathematical formula verification
-    - Algorithm prototyping
-    - Expression evaluation in symbolic regression
-
-    Security restrictions:
-    - Code runs in a separate process with wall-time, CPU-time, memory and output limits
-    - Only whitelisted computation modules can be imported
-    - File system operations, network access, process control, and dynamic execution are forbidden
-    - Stdout and stderr are captured as output
-    """
-
-    metadata = ToolMetadata(
-        name="code_executor",
-        description=(
-            "Execute Python code in a restricted data-analysis sandbox and return "
-            "printed output. If the tool is configured with dataset context, the data "
-            "is available from stdin as a JSON object mapping variable names to arrays. "
-            "Use `import sys, json; input_data_str = sys.stdin.read(); data_dict = "
-            "json.loads(input_data_str)` to access it."
-        ),
-    )
+    metadata = ToolMetadata(name="code_executor")
 
     def execute(
         self,
@@ -380,7 +353,10 @@ class CodeExecutorTool(BaseTool):
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
     ) -> Dict[str, Any]:
-        """Execute given Python code.
+        """Execute Python code and return printed output.
+        Use `import sys, json; data_dict = json.loads(sys.stdin.read())` to access data mapping variable names to arrays.
+        Use `print()` to produce output. The code is executed in a restricted sandbox with resource limits.
+        numpy and scipy are available, but libraries like matplotlib, pandas, scikit-learn are not.
 
         Args:
             program: Python code string to execute.
@@ -398,9 +374,7 @@ class CodeExecutorTool(BaseTool):
             - duration: Runtime in seconds
         """
         timeout = self._bounded_int(timeout, DEFAULT_TIMEOUT_SECONDS, 1, MAX_TIMEOUT_SECONDS)
-        memory_limit_mb = self._bounded_int(
-            memory_limit_mb, DEFAULT_MEMORY_LIMIT_MB, 64, MAX_MEMORY_LIMIT_MB
-        )
+        memory_limit_mb = self._bounded_int(memory_limit_mb, DEFAULT_MEMORY_LIMIT_MB, 64, MAX_MEMORY_LIMIT_MB)
 
         program = self._extract_code(program)
         stdin_text, has_stdin_data, input_error = self._get_sandbox_input_text()
