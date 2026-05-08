@@ -72,7 +72,7 @@ class TestPolynomialFitTool:
         y = 2 * x1 + 3 * x2
 
         result = make_tool({"x1": x1, "x2": x2, "x3": x3}, y).execute(
-            x_vars=["x1", "x2"],
+            x=["x1", "x2"],
             max_degree=1,
         )
 
@@ -83,13 +83,13 @@ class TestPolynomialFitTool:
         x = np.linspace(1, 5, 20)
         y = 3 * x**2 + 1
 
-        result = make_tool({"x": x}, y).execute(x_vars=["x**2"], max_degree=1)
+        result = make_tool({"x": x}, y).execute(x=["x**2"], max_degree=1)
 
         assert result["metrics"]["r2"] > 0.99
         assert "x ** 2" in result["formula"] or "x**2" in result["formula"]
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
-        result = self.tool(x_vars=["missing"], max_degree=1)
+        result = self.tool(x=["missing"], max_degree=1)
 
         assert result.ok is False
         assert "No valid input variables" in result.result_str

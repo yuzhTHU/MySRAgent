@@ -284,7 +284,7 @@ class SRAgent(FactoryMixin):
         _logger.info(f"Action result: {all_results_for_log}")
         return results_list
     
-    def update_buffer(self, buffer, response_list, results_list, R: int, L: int, C: int):
+    def update_buffer(self, buffer, response_list, results_list, R: int, L: int, C: int): # TODO: 此函数逻辑较复杂，尚未经过充分的人工审核
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
         if len(response_list) == 0:
             return buffer
@@ -293,29 +293,25 @@ class SRAgent(FactoryMixin):
         selected_mse = float('inf')
         for results_idx, results in enumerate(results_list):
             for result in results:
-                metrics = result.get('metrics') if result is not None else None
-                if metrics is not None and metrics['mse'] < selected_mse:
+                if (metrics := result.get('metrics', None)) is not None and metrics['mse'] < selected_mse:
                     selected_idx = results_idx
                     selected_mse = metrics['mse']
         content, tool_calls, message = response_list[selected_idx]
         results = results_list[selected_idx]
         # 将其他分支中不涉及 formula & metrics 的 tool_call 和 result 也加入 buffer, 以免丢失有用信息
         content_parts = [content]
-        results = list(results)
+        tool_calls = [*tool_calls] # 复制一份，避免后续对它的 append 影响 response_list
+        results = [*results]
         message_tool_calls = message.get('tool_calls')
         for idx, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list)):
             if idx == selected_idx:
                 continue
             extra_content_added = False
             for extra_tool_call, extra_result in zip(extra_tool_calls, extra_results):
-                if (
-                    extra_result is not None
-                    and extra_result.get('formula') is None
-                    and extra_result.get('metrics') is None
-                ):
+                if extra_result.get('metrics') is None:
                     tool_calls.append(extra_tool_call)
                     results.append(extra_result)
-                    if message_tool_calls is not None and extra_tool_call.raw is not None:
+                    if extra_tool_call.raw is not None and message_tool_calls is not None:
                         message_tool_calls.append(extra_tool_call.raw)
                     elif not extra_content_added and extra_tool_call.raw_str:
                         content_parts.append(extra_tool_call.raw_str)
@@ -331,27 +327,15 @@ class SRAgent(FactoryMixin):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
         for idx in range(len(response_list)):
             for act, res in zip(response_list[idx][1], results_list[idx]):
-                if res is None:
-                    continue
-                elif not isinstance(res.result, dict):
-                    continue
-                elif 'metrics' not in res.result:
-                    continue
-                elif not isinstance(res.result['metrics'], dict):
-                    continue
-                elif 'mse' not in res.result['metrics']:
-                    continue
-                elif (mse := res.result['metrics']['mse']) is None:
-                    continue
-                else:
+                if 'metrics' in res.result:
                     record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
-                        "mse": mse,
+                        "mse": res.result['metrics']['mse'],
                         "rmse": res.result['metrics'].get('rmse'),
                         "mae": res.result['metrics'].get('mae'),
                         "r2": res.result['metrics'].get('r2'),
                     }
-                    priority = mse # 按照 mse 排序 (越小越重要)
+                    priority = res.result['metrics']['mse'] # 按照 mse 排序 (越小越重要)
                     sequence = len(topk_records) # 相同 priority 时按照 sequence 排序 (越小越重要)
                     heapq.heappush(topk_records, (priority, sequence, record))
         return topk_records

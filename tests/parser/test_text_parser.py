@@ -33,8 +33,13 @@ class TestTextParserFormatTools:
         result = parser.format_tools()
 
         # 检查所有工具名称出现在输出中
-        tool_names = ["statistics_analysis", "evaluate_formula", "call_llm",
-                      "polynomial_fit", "code_executor"]
+        tool_names = [
+            "statistics_analysis",
+            "evaluate_formula",
+            "submit_formula",
+            "polynomial_fit",
+            "code_executor",
+        ]
         for name in tool_names:
             assert name in result
 
@@ -45,7 +50,7 @@ class TestTextParserFormatTools:
 
         # 检查类型注解格式
         assert "Optional[" in result or "str" in result or "int" in result
-        assert "x_vars:" in result  # 参数名后跟冒号
+        assert "x:" in result  # 参数名后跟冒号
 
     def test_format_tools_description_is_english(self):
         """测试描述是英文的。"""

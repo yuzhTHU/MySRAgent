@@ -24,9 +24,9 @@ class LLMTool(BaseTool):
         """
         from ..api import LLMAPI
 
-        # 实例化 LLM API
-        api = LLMAPI.load(llm_provider, llm_model)
-        for content in (llm_result := api(messages, n=1)):
+        api = LLMAPI.create(llm_provider, llm_model)
+        content = ""
+        for content, _, _ in (llm_result := api(messages, n=1)):
             pass
         return {
             "content": content,

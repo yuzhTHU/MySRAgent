@@ -94,11 +94,11 @@ class PolynomialFitTool(BaseTool):
         try:
             # 使用 QR 分解提高数值稳定性
             Q, R = np.linalg.qr(design_matrix)
-            coefficients = np.linalg.solve(R, Q.T @ y)
+            coefficients = np.linalg.solve(R, Q.T @ data_y)
 
             # 计算残差
             y_pred = design_matrix @ coefficients
-            residuals = y - y_pred
+            residuals = data_y - y_pred
 
             # 计算系数标准误差
             if n > p:
@@ -128,7 +128,7 @@ class PolynomialFitTool(BaseTool):
             # 降级到普通最小二乘
             exceptions.append(f"QR 分解失败，使用普通最小二乘法：{str(e)}")
             coefficients, residuals, rank, s = np.linalg.lstsq(
-                design_matrix, y, rcond=None
+                design_matrix, data_y, rcond=None
             )
             y_pred = design_matrix @ coefficients
             std_errors = np.full(n_params, np.nan)
@@ -137,7 +137,7 @@ class PolynomialFitTool(BaseTool):
 
         # 计算拟合质量指标
         ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        ss_tot = np.sum((data_y - np.mean(data_y)) ** 2)
         r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
         adjusted_r2 = 1 - (1 - r2) * (n - 1) / (n - p) if n > p else np.nan
 
@@ -168,7 +168,7 @@ class PolynomialFitTool(BaseTool):
 
         results = {
             "formula": polynomial.to_str(),
-            "metrics": self.evaluate(y_pred=y_pred, y_true=y) | {
+            "metrics": self.evaluate(y_pred=y_pred, y_true=data_y) | {
                 "adjusted_r2": adjusted_r2, "aic": aic, "bic": bic,
             },
             # "terms": terms_result,

@@ -11,15 +11,18 @@ from sr_agent.tools.evaluate import EvaluateTool, SubmitFormulaTool
 class TestEvaluateTool:
     """测试 EvaluateTool 的正确性。"""
 
+    @staticmethod
+    def make_tool(X, y):
+        return EvaluateTool(data=X | {"y": y}, target="y")
+
     def test_perfect_fit(self):
         """测试完美拟合情况：y = 2*x1 + 3。"""
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([5.0, 7.0, 9.0, 11.0, 13.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("x1 * 2 + 3")
 
-        assert result["error"] is None
         assert result["metrics"]["mse"] == 0.0
         assert result["metrics"]["r2"] == 1.0
 
@@ -28,10 +31,9 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("x1**2")
 
-        assert result["error"] is None
         assert result["metrics"]["mse"] == 0.0
         assert result["metrics"]["r2"] == 1.0
 
@@ -40,10 +42,9 @@ class TestEvaluateTool:
         X = {"x1": np.array([0.0, np.pi/2, np.pi, 3*np.pi/2])}
         y = np.array([0.0, 1.0, 0.0, -1.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("sin(x1)")
 
-        assert result["error"] is None
         assert result["metrics"]["mse"] < 1e-10
 
     def test_poor_fit(self):
@@ -51,10 +52,9 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("x1")  # 错误的公式
 
-        assert result["error"] is None
         assert result["metrics"]["mse"] > 10000  # MSE 应该很大
         assert result["metrics"]["r2"] < 0  # R² 应该为负（比预测均值还差）
 
@@ -66,10 +66,9 @@ class TestEvaluateTool:
         }
         y = np.array([1.5, 3.0, 4.5, 6.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("x1 + x2")
 
-        assert result["error"] is None
         assert result["metrics"]["mse"] == 0.0
 
     def test_invalid_formula(self):
@@ -77,23 +76,22 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([1.0, 2.0, 3.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
-        result = tool.execute("invalid_syntax!!")
+        tool = self.make_tool(X, y)
+        result = tool("invalid_syntax!!")
 
-        assert result["error"] is not None
-        assert result["metrics"] is None
+        assert result.ok is False
+        assert "SyntaxError" in result.result_str
 
     def test_with_parameter_fitting(self):
         """测试参数拟合功能。"""
         X = {"x1": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
         y = np.array([2.1, 3.9, 6.2, 7.9, 10.1])  # y ≈ 2*x，带有噪声
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=True)
+        tool = self.make_tool(X, y)
         # 可拟合参数是 Number 节点（如 1.0），不是符号变量（如 a）
         result = tool.execute("1.0 * x1", fit=True)
 
         # 拟合后应该能得到较好的结果
-        assert result["error"] is None
         assert result["metrics"]["r2"] > 0.95
 
     def test_output_structure(self):
@@ -101,12 +99,12 @@ class TestEvaluateTool:
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([1.0, 2.0, 3.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
+        tool = self.make_tool(X, y)
         result = tool.execute("x1")
 
         # 检查必需的键
+        assert "formula" in result
         assert "metrics" in result
-        assert "error" in result
         assert result["metrics"] is not None
         assert "mse" in result["metrics"]
         assert "rmse" in result["metrics"]
@@ -115,7 +113,7 @@ class TestEvaluateTool:
 
     def test_metadata_exists(self):
         """测试元数据存在。"""
-        tool = EvaluateTool(x={"x": np.array([1.0])}, y=np.array([1.0]))
+        tool = EvaluateTool(data={"x": np.array([1.0]), "y": np.array([1.0])}, target="y")
         assert tool.metadata is not None
         assert tool.metadata.name == "evaluate_formula"
 
@@ -129,11 +127,9 @@ class TestEvaluateTool:
         # y = x1 * 2 + x3 * 1
         y = np.array([9.0, 12.0, 15.0])
 
-        tool = EvaluateTool(x=X, y=y, fit_parameters=False)
-        # 只使用 x1 和 x3
-        result = tool.execute("x1 * 2 + x3", x_vars=["x1", "x3"])
+        tool = self.make_tool(X, y)
+        result = tool.execute("x1 * 2 + x3")
 
-        assert result["error"] is None
         assert result["metrics"]["r2"] > 0.9
 
 
@@ -141,7 +137,7 @@ class TestSubmitFormulaTool:
     """测试 SubmitFormulaTool 与 EvaluateTool 的接口一致性。"""
 
     def test_metadata_emphasizes_submit(self):
-        tool = SubmitFormulaTool(x={"x": np.array([1.0])}, y=np.array([1.0]))
+        tool = SubmitFormulaTool(data={"x": np.array([1.0]), "y": np.array([1.0])}, target="y")
 
         assert tool.metadata.name == "submit_formula"
         assert "submit" in tool.metadata.description.lower()
@@ -151,8 +147,8 @@ class TestSubmitFormulaTool:
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([3.0, 5.0, 7.0])
 
-        submit_result = SubmitFormulaTool(x=X, y=y).execute("2 * x1 + 1")
-        evaluate_result = EvaluateTool(x=X, y=y).execute("2 * x1 + 1")
+        submit_result = SubmitFormulaTool(data=X | {"y": y}, target="y").execute("2 * x1 + 1")
+        evaluate_result = EvaluateTool(data=X | {"y": y}, target="y").execute("2 * x1 + 1")
 
         assert submit_result == evaluate_result
 
