@@ -9,7 +9,7 @@ git clone git@github.com:yuzhTHU/nd2py.git ./src/nd2py_package
 pip install -e ./src/nd2py_package
 
 # 安装其它依赖
-pip install -e .[dev]
+pip install -e ".[dev]"
 
 # （可选）下载 LLMSR-Bench 数据到本地
 # git clone git@hf.co:datasets/nnheui/llm-srbench ./data/llm-srbench-data
