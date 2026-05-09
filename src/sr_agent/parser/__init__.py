@@ -7,6 +7,6 @@ Parser 用一种自定义的方式处理工具调用：
 Parser 的设计初衷在于允许不支持 tool 参数的 API 也能使用工具调用的功能。
 """
 from .base_parser import BaseParser
-from .json_parser import JSONParser
-from .openai_parser import OpenAIParser
 from .text_parser import TextParser
+from .json_parser import JSONParser
+from .openai_parser import OpenAIParser # <- 为了一致起见定义了这个类，但是它实际用不到

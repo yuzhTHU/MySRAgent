@@ -158,5 +158,6 @@ playground/
 # ruff
 .ruff_cache/
 
-.claude/
+/.claude/
 /data/
+/.agents/
