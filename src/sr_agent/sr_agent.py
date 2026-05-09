@@ -235,7 +235,7 @@ class SRAgent(FactoryMixin):
         # 构建 system prompt - 告知 LLM 它的角色和目标
         initial_prompt.append({
             "role": "system",
-            "content": """You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas that explain the relationship between feature variables and the target variable."""
+            "content": """You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas that explain the relationship between feature variables and the target variable. DO NOT satisfied with a accurate but complex formula, you should try to find a simple formula that fit the data with an MSE of EXACTLY 0."""
         })
         # 构建 user prompt - 告知具体问题和数据信息
         initial_prompt.append({
