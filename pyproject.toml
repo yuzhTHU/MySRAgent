@@ -21,16 +21,14 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "matplotlib>=3.7.0",
-    "nd2py @ git+https://github.com/yuzhTHU/nd2py.git",
-]
-
-[project.optional-dependencies]
-llm = [
     "openai>=1.0.0",
     "google-genai>=1.0.0",
     "requests>=2.28.0",
     "python-dotenv>=1.0.0",
+    "nd2py @ git+https://github.com/yuzhTHU/nd2py.git",
 ]
+
+[project.optional-dependencies]
 nn = [
     "torch>=2.0.0",
     "torch-geometric>=2.4.0",
@@ -40,7 +38,7 @@ dev = [
     "pytest-cov>=4.0.0",
 ]
 all = [
-    "sr-agent[llm,nn,dev]",
+    "sr-agent[nn,dev]",
 ]
 
 [tool.setuptools.packages.find]
