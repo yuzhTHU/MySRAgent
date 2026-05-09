@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from sr_agent.tools.base_tool import BaseTool
-from sr_agent.tools.evaluate import EvaluateTool, SubmitFormulaTool
+from sr_agent.tools.evaluate_formula import EvaluateTool, SubmitFormulaTool
 
 
 class TestEvaluateTool:

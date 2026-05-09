@@ -21,11 +21,15 @@ class TestPolynomialFitTool:
     def test_linear_fit_returns_new_contract(self):
         result = self.tool.execute(max_degree=1)
 
-        assert set(result.keys()) == {"formula", "metrics", "exceptions"}
+        assert set(result.keys()) == {"formula", "metrics", "is_candidate", "exceptions"}
         assert isinstance(result["formula"], str)
+        assert isinstance(result["is_candidate"], bool)
         assert result["exceptions"] == []
         assert result["metrics"]["r2"] > 0.99
         assert result["metrics"]["rmse"] < 1e-8
+        assert "adjusted_r2" in result["metrics"]
+        assert "aic" in result["metrics"]
+        assert "bic" in result["metrics"]
 
     def test_quadratic_fit_quality(self):
         x = np.linspace(-5, 5, 50)

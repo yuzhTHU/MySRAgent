@@ -3,7 +3,7 @@
 
 import pytest
 from dotenv import load_dotenv
-from sr_agent.tools.llm_tool import LLMTool
+from sr_agent.tools.call_llm import LLMTool
 
 # 加载环境变量
 load_dotenv()

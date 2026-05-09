@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.statistics import StatisticsTool
+from sr_agent.tools.statistics_analysis import StatisticsTool
 
 
 class TestStatisticsToolMetadata:
