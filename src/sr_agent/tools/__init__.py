@@ -5,9 +5,9 @@
 """
 
 from .base_tool import BaseTool, ToolMetadata, ToolCallResult
-from .statistics import StatisticsTool
-from .evaluate import EvaluateTool, SubmitFormulaTool
-from .llm_tool import LLMTool
+from .statistics_analysis import StatisticsTool
+from .evaluate_formula import EvaluateTool, SubmitFormulaTool
+from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
 from .code_executor import CodeExecutorTool
 from .skill_document import SkillDocumentTool
