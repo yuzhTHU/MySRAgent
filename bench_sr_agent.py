@@ -8,9 +8,14 @@ LLM-SRBench 评估脚本 (浓缩版)
   4) 汇总多次运行的结果
 
 Usage:
-    python bench_sr_agent.py --exp_name test_some_algorithm --dataset lsrtransform --problem_names II.6.15b_1_0
-    python bench_sr_agent.py --exp_name test_some_algorithm --dataset bio_pop_growth
-    python bench_sr_agent.py --exp_name test_some_algorithm
+    # 测试单个问题
+    python bench_sr_agent.py --exp_name test_my_algorithm --dataset lsrtransform --problem_names II.6.15b_1_0
+    # 测试单个数据集
+    python bench_sr_agent.py --exp_name test_my_algorithm --dataset bio_pop_growth
+    # 测试一系列问题
+    python bench_sr_agent.py --problem_names MatSci2 MatSci19 CRK28 BPG1 PO6
+    # 测试特定算法
+    python bench_sr_agent.py linear --exp_name test_linear_fitting
 """
 
 from __future__ import annotations
@@ -65,7 +70,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--data_root", type=str, default=str(Path(__file__).parent / "data" / "llm-srbench-data"), help="HDF5 数据文件所在目录")
     parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help="数据集名称, 默认评估全部数据集")
     parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
-    parser.add_argument("--skip_existing", action="store_true", default=False, help="如果结果文件已存在则跳过评估")
+    parser.add_argument("--skip_existing", action="store_true", default=True, help="如果结果文件已存在则跳过评估")
     # 解析 --alg 参数以获取对应的 update_parser
     args, _ = parser.parse_known_args()
     if (update_parser_fn := get_update_parser(args.algorithm)):
@@ -185,8 +190,7 @@ def aggregate_results(results: List[Dict]) -> Dict:
         vals = [r[group][key] for r in results if r[group] is not None and not np.isnan(r[group][key])]
         return float(np.mean(vals)) if vals else float("nan")
 
-    if (n := len(results)) == 0:
-        return {}
+    n = len(results)
 
     # R² 达标率
     r2_thresholds = [0.5, 0.9, 0.99, 0.999]
