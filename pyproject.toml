@@ -53,7 +53,7 @@ markers = [
     "slow: marks tests as slow (integration tests)",
     "paid: marks tests as paid API calls (requires credits)",
 ]
-addopts = "-m 'not slow and not paid'"
+addopts = "--quiet -m 'not slow and not paid'"
 
 [tool.ruff]
 line-length = 100
