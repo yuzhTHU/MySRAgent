@@ -270,48 +270,52 @@ class BaseTool(ABC, FactoryMixin):
             return {}
 
         origin = get_origin(annotation) # e.g., list, dict, Union, etc.
-        args = get_args(annotation) # e.g., (int,) for List[int], (str, NoneType) for Optional[str], etc.
+        args = get_args(annotation) #  e.g., (int,) for List[int], (str, NoneType) for Optional[str], etc.
 
         if origin is Literal:
             values = list(args)
             schema = {"enum": values}
-            if non_none_values := [value for value in values if value is not None]:
+            if non_none_values := [v for v in values if v is not None]:
                 schema["type"] = cls.parse_json_type(type(non_none_values[0]))
             return schema
-
-        if origin is list:
-            item_type = args[0] if args else Any
-            return {"type": "array", "items": cls.parse_args_typehints(item_type)}
-
-        if origin is tuple:
-            if not (item_schemas := [cls.parse_args_typehints(arg) for arg in args]):
-                return {"type": "array", "items": {}}
-            elif args[-1] is not Ellipsis:
-                return {
-                    "type": "array",
-                    # Draft 7 tuple validation uses an array-valued items.
-                    # Avoid prefixItems for broader OpenRouter/OpenAI compatibility.
-                    "items": item_schemas,
-                    "minItems": len(item_schemas),
-                    "maxItems": len(item_schemas),
-                }
-            else:
-                return {"type": "array", "items": item_schemas[0]}
-
-        if origin is dict:
+        elif origin is list:
+            return {"type": "array", "items": cls.parse_args_typehints(args[0] if args else Any)}
+        elif origin is dict:
             return {"type": "object"}
-
-        if origin in (Union, UnionType):
-            schemas = [
-                {"type": "null"} if arg is NoneType else cls.parse_args_typehints(arg)
-                for arg in args
-            ]
+        elif origin is tuple:
+            # Tuple without type args
+            if not args:
+                return {"type": "array", "items": {}}
+            # Variable-length tuple, e.g. Tuple[str, ...]
+            elif args[-1] is Ellipsis:
+                return {"type": "array", "items": cls.parse_args_typehints(args[0] if args else Any)}
+            item_schemas = [cls.parse_args_typehints(arg) for arg in args]
+            # Homogeneous fixed tuple, e.g. Tuple[str, str]
+            if all(schema == item_schemas[0] for schema in item_schemas):
+                return {"type": "array", "items": item_schemas[0], "minItems": len(args), "maxItems": len(args)}
+            # Heterogeneous fixed tuple, e.g. Tuple[str, int]
+            else:
+                # This is less position-strict than prefixItems, but more compatible with OpenAI/Azure/OpenRouter tool schemas.
+                # It means each item may match any of the tuple element schemas, while minItems/maxItems still enforce tuple length.
+                _logger.warning(
+                    f"Tuple parameter with heterogeneous types detected in {cls.__name__}.execute. "
+                    f"This is not recommended since it may lead to less precise schema and LLM confusion. "
+                    f"Please consider using a more specific schema or adding descriptions to clarify the expected format."
+                )
+                return {"type": "array", "items": {"anyOf": item_schemas}, "minItems": len(args), "maxItems": len(args)}
+        elif origin in (Union, UnionType):
+            schemas = [{"type": "null"} if arg is NoneType else cls.parse_args_typehints(arg) for arg in args]
             return {"anyOf": schemas}
-
-        if json_type := cls.parse_json_type(annotation):
+        elif json_type := cls.parse_json_type(annotation):
             return {"type": json_type}
-
-        return {}
+        else:
+            _logger.warning(
+                f"Unsupported type annotation '{annotation}' in {cls.__name__}.execute. "
+                f"Automatic schema inference will not be able to parse this type, and it will be treated as an untyped parameter. "
+                f"Please consider using basic types (int, float, str, bool) or common generics (List, Dict) for better compatibility, "
+                f"or directly specify the parameter schema in ToolMetadata.parameters if a more complex structure is needed."
+            )
+            return {}
 
     @staticmethod
     def parse_json_type(value_type: Any) -> str:
