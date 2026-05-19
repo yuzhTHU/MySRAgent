@@ -11,6 +11,8 @@ from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
 from .code_executor import CodeExecutorTool
 from .skill_document import SkillDocumentTool
+from .call_sindy import SINDyTool
+from .call_pysr import PySRTool
 
 __all__ = [
     "BaseTool",
@@ -23,4 +25,6 @@ __all__ = [
     "PolynomialFitTool",
     "CodeExecutorTool",
     "SkillDocumentTool",
+    "SINDyTool",
+    "PySRTool",
 ]
