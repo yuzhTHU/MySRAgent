@@ -229,23 +229,67 @@ class SRAgent(FactoryMixin):
             raise
 
     def build_initial_prompt(self, problem_description, X, y, topk_record):
-        """根据历史最佳结果构建新的 initial prompt。"""
-        topk_record = heapq.nsmallest(self.restart_top_k, topk_record)
+        """根据历史最佳结果构建新的 initial prompt。
+
+        当 topk_record 非空时（即 R > 1 的重启轮次），会将之前探索过的最优公式
+        及其指标作为上下文注入 prompt，并设置一个更严格的 MSE 目标，引导 LLM
+        在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
+        """
+        top_records = heapq.nsmallest(self.restart_top_k, topk_record)
         initial_prompt = []
-        # 构建 system prompt - 告知 LLM 它的角色和目标
+
+        # 根据是否有历史最优结果来动态设置 MSE 目标
+        if top_records:
+            best_mse = top_records[0][-1]['mse']
+            if best_mse > 0:
+                target_mse = best_mse * 0.1
+                mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
+            else:
+                mse_goal = "The previous round already achieved MSE = 0. Try to find a simpler formula that also achieves MSE = 0."
+        else:
+            mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
+
+        # 构建 system prompt
         initial_prompt.append({
             "role": "system",
-            "content": """You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas that explain the relationship between feature variables and the target variable. DO NOT satisfied with a accurate but complex formula, you should try to find a simple formula that fit the data with an MSE of EXACTLY 0."""
+            "content": (
+                "You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
+                "that explain the relationship between feature variables and the target variable. "
+                "DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+                f"{mse_goal}"
+            )
         })
+
         # 构建 user prompt - 告知具体问题和数据信息
+        user_content = (
+            f"{problem_description}\n\n"
+            f"- Feature names: {list(X.keys())}\n"
+            f"- Target name: {next(iter(y))}\n"
+        )
+
+        # 如果有历史最优结果，注入作为参考上下文
+        if top_records:
+            user_content += (
+                "\n--- Previously Explored Formulas (from best to worst) ---\n"
+                "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
+            )
+            for priority, sequence, record in top_records:
+                formula = record.get('formula', 'N/A')
+                mse = record.get('mse', float('inf'))
+                r2 = record.get('r2', None)
+                r2_str = f", R²={r2:.6g}" if r2 is not None else ""
+                user_content += f"  • Formula: {formula}\n    MSE={mse:.6g}{r2_str}\n\n"
+            user_content += "---\n\n"
+            user_content += (
+                "Based on the above results, analyze why the previous best formulas may not be perfect, "
+                "and try a different approach or structure to achieve a lower MSE."
+            )
+        else:
+            user_content += "Please start by analyzing the data to understand the relationship between features and target."
+
         initial_prompt.append({
             "role": "user",
-            "content": (
-                f"{problem_description}\n\n"
-                f"- Feature names: {list(X.keys())}\n"
-                f"- Target name: {next(iter(y))}\n"
-                f"Please start by analyzing the data to understand the relationship between features and target."
-            )
+            "content": user_content
         })
         return initial_prompt
 

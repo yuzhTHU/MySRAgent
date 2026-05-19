@@ -162,3 +162,6 @@ playground/
 /data/
 /.agents/
 /CLAUDE.md
+/docs/
+/third-party/nd2py/
+/third-party/sr_scientist/
