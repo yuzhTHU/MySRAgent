@@ -39,7 +39,6 @@ class PySRTool(BaseTool):
 
         Args:
             binary_operators: List of binary operators for PySR to use. Choose from: "+", "-", "*", "/", "^".
-                IMPORTANT: Always include "^" (power operator) unless you are certain the formula has no power/exponent terms.
                 Select operators you believe are relevant to the underlying formula.
             unary_operators: List of unary operators for PySR to use. Choose from: "sin", "cos", "exp", "log", "sqrt", "square", "abs", "tanh", "sign". Select operators based on your hypothesis about the data.
             x: List of input feature names to use. If not specified, all features except target are used.
