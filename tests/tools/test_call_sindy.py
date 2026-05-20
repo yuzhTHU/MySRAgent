@@ -26,7 +26,7 @@ class TestSINDyTool:
 
         result = tool.execute(poly_degree=1)
 
-        assert result["formula"] == "2*(x) + 1"
+        assert result["formula"] == "2 * x + 1"
         assert result["metrics"]["mse"] < 1e-12
         assert result["metrics"]["r2"] == 1.0
         assert result["is_candidate"] is True
@@ -45,7 +45,7 @@ class TestSINDyTool:
 
         result = tool.execute(x=["x**2"], poly_degree=1)
 
-        assert result["formula"] == "4*(x**2) + 0.5"
+        assert result["formula"] == "4 * x ** 2 + 0.5"
         assert result["metrics"]["mse"] < 1e-12
 
     def test_restore_feature_names_does_not_rewrite_inserted_expressions(self, monkeypatch):
@@ -61,7 +61,38 @@ class TestSINDyTool:
 
         result = tool.execute(x=["x2", "z"])
 
-        assert result["formula"] == "(x2) + (z)"
+        assert result["formula"] == "x2 + z"
+        assert result["metrics"]["mse"] < 1e-12
+
+    def test_execute_normalizes_square_in_final_formula(self, monkeypatch):
+        x = np.linspace(-2.0, 2.0, 20)
+        z = np.linspace(-1.0, 1.0, 20)
+        y = (x - z) ** 2
+        tool = make_tool({"x": x, "z": z}, y)
+
+        def fake_run_sindy(self, X, y_fit, x_names, poly_degree, include_trig, threshold):
+            return "square(x1 - x2)"
+
+        monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
+
+        result = tool.execute(x=["x", "z"])
+
+        assert result["formula"] == "(x - z) ** 2"
+        assert result["metrics"]["mse"] < 1e-12
+
+    def test_execute_normalizes_nested_square_in_final_formula(self, monkeypatch):
+        x = np.linspace(-2.0, 2.0, 20)
+        y = np.sin(x) ** 2
+        tool = make_tool({"x": x}, y)
+
+        def fake_run_sindy(self, X, y_fit, x_names, poly_degree, include_trig, threshold):
+            return "square(sin(x1))"
+
+        monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
+
+        result = tool.execute(x=["x"])
+
+        assert result["formula"] == "sin(x) ** 2"
         assert result["metrics"]["mse"] < 1e-12
 
     def test_execute_clamps_config_and_subsamples(self, monkeypatch):
