@@ -1,10 +1,11 @@
+# Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 from __future__ import annotations
-from itertools import count
 import torch
 import logging
 import numpy as np
 import nd2py as nd
 import torch.nn as nn
+from itertools import count
 from typing import List, Mapping, Sequence, Type
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
