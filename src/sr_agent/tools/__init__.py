@@ -10,7 +10,9 @@ from .evaluate_formula import EvaluateTool, SubmitFormulaTool
 from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
 from .code_executor import CodeExecutorTool
-from .skill_document import SkillDocumentTool
+from .read_skill import ReadSkill
+from .create_skill import CreateSkill
+from .edit_skill import EditSkill
 from .call_sindy import SINDyTool
 from .call_pysr import PySRTool
 
@@ -24,7 +26,9 @@ __all__ = [
     "LLMTool",
     "PolynomialFitTool",
     "CodeExecutorTool",
-    "SkillDocumentTool",
+    "ReadSkill",
+    "CreateSkill",
+    "EditSkill",
     "SINDyTool",
     "PySRTool",
 ]
