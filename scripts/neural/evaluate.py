@@ -6,6 +6,7 @@ ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "src" / "experimental"))
 sys.path.insert(0, str(ROOT / "scripts" / "neural"))
 import re
+import os
 import json
 import shlex
 import logging
@@ -17,7 +18,8 @@ from socket import gethostname
 from neural.metrics import evaluate_func
 from neural.data import load_data, sample_indices, build_splits
 from algorithms import get_algorithm, list_algorithms, update_parser
-from sr_agent.utils import add_minus_flags, add_negation_flags, seed_all, setup_logging, tag2ansi
+from bench_server.client import submit_benchmark
+from sr_agent.utils import add_minus_flags, add_negation_flags, seed_all, setup_logging, tag2ansi, df_to_3line
 
 SCRIPT_NAME = Path(__file__).stem
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
@@ -28,15 +30,18 @@ def build_argparser() -> argparse.Namespace:
     parser.add_argument("--algorithm", choices=list_algorithms(), default="linear")
     parser.add_argument("--name", default=SCRIPT_NAME, help="Experiment task name used when auto-generating exp_name.")
     parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
-    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
+    parser.add_argument("--save_dir", default=f"./logs/neural/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
     parser.add_argument("--save_path", default=None, help="Path to save logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode.")
+    parser.add_argument("--bench_server_url", default=os.environ.get("BENCH_SERVER_URL"), help="Optional benchmark server URL. If set, submit results and print the leaderboard.")
+    parser.add_argument("--bench_timeout", type=float, default=10.0, help="Benchmark server request timeout in seconds.")
+    parser.add_argument("--bench_leaderboard_limit", type=int, default=10, help="Number of leaderboard rows to request from the benchmark server.")
 
     parser.add_argument("--data_dir", type=str, default="data/neural/data", help="Directory containing the data files: data.npy, node_info.csv, time_info.csv.")
     parser.add_argument("--n_nodes", type=int, default=256, help="Number of nodes to sample for training & testing. Sampled from the 62130 available nodes.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed to sample nodes. Use -1 for current system time.")
-    parser.add_argument("--stimulus", choices=["all", "Awake", "REM", "NREM"], default="all", help="Which kinds of time steps to use from time_info.csv.")
+    parser.add_argument("--stimulus", choices=["all", "Awake", "REM", "NREM"], default="Awake", help="Which kinds of time steps to use from time_info.csv.")
     parser.add_argument("--sampling_hz", type=float, default=4.0, help="Sampling frequency of the data in Hz, used to convert steps to seconds in evaluation results.")
     parser.add_argument('--normalize', action='store_true', default=True, help="Whether to normalize the data before training.")
     parser.add_argument("--hist_steps", type=int, default=1, help="Number of historical steps required by the algorithm predictor.")
@@ -44,7 +49,7 @@ def build_argparser() -> argparse.Namespace:
 
     args, _ = parser.parse_known_args()
     parser = update_parser(args.algorithm, parser) # 用算法特定的参数更新 parser
-    parser = add_minus_flags(parser) # 允许用 --exp-name 代替 --exp_name
+    parser = add_minus_flags(parser)    # 允许用 --exp-name 代替 --exp_name
     parser = add_negation_flags(parser) # 允许用 --no-debug 表示 debug=False
     return parser
 
@@ -93,6 +98,7 @@ def main(args: argparse.Namespace) -> dict:
     # 评估性能
     _logger.info(f"Evaluating model performance on splits...")
     results_df = []
+    simulations_df = []
     for split_name, (node_idx, time_idx) in splits.items():
         _logger.info(f"Evaluating split {split_name!r} with {len(node_idx)} nodes and {len(time_idx)} time steps...")
         result, simulation = evaluate_func(
@@ -101,21 +107,31 @@ def main(args: argparse.Namespace) -> dict:
             node_info.iloc[node_idx], 
             time_info.iloc[time_idx]
         )
-        result_df = pd.DataFrame.from_dict(result, orient="index").assign(split=split_name).set_index("split", append=True).swaplevel(axis=0)
+        result_df = (
+            pd.DataFrame.from_dict(result, orient="index")
+            .rename_axis(index='metrics')
+            .assign(split=split_name)
+            .set_index("split", append=True)
+            .swaplevel(axis=0)
+        )
+        simulation_df = simulation.assign(split=split_name)
         results_df.append(result_df)
+        simulations_df.append(simulation_df)
         _logger.info(tag2ansi(
             f"[green bold]Evaluation {split_name!r} completed.[reset]\n"
-            "[gray]" + "=" * 60 + "[reset]\n"
-            f"{result_df}\n"
-            "[gray]" + "=" * 60 + "[reset]"
+            f"{df_to_3line(result_df)}\n"
         ))
     results_df = pd.concat(results_df)
+    simulations_df = pd.concat(simulations_df)
     
     # 保存结果
     if args.save_path is not None:
         results_path = Path(args.save_path) / "results.csv"
-        results_df.to_csv(results_path, index=False)
+        results_df.to_csv(results_path)
         _logger.note(f"Results saved to {results_path}")
+        simulations_path = Path(args.save_path) / "simulations.csv"
+        simulations_df.to_csv(simulations_path)
+        _logger.note(f"Simulations saved to {simulations_path}")
     
     # 打印结果
     log = {
@@ -129,12 +145,12 @@ def main(args: argparse.Namespace) -> dict:
         "max_rollout_steps": args.max_rollout_steps,
     }
     log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in log.items()])
+    leaderboard_text = submit_benchmark(args, results_df)
     _logger.note(tag2ansi(
         f"[green bold]Evaluation completed.[reset]\n"
         f"{log}\n"
-        "[gray]" + "=" * 60 + "[reset]\n"
-        f"{results_df}\n"
-        "[gray]" + "=" * 60 + "[reset]"
+        f"{df_to_3line(results_df)}\n"
+        + (f"\n{leaderboard_text}" if leaderboard_text else "")
     ))
 
 
@@ -170,7 +186,7 @@ if __name__ == "__main__":
     if args.seed == -1:
         args.seed = int(datetime.now().timestamp() * 1000) % (2**32 - 1)
     seed_all(args.seed)
-    save_path = Path(args.save_dir) / args.exp_name
+    save_path = Path(args.save_dir) / args.exp_name / args.algorithm
     save_path.mkdir(parents=True, exist_ok=True)
     args.save_path = str(save_path)
     args.command = " ".join(map(shlex.quote, [sys.executable, *sys.argv]))

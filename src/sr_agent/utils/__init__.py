@@ -13,6 +13,7 @@ from .render_markdown import render_markdown
 from .factory_mixin import FactoryMixin
 from .fix_parser import add_minus_flags, add_negation_flags
 from .lazy_loader import setup_lazy_imports, TYPE_CHECKING
+from .df_to_3line import df_to_3line
 
 # 引入可选依赖的子模块
 if TYPE_CHECKING:

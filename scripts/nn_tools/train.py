@@ -603,7 +603,7 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
     parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
-    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and checkpoints.")
+    parser.add_argument("--save_dir", default=f"./logs/nn_tools/{SCRIPT_NAME}", help="Root directory for logs and checkpoints.")
     parser.add_argument("--save_path", default=None, help="Path to save logs and checkpoints. Default is auto-generated from --save_dir and --exp_name.")
     parser.add_argument("--reload_checkpoint", default=None, help="Checkpoint path to reload. Defaults to save_path/checkpoint.pth when it exists.")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

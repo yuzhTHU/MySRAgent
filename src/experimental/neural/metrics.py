@@ -87,11 +87,11 @@ def first_crossing(metrics: pd.DataFrame, column: str, threshold: float) -> dict
 def evaluate_func(args, predict_func, data, node_info, time_info):
     simulation = rollout_metrics(args, predict_func, data, node_info, time_info)
     result = {
-        # "pearson>0.8": first_crossing(simulation, "pearson", 0.8),
+        "pearson>0.8": first_crossing(simulation, "pearson", 0.8),
         "pearson>0.5": first_crossing(simulation, "pearson", 0.5),
         # "pearson>0.0": first_crossing(simulation, "pearson", 0.0),
         # "r2>0.8": first_crossing(simulation, "r2", 0.8),
         "r2>0.5": first_crossing(simulation, "r2", 0.5),
-        # "r2>0.0": first_crossing(simulation, "r2", 0.0),
+        "r2>0.0": first_crossing(simulation, "r2", 0.0),
     }
     return result, simulation
