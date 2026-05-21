@@ -567,7 +567,22 @@ class CodeExecutorTool(BaseTool):
             ),
         )
         started_at = time.monotonic()
-        process.start()
+        for _retry in range(3):
+            try:
+                process.start()
+                break
+            except RuntimeError as e:
+                if "can't start new thread" in str(e) or "Resource temporarily unavailable" in str(e):
+                    import time as _time
+                    _time.sleep(1.0 * (_retry + 1))
+                    if _retry == 2:
+                        return self._failure(
+                            "runtime_error",
+                            f"无法启动子进程（系统资源不足）: {e}",
+                            duration=time.monotonic() - started_at,
+                        )
+                else:
+                    raise
 
         result = None
         deadline = started_at + timeout

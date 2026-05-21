@@ -30,6 +30,7 @@ class EvaluateTool(BaseTool):
         """
         data = self.context['data']
         y = y or self.context['target']
+        y = y.strip().strip('"').strip("'")
         eq_y = nd.parse(y.replace("^", "**").replace('np.', ''))
         eq_f = nd.parse(f.replace("^", "**").replace('np.', ''))
         y_true = eq_y.eval(data)

@@ -129,6 +129,21 @@ class TestSINDyTool:
 
         assert formula == "x1 - 2.5*x1**2"
 
+    def test_quoted_y_parameter_is_stripped(self, monkeypatch):
+        """LLM sometimes passes y with extra quotes like '"omega"'."""
+        x = np.linspace(-2.0, 2.0, 20)
+        omega = 2 * x + 1
+        tool = SINDyTool(data={"x": x, "omega": omega}, target="omega")
+
+        def fake_run_sindy(self, X, y_fit, x_names, poly_degree, include_trig, threshold):
+            return "2*x1 + 1"
+
+        monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
+
+        result = tool.execute(y='"omega"')
+        assert result["metrics"]["mse"] < 1e-12
+        assert result["is_candidate"] is True
+
     def test_metadata_exists(self):
         x = np.array([1.0])
         tool = make_tool({"x": x}, x)

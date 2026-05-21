@@ -98,6 +98,17 @@ class TestPolynomialFitTool:
         assert result.ok is False
         assert "No valid input variables" in result.result_str
 
+    def test_quoted_y_parameter_is_stripped(self):
+        """LLM sometimes passes y with extra quotes like '"omega"'."""
+        x = np.arange(1.0, 6.0)
+        omega = 3 * x + 2
+        tool = PolynomialFitTool(data={"x": x, "omega": omega}, target="omega")
+
+        result = tool.execute(y='"omega"', max_degree=1)
+
+        assert result["metrics"]["r2"] > 0.99
+        assert result["is_candidate"] is True
+
     def test_metadata_exists(self):
         assert self.tool.metadata is not None
         assert self.tool.metadata.name == "polynomial_fit"

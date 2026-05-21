@@ -41,6 +41,7 @@ class PolynomialFitTool(BaseTool):
         """
         data = self.context["data"]
         y = y or self.context["target"]
+        y = y.strip().strip('"').strip("'")
         x = x or [var for var in data if var != y]
         exceptions = []
 
