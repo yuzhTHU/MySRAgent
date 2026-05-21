@@ -8,7 +8,7 @@ from typing import Generator, List, Dict
 from .llm_api import LLMAPI
 from ..utils import log_exception
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(f"sr_agent.{__name__}")
 
 
 class SiliconFlowAPI(LLMAPI):

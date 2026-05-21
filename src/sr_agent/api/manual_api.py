@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Generator, List, Dict
 from .llm_api import LLMAPI
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(f"sr_agent.{__name__}")
 
 
 class ManualAPI(LLMAPI): # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容

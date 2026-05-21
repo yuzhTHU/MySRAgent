@@ -212,12 +212,38 @@ class SINDyTool(BaseTool):
         restored = formula
         replacements = dict(zip(internal_names, original_expressions))
         placeholders = {name: f"__sindy_feature_{idx}__" for idx, name in enumerate(replacements)}
+        restored = self._replace_square_calls(restored)
         for name in sorted(replacements, key=len, reverse=True):
             restored = re.sub(rf"\b{re.escape(name)}\b", placeholders[name], restored)
         for name, expr in replacements.items():
             expr = expr.replace("^", "**").replace("np.", "")
             restored = restored.replace(placeholders[name], f"({expr})")
+        try:
+            restored = nd.parse(restored).to_str()
+        except:
+            _logger.warning(f"Failed to parse restored formula {restored!r}, returning unparsed version.")
         return restored
+
+    @staticmethod
+    def _replace_square_calls(formula: str) -> str:
+        """Replace square(expr) with (expr)**2, preserving nested parentheses."""
+        token = "square("
+        while token in formula:
+            start = formula.find(token)
+            arg_start = start + len(token)
+            depth = 1
+            idx = arg_start
+            while idx < len(formula) and depth:
+                if formula[idx] == "(":
+                    depth += 1
+                elif formula[idx] == ")":
+                    depth -= 1
+                idx += 1
+            if depth:
+                break
+            arg = formula[arg_start:idx - 1]
+            formula = f"{formula[:start]}({arg})**2{formula[idx:]}"
+        return formula
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:

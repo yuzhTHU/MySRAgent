@@ -9,7 +9,7 @@ from .core import ToolCall
 if TYPE_CHECKING:
     from .llm_api import ToolParserName, ToolList
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(f"sr_agent.{__name__}")
 
 
 class ToolCallMixin:

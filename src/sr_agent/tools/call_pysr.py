@@ -272,6 +272,10 @@ class PySRTool(BaseTool):
         for name, expr in replacements.items():
             expr = expr.replace("^", "**").replace("np.", "")
             restored = restored.replace(placeholders[name], f"({expr})")
+        try:
+            restored = nd.parse(restored).to_str()
+        except:
+            _logger.warning(f"Failed to parse restored formula {restored!r}, returning unparsed version.")
         return restored
 
     def _clean_gplearn_formula(self, formula: str) -> str:

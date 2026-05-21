@@ -10,6 +10,7 @@ pip install -e ./third-party/nd2py
 
 # 安装其它依赖
 pip install -e ".[dev]"
+# pip install -e ".[all]" # 安装所有可选依赖，包括 torch, pysr 等安装起来比较复杂的库
 
 # （可选）下载 LLMSR-Bench 数据到本地
 # git clone git@hf.co:datasets/nnheui/llm-srbench ./data/llm-srbench-data

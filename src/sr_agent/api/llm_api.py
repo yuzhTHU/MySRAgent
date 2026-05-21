@@ -12,7 +12,7 @@ from ..parser import BaseParser
 from .core import LLMResult, ToolCall
 from .tool_call_mixin import ToolCallMixin
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(f"sr_agent.{__name__}")
 ToolParserName = Literal["text", "json", "xml", "openai"]
 ToolList = List[BaseTool]
 

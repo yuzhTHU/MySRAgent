@@ -26,8 +26,8 @@ class TestPySRTool:
 
         result = tool.execute(binary_operators=["+", "*"], unary_operators=[])
 
-        assert result["formula"] == "2*(x) + 1"
-        assert result["pareto_front"][0]["formula"] == "2*(x) + 1"
+        assert result["formula"] == "2 * x + 1"
+        assert result["pareto_front"][0]["formula"] == "2 * x + 1"
         assert result["metrics"]["mse"] < 1e-12
         assert result["metrics"]["r2"] == 1.0
         assert result["is_candidate"] is True
@@ -50,7 +50,7 @@ class TestPySRTool:
             x=["x**2"],
         )
 
-        assert result["formula"] == "4*(x**2) + 0.5"
+        assert result["formula"] == "4 * x ** 2 + 0.5"
         assert result["metrics"]["mse"] < 1e-12
 
     def test_restore_feature_names_does_not_rewrite_inserted_expressions(self, monkeypatch):
@@ -66,7 +66,7 @@ class TestPySRTool:
 
         result = tool.execute(binary_operators=["+"], unary_operators=[], x=["x2", "z"])
 
-        assert result["formula"] == "(x2) + (z)"
+        assert result["formula"] == "x2 + z"
         assert result["metrics"]["mse"] < 1e-12
 
     def test_execute_clamps_timeout_and_subsamples(self, monkeypatch):
@@ -112,7 +112,7 @@ class TestPySRTool:
         result = tool.execute(binary_operators=["+"], unary_operators=[])
 
         assert result["method"] == "gplearn"
-        assert result["formula"] == "(x) + 2"
+        assert result["formula"] == "x + 2"
         assert result["metrics"]["mse"] < 1e-12
         assert any("PySR failed" in item for item in result["exceptions"])
 
