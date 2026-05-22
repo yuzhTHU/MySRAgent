@@ -21,7 +21,7 @@ from nn_tools.datasets.generate_eq import BaseEqGenerator
 from nn_tools.datasets.generate_data import BaseDataGenerator
 from nn_tools.datasets.data_eq_dataset import DataEqDataset, InfiniteSampler
 from nn_tools.models import EquationEmbedder, FloatEmbedder, FoundationModel, DataEmbedder
-from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, tag2ansi, NamedTimer, ParallelTimer, log_exception
+from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, tag2ansi, NamedTimer, ParallelTimer, log_exception, format_confusion_matrix
 
 SCRIPT_NAME = Path(__file__).stem
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
@@ -32,20 +32,23 @@ def run_model(
     float_embedder, equation_embedder, data_embedder,
     mode, trainable_params, batch=None, data_loader=None,
 ) -> Dict[str, Any]:
-    if mode == 'train':
+    if not (batch is None) ^ (data_loader is None):
+        raise ValueError("Exactly one of batch or data_loader must be provided.")
+    elif batch is not None:
         batches = (batch,)
-        for module in (model, float_embedder, equation_embedder, data_embedder):
-            module.train()
-    elif mode == 'test':
-        batches = data_loader
-        for module in (model, float_embedder, equation_embedder, data_embedder):
-            module.eval()
     else:
+        batches = data_loader
+    if mode not in {'train', 'test'}:
         raise ValueError(f"Invalid mode: {mode!r}. Must be 'train' or 'test'.")
+    elif mode == 'train':
+        for m in (model, float_embedder, equation_embedder, data_embedder): m.train()
+    else:
+        for m in (model, float_embedder, equation_embedder, data_embedder): m.eval()
 
     total_loss = 0.0
     total_correct = 0
     total_count = 0
+    confusion_matrix = {}
     with torch.set_grad_enabled(mode == "train"):
         for current_batch in batches:
             data = current_batch["data"].to(args.device)
@@ -89,8 +92,18 @@ def run_model(
                     scheduler.step()
 
             count = int(target.numel())
+            pred = logits.argmax(dim=-1)
+            K = logits.shape[-1]
+            tmp = (target.detach().cpu() * K + pred.detach().cpu()).reshape(-1)
+            batch_confusion = torch.bincount(tmp, minlength=K * K).reshape(K, K)
+            for true_id, pred_id in batch_confusion.nonzero().tolist():
+                true_token = equation_embedder.index2token.get(true_id, str(true_id))
+                pred_token = equation_embedder.index2token.get(pred_id, str(pred_id))
+                confusion_matrix.setdefault(true_token, {})
+                confusion_matrix[true_token].setdefault(pred_token, 0)
+                confusion_matrix[true_token][pred_token] += batch_confusion[true_id, pred_id].item()
             total_loss += loss.item() * count
-            total_correct += int((logits.argmax(dim=-1) == target).sum().item())
+            total_correct += int((pred == target).sum().item())
             total_count += count
 
     return {
@@ -98,6 +111,7 @@ def run_model(
         "loss": total_loss / total_count,
         "accuracy": total_correct / total_count,
         "count": total_count,
+        "confusion_matrix": confusion_matrix,
     }
 
 
@@ -121,6 +135,14 @@ def log_epoch(args, train_record, test_record, states) -> str:
     if states.get('total_timer') is not None:
         speed = states['total_timer'].to_str(mode='time', mode_of_detail='speed', mode_of_percent=None)
         lines.append(f"Speed=[gray]{speed}[reset]")
+    if test_record is not None:
+        confusion_matrix_str = format_confusion_matrix(
+            test_record['confusion_matrix'],
+            max_size=args.confusion_matrix_max_size,
+            topk=args.confusion_topk,
+        )
+        if confusion_matrix_str is not None:
+            lines.append(confusion_matrix_str)
     return tag2ansi("\n".join(lines))
 
 
@@ -201,6 +223,7 @@ def main(args):
             pooling=args.data_pooling,
             float_embedder=float_embedder,
         ).to(args.device)
+        _logger.info(f"Embedders initialized. Vocab size={equation_embedder.num_symbol_embeddings}")
     
         # 准备 Dataset / Dataloader
         train_loader = build_dataloader(
@@ -464,9 +487,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--sample_num", type=int, default=100)
     parser.add_argument("--eval_size", type=int, default=128)
     parser.add_argument("--eval_batch_size", type=int, default=16)
-    parser.add_argument("--eval_every", type=int, default=100)
+    parser.add_argument("--eval_every", type=int, default=500)
     parser.add_argument("--test_before_train", action="store_true", help="Run evaluation at step 0 before the first training update.")
     parser.add_argument("--eval_seed", type=int, default=0)
+    parser.add_argument("--confusion_matrix_max_size", type=int, default=20, help="Print the full confusion matrix when vocab size is at most this value.")
+    parser.add_argument("--confusion_topk", type=int, default=20, help="Print this many top confusion errors when the matrix is too large.")
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--max_var_num", type=int, default=3)
     parser.add_argument("--min_depth", type=int, default=2)

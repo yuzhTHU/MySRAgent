@@ -212,7 +212,6 @@ class EquationEmbedder(nn.Module):
 
     PAD_TOKEN = "<PAD>"
     UNK_TOKEN = "<UNK>"
-    NUM_TOKEN = "<NUM>"
 
     def __init__(
         self,
@@ -247,7 +246,7 @@ class EquationEmbedder(nn.Module):
 
         self.pad_token_id = register_token(self.PAD_TOKEN)
         self.unk_token_id = register_token(self.UNK_TOKEN)
-        self.variable_ids = [next(token_id_iter) for _ in range(self.max_variables)]
+        self.variable_ids = [register_token(f'<VAR:{i}>') for i in range(self.max_variables)]
         self.operand_to_id = {op: register_token(op.__name__) for op in self.operands}
         self.num_symbol_embeddings = next(token_id_iter)
         self.symbol_embedding = nn.Embedding(
