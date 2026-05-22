@@ -21,7 +21,7 @@ from nn_tools.datasets.generate_eq import BaseEqGenerator
 from nn_tools.datasets.generate_data import BaseDataGenerator
 from nn_tools.datasets.eq_property_dataset import EqPropertyDataset, InfiniteSampler
 from nn_tools.models import EquationEmbedder, FloatEmbedder, PropertyPredictor, DataEmbedder
-from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, tag2ansi, NamedTimer, ParallelTimer, log_exception, format_confusion_matrix
+from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, tag2ansi, NamedTimer, ParallelTimer, log_exception, format_confusion_matrix, load_model_state
 
 SCRIPT_NAME = Path(__file__).stem
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
@@ -332,25 +332,54 @@ def main(args):
             if 'data_embedder' in checkpoint and data_embedder is not None:
                 data_embedder.load_state_dict(checkpoint['data_embedder'])
             if 'model' in checkpoint:
-                model.load_state_dict(checkpoint['model'])
+                missing_keys, unexpected_keys, mismatched_keys = load_model_state(model, checkpoint['model'])
+                checkpoint_is_full_resume = not missing_keys and not unexpected_keys and not mismatched_keys
+                if missing_keys:
+                    _logger.warning(
+                        "Model checkpoint is missing keys for this PropertyPredictor; "
+                        f"these parameters keep their random initialization: {missing_keys}"
+                    )
+                if unexpected_keys:
+                    _logger.warning(
+                        "Model checkpoint has keys not used by this PropertyPredictor; "
+                        f"ignored keys: {unexpected_keys}"
+                    )
+                if mismatched_keys:
+                    _logger.warning(
+                        "Model checkpoint has shape-mismatched keys for this PropertyPredictor; "
+                        f"these parameters keep their random initialization: {mismatched_keys}"
+                    )
             else:
+                checkpoint_is_full_resume = False
                 _logger.warning("Model state not found in checkpoint; model re-initialized.")
 
-            if 'optimizer' in checkpoint:
+            if checkpoint_is_full_resume and 'optimizer' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer'])
+            elif 'optimizer' in checkpoint:
+                _logger.warning("Optimizer state skipped because the checkpoint is not a full PropertyPredictor resume.")
             else:
                 _logger.warning("Optimizer state not found in checkpoint; optimizer re-initialized.")
 
-            if checkpoint.get('scheduler') is not None and scheduler is not None:
+            if checkpoint_is_full_resume and checkpoint.get('scheduler') is not None and scheduler is not None:
                 scheduler.load_state_dict(checkpoint['scheduler'])
-            elif scheduler is not None:
+            elif checkpoint_is_full_resume and scheduler is not None:
                 _logger.warning("Scheduler is enabled but scheduler state was not found in checkpoint.")
+            elif scheduler is not None:
+                _logger.warning("Scheduler state skipped because the checkpoint is not a full PropertyPredictor resume.")
 
-            states = checkpoint["states"]
-            _logger.note(tag2ansi(
-                f"Checkpoint loaded from [underline green]{checkpoint_path}[reset], "
-                f"resume from step [underline green]{states['step']}[reset]."
-            ))
+            if checkpoint_is_full_resume:
+                states = checkpoint["states"]
+                _logger.note(tag2ansi(
+                    f"Checkpoint loaded from [underline green]{checkpoint_path}[reset], "
+                    f"resume from step [underline green]{states['step']}[reset]."
+                ))
+            else:
+                states = {}
+                _logger.note(tag2ansi(
+                    f"Checkpoint loaded from [underline green]{checkpoint_path}[reset], "
+                    f"but not fully compatible with the current model/optimizer/scheduler; "
+                    f"training resumed with random initialization."
+                ))
 
     ## 训练循环
     start_time = datetime.now()
