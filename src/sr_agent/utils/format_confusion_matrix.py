@@ -22,7 +22,7 @@ def format_confusion_matrix(
     topk: int = 10,
 ) -> Optional[str]:
     if not matrix:
-        return None
+        return "(no confusion matrix data)"
 
     labels = list(matrix)
     seen_labels = set(labels)

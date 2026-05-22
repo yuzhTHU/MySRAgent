@@ -93,18 +93,19 @@ def run_model(
 
             count = int(target.numel())
             pred = logits.argmax(dim=-1)
-            K = logits.shape[-1]
-            tmp = (target.detach().cpu() * K + pred.detach().cpu()).reshape(-1)
-            batch_confusion = torch.bincount(tmp, minlength=K * K).reshape(K, K)
-            for true_id, pred_id in batch_confusion.nonzero().tolist():
-                true_token = equation_embedder.index2token.get(true_id, str(true_id))
-                pred_token = equation_embedder.index2token.get(pred_id, str(pred_id))
-                confusion_matrix.setdefault(true_token, {})
-                confusion_matrix[true_token].setdefault(pred_token, 0)
-                confusion_matrix[true_token][pred_token] += batch_confusion[true_id, pred_id].item()
             total_loss += loss.item() * count
             total_correct += int((pred == target).sum().item())
             total_count += count
+            if args.confusion_matrix:
+                vocab_size = logits.shape[-1]
+                tmp = (target.detach().cpu() * vocab_size + pred.detach().cpu()).reshape(-1)
+                batch_confusion = torch.bincount(tmp, minlength=vocab_size * vocab_size).reshape(vocab_size, vocab_size)
+                for true_id, pred_id in batch_confusion.nonzero().tolist():
+                    true_token = equation_embedder.index2token.get(true_id, str(true_id))
+                    pred_token = equation_embedder.index2token.get(pred_id, str(pred_id))
+                    confusion_matrix.setdefault(true_token, {})
+                    confusion_matrix[true_token].setdefault(pred_token, 0)
+                    confusion_matrix[true_token][pred_token] += batch_confusion[true_id, pred_id].item()
 
     return {
         "mode": mode,
@@ -135,14 +136,13 @@ def log_epoch(args, train_record, test_record, states) -> str:
     if states.get('total_timer') is not None:
         speed = states['total_timer'].to_str(mode='time', mode_of_detail='speed', mode_of_percent=None)
         lines.append(f"Speed=[gray]{speed}[reset]")
-    if test_record is not None:
+    if test_record is not None and args.confusion_matrix:
         confusion_matrix_str = format_confusion_matrix(
             test_record['confusion_matrix'],
             max_size=args.confusion_matrix_max_size,
             topk=args.confusion_topk,
         )
-        if confusion_matrix_str is not None:
-            lines.append(confusion_matrix_str)
+        lines.append(confusion_matrix_str)
     return tag2ansi("\n".join(lines))
 
 
@@ -403,6 +403,7 @@ def main(args):
                     trainable_params=trainable_params,
                     data_loader=eval_loader,
                 )
+
                 # 更新最佳记录 & 耐心值
                 best_record = states["best_record"]
                 if best_record["loss"] is None or eval_record["loss"] < best_record["loss"]:
@@ -425,6 +426,15 @@ def main(args):
                     result['status'] = 'early_stopped'
                     break
                 named_timer.add("eval")
+
+                # 保存结果
+                with open(Path(args.save_path) / "records.jsonl", "a", encoding="utf-8") as f:
+                    if train_record is not None:
+                        json.dump({**train_record, "step": states['step'], 'mode': 'train'}, f, ensure_ascii=False)
+                        f.write("\n")
+                    if eval_record is not None:
+                        json.dump({**eval_record, "step": states['step'], 'mode': 'eval'}, f, ensure_ascii=False)
+                        f.write("\n")
         else:
             result["status"] = "completed"
     except KeyboardInterrupt:
@@ -490,6 +500,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--eval_every", type=int, default=500)
     parser.add_argument("--test_before_train", action="store_true", help="Run evaluation at step 0 before the first training update.")
     parser.add_argument("--eval_seed", type=int, default=0)
+    parser.add_argument('--confusion_matrix', action='store_true', default=True, help="Whether to compute and log the confusion matrix during evaluation.")
     parser.add_argument("--confusion_matrix_max_size", type=int, default=20, help="Print the full confusion matrix when vocab size is at most this value.")
     parser.add_argument("--confusion_topk", type=int, default=20, help="Print this many top confusion errors when the matrix is too large.")
     parser.add_argument("--patience", type=int, default=20)
