@@ -75,7 +75,6 @@ class FoundationModel(nn.Module):
         self,
         data_embedding: torch.Tensor,
         eq_embedding: torch.Tensor,
-        *,
         data_padding_mask: torch.Tensor | None = None,
         eq_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -124,6 +123,8 @@ class FoundationModel(nn.Module):
             score = self.output_attention_score(decoded).squeeze(-1)
             if eq_padding_mask is not None:
                 score = score.masked_fill(eq_padding_mask, float("-inf"))
+                all_masked = eq_padding_mask.all(dim=1)
+                score = score.masked_fill(all_masked.unsqueeze(1), 0.0)
             weight = torch.softmax(score, dim=1).unsqueeze(-1)
             pooled = (decoded * weight).sum(dim=1)
         else:
