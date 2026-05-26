@@ -29,6 +29,10 @@ dependencies = [
     "datasets>=4.8.0",
 ]
 
+[project.scripts]
+sr-agent-download-models = "sr_agent.cli.download_models:main"
+sr-agent-upload-models = "sr_agent.cli.upload_models:main"
+
 [project.optional-dependencies]
 nn = [
     "torch>=2.0.0",

@@ -3,33 +3,34 @@
 
 使用预训练的 Transformer 模型从数据样本中预测公式的数学性质（周期性、乘法可分性），
 为符号回归搜索提供先验知识指导。
+
+可通过下述指令将模型上传到 Github Release（需要设置 GITHUB_TOKEN 环境变量）
+    python -m sr_agent.cli.upload_models --checkpoint path/to/model.pth --name property-scratch
+可通过下述指令从 Github Release 下载模型到本地（或者在首次调用时自动下载）
+    python -m sr_agent.cli.download_models --checkpoint path/to/save/model.pth --name property-scratch
 """
 from __future__ import annotations
 
-import torch
 import logging
+import os
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal
+from ..utils import download_model
 from .base_tool import BaseTool, ToolMetadata
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-_DEFAULT_CHECKPOINTS = {
-    "scratch": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property" / "scratch" / "best.pth",
-    "finetune": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property" / "finetune" / "best.pth",
-}
-
+_MODEL_CACHE_DIR = _PROJECT_ROOT / ".cache" / "nn_tools"
 _PERIOD_LABELS = {0: "non-periodic", 1: "periodic"}
 _SEP_LABELS = {0: "not multiplicatively separable", 1: "multiplicatively separable"}
-
 _cached_model = {}
 
 
 def _load_model(checkpoint_path: str, device: str = "cpu"):
     """Load model from checkpoint with caching to avoid repeated I/O."""
+    import torch
+
     cache_key = (checkpoint_path, device)
     if cache_key in _cached_model:
         return _cached_model[cache_key]
@@ -73,9 +74,12 @@ def _load_model(checkpoint_path: str, device: str = "cpu"):
 class PropertyPredictorTool(BaseTool):
     metadata = ToolMetadata(name="predict_property")
 
-    CHECKPOINT_PATH: str = None
-    MODEL_TYPE: str = "scratch"
+    MODEL_TYPE: Literal[
+        "property-scratch",
+        "property-finetune",
+    ] = "property-scratch"
     DEVICE: str = "cpu"
+    AUTO_DOWNLOAD: bool = True
 
     def execute(self) -> Dict[str, Any]:
         """Predict mathematical properties (periodicity, multiplicative separability) of the data using a neural network.
@@ -91,16 +95,15 @@ class PropertyPredictorTool(BaseTool):
         data = self.context["data"]
         target_name = self.context["target"]
 
-        ckpt_path = self.CHECKPOINT_PATH
-        if ckpt_path is None:
-            ckpt_path = str(_DEFAULT_CHECKPOINTS.get(self.MODEL_TYPE, _DEFAULT_CHECKPOINTS["scratch"]))
-
-        if not Path(ckpt_path).exists():
-            return {
-                "error": f"Model checkpoint not found: {ckpt_path}",
-                "periodicity": {},
-                "multiplicative_separable": "unknown",
-            }
+        ## 加载模型 checkpoint
+        # 优先从 SR_AGENT_PROPERTY_MODEL_CHECKPOINT 路径中加载
+        # 如果该路径不存在则从 GitHub Release 下载到 _MODEL_CACHE_DIR 并加载
+        default_ckpt_path = _MODEL_CACHE_DIR / f"{self.MODEL_TYPE}.pth"
+        ckpt_path = Path(os.getenv("SR_AGENT_PROPERTY_MODEL_CHECKPOINT") or default_ckpt_path).expanduser()
+        if not ckpt_path.exists() and self.AUTO_DOWNLOAD:
+            download_model(name=self.MODEL_TYPE, checkpoint=ckpt_path)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Model checkpoint not found: {ckpt_path}. ")
 
         model, float_emb, data_emb, saved_args = _load_model(ckpt_path, self.DEVICE)
         max_var_num = saved_args.max_var_num
@@ -122,6 +125,8 @@ class PropertyPredictorTool(BaseTool):
         for i, var in enumerate(input_vars):
             data_arr[:, i] = np.asarray(data[var], dtype=np.float32).flatten()[idx]
         data_arr[:, -1] = y_arr[idx]
+
+        import torch
 
         data_tensor = torch.from_numpy(data_arr).unsqueeze(0)
 

@@ -17,6 +17,7 @@ from .lazy_loader import setup_lazy_imports, TYPE_CHECKING
 from .df_to_3line import df_to_3line
 from .format_confusion_matrix import format_confusion_matrix
 from .parse_json_with_template import parse_json_with_template
+from .model_store import get_default, download_model, upload_model
 
 # 引入可选依赖的子模块
 if TYPE_CHECKING:

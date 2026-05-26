@@ -31,6 +31,7 @@ import logging
 import argparse
 import datasets
 import numpy as np
+import nd2py as nd
 from pathlib import Path
 from datetime import datetime
 from socket import gethostname
@@ -176,13 +177,30 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
         ood_metrics = compute_metrics(y_pred=result.predict(X_ood), y_true=y_ood)
 
     # Symbolic Accurate
-    symbolic_acc = get_symbolic_acc(f_true, f_pred, data, return_details=True, llm_provider='openrouter', llm_model='deepseek/deepseek-v4-flash')
-    foo = lambda x: tag2ansi(('[green]EQUIVALENT[reset]' if x is True else '[red]NOT EQUIVALENT[reset]' if x is False else f'[gray]{x!r}[reset]'))
-    _logger.note(
-        f"[{problem.equation_idx}] The predicted formula is judged to be {foo(symbolic_acc['equivalent'])} since {symbolic_acc.get('reason')}:"
-        f"  f_true = {f_true.to_str()}\n"
-        f"  f_pred = {f_pred.to_str()}"
-    )
+    try:
+        data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
+        f_true = nd.parse(problem.expression.replace("^", "**").replace("np.", ""))
+        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", ""))
+        symbolic_acc = get_symbolic_acc(
+            f_true,
+            f_pred,
+            data,
+            return_details=True,
+            llm_provider='openrouter',
+            llm_model='deepseek/deepseek-v4-flash',
+        )
+        foo = lambda x: tag2ansi(('[green]EQUIVALENT[reset]' if x is True else '[red]NOT EQUIVALENT[reset]' if x is False else f'[gray]{x!r}[reset]'))
+        _logger.note(
+            f"[{problem.equation_idx}] The predicted formula is judged to be {foo(symbolic_acc['equivalent'])} since {symbolic_acc.get('reason')}:\n"
+            f"  f_true = {f_true.to_str()}\n"
+            f"  f_pred = {f_pred.to_str()}"
+        )
+    except Exception as e:
+        symbolic_acc = {
+            "equivalent": None,
+            "reason": f"symbolic accuracy check failed: [{type(e).__name__}] {e}",
+        }
+        _logger.warning(f"[{problem.equation_idx}] Symbolic accuracy check failed: {log_exception(e)}")
 
     return {
         "equation_id": problem.equation_idx,
@@ -206,7 +224,7 @@ def log_result(result: Dict):
     lines.append(f'[gray]{"-" * 50}')
     lines.append(f"[blue]GT: [green]{result['gt_expression']}[reset]")
     lines.append(f"[blue]Discovered: [red]{result['discovered_expression']}[reset]")
-    if symbolic_acc := result.get("symbolic_acc") is None:
+    if (symbolic_acc := result.get("symbolic_acc")) is None:
         lines.append(f"[blue]Symbolic Accurate:[reset] [gray]N/A[reset]")
     elif symbolic_acc:
         lines.append(f"[blue]Symbolic Accurate:[reset] [green]Yes[reset]")
@@ -255,7 +273,7 @@ def aggregate_results(results: List[Dict]) -> Dict:
         "dataset": results[0].get("equation_id", "").split("_")[0] if results else "",
         "total_problems": n,
         "avg_search_time": float(np.mean([r["search_time"] for r in results])),
-        "avg_symbolic_acc": float(np.mean([r.get("symbolic_acc", False) for r in results])),
+        "avg_symbolic_acc": float(np.mean([r.get("symbolic_acc") is True for r in results])),
         "r2_hit_rates": r2_hit_rates,
     }
     summary["id_metrics"] = {
