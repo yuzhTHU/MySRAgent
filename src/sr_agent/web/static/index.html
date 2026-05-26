@@ -881,7 +881,7 @@
         icon.style.background = toolColor(item.name);
         icon.title = item.display_name || displayToolName(item.name);
         icon.textContent = toolInitial(item.name);
-        if (Number(item.output_count || 0) > 1) {
+        if (Number(item.output_count || 0) > 0) {
           const badge = document.createElement("span");
           badge.className = "tool-badge";
           badge.textContent = item.output_count;
