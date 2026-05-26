@@ -48,7 +48,7 @@ from tqdm import tqdm
 from sr_agent.utils import symbolic_acc, setup_logging
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
-setup_logging()
+setup_logging(info_level='debug')
 
 
 for idx, row in tqdm(df_results.iterrows(), total=len(df_results), disable=True):
@@ -61,6 +61,8 @@ for idx, row in tqdm(df_results.iterrows(), total=len(df_results), disable=True)
     f_true = nd.parse(row['gt_expression'])
     f_pred = nd.parse(row['discovered_expression'])
     data = {var: problem.samples['train'][:, idx] for idx, var in enumerate(problem.symbols)}
-    result = symbolic_acc(f_true, f_pred, data, return_details=True)
+    result = symbolic_acc(f_true, f_pred, data, return_details=True, llm_provider='openrouter', llm_model='deepseek/deepseek-v4-flash')
     df_results.loc[idx, 'symbolic_acc'] = result['equivalent']
     _logger.info(f"[{idx+1}/{len(df_results)}] Problem ID: {row['equation_id']}, Symbolic Accuracy: {result['equivalent']}, Reason: {result['reason']}")
+
+_logger.note(f"Symbolic accuracy evaluation completed for {len(df_results)} problems, accuracy: {df_results['symbolic_acc'].mean():.2%}")

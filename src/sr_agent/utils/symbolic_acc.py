@@ -15,13 +15,13 @@ from typing import Any, Mapping, Sequence
 from itertools import combinations, product
 from typing import Any, Dict, Tuple, Sequence
 
-__all__ = [ "symbolic_acc" ]
+__all__ = [ "get_symbolic_acc" ]
 _logger = logging.getLogger(f"sr_agent.{__name__}")
 
 
 def llm_judge_equivalence(
-    f_pred: nd.Symbol,
     f_true: nd.Symbol,
+    f_pred: nd.Symbol,
     ranges: Dict[str, Tuple[float, float]],
     llm_provider,
     llm_model,
@@ -39,8 +39,8 @@ def llm_judge_equivalence(
         f"Accept tiny numeric constant differences, for example 3.999999 may be treated as 4 and 0.00001 may be treated as 0."
         f"Also accept domain-specific equivalence over the provided ranges, such as abs(a) == a if the ranges imply a >= 0."
         f""
-        f"Return only JSON in this schema:"
-        f"{{'equivalent': true/false, 'reason': 'brief explanation'}}"
+        f"Return a JSON in this schema:"
+        f"{{'reason': 'brief analysis', 'equivalent': true/false}}"
     )})
     messages.append({'role': 'user', 'content': (
         f"Ground truth:"
@@ -58,7 +58,8 @@ def llm_judge_equivalence(
         try:
             for content, _, _ in api(messages, n=1, max_tokens=1024, temperature=0.0):
                 pass
-            return parse_json_with_template(content, {'equivalent': bool, 'reason': str})
+            _logger.debug(f"Response: {content!r}")
+            return parse_json_with_template(content, {'reason': str, 'equivalent': bool})
         except Exception as e:
             _logger.trace(f"Failed to parse LLM response: [{type(e).__name__}]{str(e)}. Response was: {content}")
             time.sleep(retry_timeout)
@@ -139,9 +140,9 @@ def my_nsimplify(
     return ans[0] if is_single else ans
 
 
-def symbolic_acc(
-    f_pred: nd.Symbol,
+def get_symbolic_acc(
     f_true: nd.Symbol,
+    f_pred: nd.Symbol,
     data: Dict[str, np.ndarray],
     atol = 1e-8,
     rtol = 1e-6,

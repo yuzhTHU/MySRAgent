@@ -111,10 +111,10 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         if args.debug: raise
     finally:
         result["duration_seconds"] = (datetime.now() - datetime.strptime(result["start_time"], "%Y-%m-%d %H:%M:%S")).total_seconds()
-        result["times_usage"] = agent.named_timer.to_str(mode='time', mode_of_detail='pace', mode_of_percent='by_time')
-        result["token_usage"] = agent.token_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
-        result["money_usage"] = agent.money_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
-        result["tools_usage"] = agent.tools_counter.to_str(mode='count', mode_of_detail='count', mode_of_percent='by_count')
+        result["times_usage"] = agent.named_timer.named_time
+        result["token_usage"] = agent.token_counter.count
+        result["money_usage"] = agent.money_counter.count
+        result["tools_usage"] = agent.tools_counter.named_count
         # 打印日志
         log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items()])
         _logger.note(tag2ansi(

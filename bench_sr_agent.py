@@ -37,7 +37,7 @@ from socket import gethostname
 from typing import Any, Callable, Dict, List, Optional
 from scipy.stats import kendalltau
 from sklearn.metrics import mean_absolute_percentage_error
-from sr_agent.utils import setup_logging, log_exception, tag2ansi, seed_all, add_minus_flags, add_negation_flags
+from sr_agent.utils import setup_logging, log_exception, tag2ansi, seed_all, add_minus_flags, add_negation_flags, get_symbolic_acc
 from run_sr_agent import build_argparser as build_sragent_argparser, sanitize_filename, save_args
 from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult, Problem
 from sr_agent._vendor.llmsr_bench.algorithms import get_update_parser, get_algorithm, list_algorithms
@@ -176,14 +176,13 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
         ood_metrics = compute_metrics(y_pred=result.predict(X_ood), y_true=y_ood)
 
     # Symbolic Accurate
-    try:
-        import sympy
-        eq1 = sympy.sympify(result.expression)
-        eq2 = sympy.sympify(problem.expression)
-        diff = sympy.simplify(eq1 - eq2)
-        symbolic_acc = True if diff == 0 else False
-    except:
-        symbolic_acc = False
+    symbolic_acc = get_symbolic_acc(f_true, f_pred, data, return_details=True, llm_provider='openrouter', llm_model='deepseek/deepseek-v4-flash')
+    foo = lambda x: tag2ansi(('[green]EQUIVALENT[reset]' if x is True else '[red]NOT EQUIVALENT[reset]' if x is False else f'[gray]{x!r}[reset]'))
+    _logger.note(
+        f"[{problem.equation_idx}] The predicted formula is judged to be {foo(symbolic_acc['equivalent'])} since {symbolic_acc.get('reason')}:"
+        f"  f_true = {f_true.to_str()}\n"
+        f"  f_pred = {f_pred.to_str()}"
+    )
 
     return {
         "equation_id": problem.equation_idx,
@@ -195,7 +194,8 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
         "search_time": search_time,
         "id_metrics": id_metrics,
         "ood_metrics": ood_metrics,
-        "symbolic_acc": symbolic_acc
+        "symbolic_acc": symbolic_acc['equivalent'],
+        "symbolic_acc_detail": symbolic_acc['reason'],
     }
 
 
