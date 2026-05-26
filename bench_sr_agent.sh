@@ -35,7 +35,7 @@ python bench_sr_agent.py \
 
 python bench_sr_agent.py \
     --dataset lsrtransform \
-    --exp_name bench_my_sr_agent \
+    --exp_name bench_my_sr_agent-v4-flash \
     -R 2 -C 2 -L 5 -K 2 \
     --llm_provider openrouter \
     --llm_model "deepseek/deepseek-v4-flash"

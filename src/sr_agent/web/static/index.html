@@ -62,8 +62,97 @@
     main {
       height: calc(100vh - 56px);
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 410px;
+      grid-template-columns: 280px minmax(0, 1fr) 410px;
       min-height: 0;
+    }
+    main.run-collapsed {
+      grid-template-columns: 58px minmax(0, 1fr) 410px;
+    }
+    .run-panel {
+      min-width: 0;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      padding: 12px;
+    }
+    .run-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+      font-weight: 650;
+      cursor: pointer;
+      user-select: none;
+    }
+    .run-panel.collapsed {
+      width: 42px;
+      padding: 12px 8px;
+    }
+    .run-panel.collapsed .run-tree {
+      display: none;
+    }
+    .run-panel.collapsed .run-panel-title {
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+    }
+    .run-toggle {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 7px solid #334155;
+      transition: transform 120ms ease;
+    }
+    .run-panel.collapsed .run-toggle {
+      transform: rotate(-90deg);
+    }
+    .run-tree {
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .tree-node {
+      margin: 2px 0;
+    }
+    .tree-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 24px;
+      padding: 2px 4px;
+      border-radius: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .tree-row:hover {
+      background: #eef2f7;
+    }
+    .tree-row.active {
+      background: #dfeeea;
+      color: #0f5f56;
+      font-weight: 650;
+    }
+    .tree-children {
+      margin-left: 14px;
+    }
+    .tree-node.collapsed > .tree-children {
+      display: none;
+    }
+    .tree-caret {
+      width: 12px;
+      color: #64748b;
+      flex: 0 0 12px;
+    }
+    .tree-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .tree-meta {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 11px;
     }
     #graph-wrap {
       position: relative;
@@ -355,7 +444,10 @@
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
     }
     @media (max-width: 900px) {
-      main { grid-template-columns: 1fr; grid-template-rows: minmax(430px, 58vh) minmax(320px, 1fr); }
+      main { grid-template-columns: 1fr; grid-template-rows: auto minmax(430px, 58vh) minmax(320px, 1fr); }
+      .run-panel { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
+      .run-panel.collapsed { width: auto; }
+      .run-panel.collapsed .run-panel-title { writing-mode: horizontal-tb; transform: none; }
       aside { border-left: 0; border-top: 1px solid var(--line); }
       header { flex-wrap: wrap; }
       .legend { position: static; width: auto; margin: 10px; }
@@ -365,7 +457,6 @@
 <body>
   <header>
     <h1>SR Agent Search Viewer</h1>
-    <select id="run-select" aria-label="Run"></select>
     <button id="refresh">Refresh</button>
     <button id="layout">Auto Layout</button>
     <button id="weak-edges">Hide Weak Edges</button>
@@ -379,6 +470,13 @@
     <span id="status" class="muted"></span>
   </header>
   <main>
+    <nav id="run-panel" class="run-panel" aria-label="Runs">
+      <div id="run-panel-header" class="run-panel-header">
+        <span class="run-toggle"></span>
+        <span class="run-panel-title">Runs</span>
+      </div>
+      <div id="run-tree" class="run-tree"></div>
+    </nav>
     <section id="graph-wrap">
       <div id="legend" class="legend">
         <strong id="legend-title"><span class="legend-toggle"></span><span>Legend</span></strong>
@@ -420,7 +518,6 @@
     const ROOT_PREFIX = "__root__:";
     const LEVEL_GAP = 118;
     const SIBLING_GAP = 64;
-    const runSelect = document.getElementById("run-select");
     const refreshButton = document.getElementById("refresh");
     const layoutButton = document.getElementById("layout");
     const weakEdgesButton = document.getElementById("weak-edges");
@@ -429,6 +526,10 @@
     const exportButton = document.getElementById("export");
     const legend = document.getElementById("legend");
     const legendTitle = document.getElementById("legend-title");
+    const main = document.querySelector("main");
+    const runPanel = document.getElementById("run-panel");
+    const runPanelHeader = document.getElementById("run-panel-header");
+    const runTree = document.getElementById("run-tree");
     const statusEl = document.getElementById("status");
     const svg = document.getElementById("graph");
     const state = {
@@ -442,7 +543,9 @@
       panning: null,
       view: { x: 0, y: 0, scale: 1 },
       showWeakEdges: true,
-      showLabels: true
+      showLabels: true,
+      runs: [],
+      collapsedRunNodes: new Set()
     };
     const mathJaxReady = new Promise(resolve => {
       const wait = () => {
@@ -470,7 +573,10 @@
     });
     exportButton.addEventListener("click", () => exportScene(exportFormat.value));
     legendTitle.addEventListener("click", () => legend.classList.toggle("collapsed"));
-    runSelect.addEventListener("change", () => selectRun(runSelect.value));
+    runPanelHeader.addEventListener("click", () => {
+      runPanel.classList.toggle("collapsed");
+      main.classList.toggle("run-collapsed", runPanel.classList.contains("collapsed"));
+    });
     svg.addEventListener("pointermove", onPointerMove);
     svg.addEventListener("pointerup", onPointerUp);
     svg.addEventListener("pointerleave", onPointerUp);
@@ -479,23 +585,113 @@
 
     async function loadRuns() {
       const data = await fetchJson("/api/runs");
-      runSelect.innerHTML = "";
-      for (const run of data.runs) {
-        const option = document.createElement("option");
-        option.value = run.run_id;
-        option.textContent = `${run.run_id} (${run.record_count})`;
-        runSelect.appendChild(option);
-      }
-      if (data.runs.length && (!state.runId || !data.runs.some(run => run.run_id === state.runId))) {
-        selectRun(data.runs[0].run_id);
+      state.runs = data.runs || [];
+      renderRunTree(state.runs);
+      if (data.runs.length && (!state.runId || !data.runs.some(run => runKey(run) === state.runId))) {
+        selectRun(runKey(data.runs[0]));
       }
       statusEl.textContent = data.runs.length ? "" : "No runs with records.jsonl found";
+    }
+
+    function renderRunTree(runs) {
+      runTree.innerHTML = "";
+      if (!runs.length) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.textContent = "No records.jsonl found.";
+        runTree.appendChild(empty);
+        return;
+      }
+      const tree = buildRunTree(runs);
+      runTree.appendChild(renderTreeChildren(tree.children));
+    }
+
+    function buildRunTree(runs) {
+      const root = { name: "", key: "", children: new Map(), run: null };
+      for (const run of runs) {
+        const parts = runPathParts(run);
+        let node = root;
+        let pathKey = "";
+        for (const part of parts) {
+          pathKey = pathKey ? `${pathKey}/${part}` : part;
+          if (!node.children.has(part)) {
+            node.children.set(part, { name: part, key: pathKey, children: new Map(), run: null });
+          }
+          node = node.children.get(part);
+        }
+        node.run = run;
+      }
+      return root;
+    }
+
+    function runPathParts(run) {
+      const path = String(run.path || run.run_id || "").replaceAll("\\", "/");
+      const marker = "/logs/";
+      const index = path.toLowerCase().lastIndexOf(marker);
+      const rel = index >= 0 ? path.slice(index + marker.length) : (run.run_id || path.split("/").pop());
+      return rel.split("/").filter(Boolean);
+    }
+
+    function runKey(run) {
+      return run.run_key || run.run_id;
+    }
+
+    function renderTreeChildren(children) {
+      const container = document.createElement("div");
+      [...children.values()]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .forEach(node => container.appendChild(renderTreeNode(node)));
+      return container;
+    }
+
+    function renderTreeNode(node) {
+      const wrap = document.createElement("div");
+      wrap.className = "tree-node";
+      if (!node.run && state.collapsedRunNodes.has(node.key)) wrap.classList.add("collapsed");
+      const row = document.createElement("div");
+      row.className = "tree-row";
+      if (node.run && runKey(node.run) === state.runId) row.classList.add("active");
+      const caret = document.createElement("span");
+      caret.className = "tree-caret";
+      caret.textContent = node.children.size
+        ? (wrap.classList.contains("collapsed") ? "▸" : "▾")
+        : "•";
+      const name = document.createElement("span");
+      name.className = "tree-name";
+      name.textContent = node.name;
+      row.append(caret, name);
+      if (node.run) {
+        const meta = document.createElement("span");
+        meta.className = "tree-meta";
+        meta.textContent = node.run.record_count;
+        row.appendChild(meta);
+        row.addEventListener("click", event => {
+          event.stopPropagation();
+          selectRun(runKey(node.run));
+        });
+      } else {
+        row.addEventListener("click", event => {
+          event.stopPropagation();
+          wrap.classList.toggle("collapsed");
+          if (wrap.classList.contains("collapsed")) state.collapsedRunNodes.add(node.key);
+          else state.collapsedRunNodes.delete(node.key);
+          caret.textContent = wrap.classList.contains("collapsed") ? "▸" : "▾";
+        });
+      }
+      wrap.appendChild(row);
+      if (node.children.size) {
+        const childWrap = renderTreeChildren(node.children);
+        childWrap.className = "tree-children";
+        wrap.appendChild(childWrap);
+      }
+      return wrap;
     }
 
     async function selectRun(runId) {
       if (!runId) return;
       if (state.source) state.source.close();
       state.runId = runId;
+      renderRunTree(state.runs);
       state.records.clear();
       state.positions.clear();
       state.userMoved.clear();

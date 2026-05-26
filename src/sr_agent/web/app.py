@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
             record_count, last_seq = _record_stats(run_dir / "records.jsonl")
             runs.append({
                 "run_id": run_dir.name,
+                "run_key": _run_key(app.state.log_dir, run_dir),
                 "path": str(run_dir),
                 "manifest": manifest,
                 "record_count": record_count,
@@ -103,11 +105,23 @@ def _iter_run_dirs(log_dir: Path):
 
 
 def _resolve_run_dir(log_dir: Path, run_id: str) -> Path:
-    matches = [path for path in _iter_run_dirs(log_dir) if path.name == run_id]
+    matches = [
+        path
+        for path in _iter_run_dirs(log_dir)
+        if path.name == run_id or _run_key(log_dir, path) == run_id
+    ]
     if not matches:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     matches.sort(key=lambda path: (path / "records.jsonl").stat().st_mtime, reverse=True)
     return matches[0]
+
+
+def _run_key(log_dir: Path, run_dir: Path) -> str:
+    try:
+        rel = run_dir.resolve().relative_to(log_dir.resolve()).as_posix()
+    except ValueError:
+        rel = run_dir.resolve().as_posix()
+    return base64.urlsafe_b64encode(rel.encode("utf-8")).decode("ascii").rstrip("=")
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
