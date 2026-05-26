@@ -4,6 +4,7 @@
 提供符号回归 Agent 的基础框架，包括主循环 Pipeline 和工具调用机制。
 """
 from __future__ import annotations
+import uuid
 import json
 import heapq
 import logging
@@ -12,8 +13,9 @@ from pathlib import Path
 from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
 from joblib import Parallel, delayed
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from .api.llm_api import LLMAPI
 from .parser import BaseParser
 from .api.core import ToolCall
@@ -21,6 +23,7 @@ from .tools import BaseTool, ToolCallResult
 from .utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
 from .utils.logger import setup_logging
 from .utils import render_python, render_markdown, tag2ansi
+from .web import SearchRecordWriter
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
 
@@ -103,6 +106,7 @@ class SRAgent(FactoryMixin):
         self.money_counter = ParallelTimer(unit='$') # 费用统计
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
+        self.search_record_writer = SearchRecordWriter(save_path, self)
 
         _logger.info(f"Initialized {self.__class__.__name__}")
 
@@ -165,14 +169,17 @@ class SRAgent(FactoryMixin):
                 _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
                 # 用平凡结果或者历史最佳结果构建新的 initial prompt
-                initial_prompt = self.build_initial_prompt(problem_description, X, y, topk_records)
+                restart_records = heapq.nsmallest(self.restart_top_k, topk_records)
+                initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
+                initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, record in restart_records}
                 self.named_timer.add('build_initial_prompt')
 
                 for C in range(1, self.global_width + 1):  # C 次独立重复对话
                     _logger.info(f"(R={R}/{self.max_restart_loop}) × Global Branch (C={C}/{self.global_width})")
                 
-                    # 用 initial prompt 初始化 buffer
+                    # 用 initial prompt 初始化 buffer, node_parent 记录当前 buffer 对应的 parent node_id list.
                     buffer = deepcopy(initial_prompt)
+                    node_parents = deepcopy(initial_node_parents)
                     self.named_timer.add('init_buffer')
 
                     for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
@@ -186,7 +193,7 @@ class SRAgent(FactoryMixin):
                         self.named_timer.add('build_prompt')
 
                         # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组
-                        response_list = self.request_llm(prompt, R=R, L=L, C=C)
+                        response_list, usage = self.request_llm(prompt, R=R, L=L, C=C)
                         self.named_timer.add('request_llm')
 
                         # Step 3: 执行 Tool Calls 得到 Results
@@ -194,7 +201,10 @@ class SRAgent(FactoryMixin):
                         self.named_timer.add('get_results')
 
                         # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
-                        buffer = self.update_buffer(buffer, response_list, results_list, R=R, L=L, C=C)
+                        buffer, node_parents = self.update_buffer(
+                            buffer, response_list, results_list,
+                            node_parents, prompt, usage, R, L, C,
+                        )
                         self.named_timer.add('update_buffer')
 
                         # Step 5: 更新 top-k 最优结果
@@ -228,20 +238,19 @@ class SRAgent(FactoryMixin):
             e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C)}
             raise
 
-    def build_initial_prompt(self, problem_description, X, y, topk_record):
+    def build_initial_prompt(self, problem_description, X, y, restart_records):
         """根据历史最佳结果构建新的 initial prompt。
 
         当 topk_record 非空时（即 R > 1 的重启轮次），会将之前探索过的最优公式
         及其指标作为上下文注入 prompt，并设置一个更严格的 MSE 目标，引导 LLM
         在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
         """
-        top_records = heapq.nsmallest(self.restart_top_k, topk_record)
         initial_prompt = []
 
         # 根据是否有历史最优结果来动态设置 MSE 目标
-        if not top_records:
+        if not restart_records:
             mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-        elif (best_mse := top_records[0][-1]['mse']) > 0:
+        elif (best_mse := restart_records[0][-1]['mse']) > 0:
             target_mse = best_mse * 0.1
             mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
         else:
@@ -266,12 +275,12 @@ class SRAgent(FactoryMixin):
         )
 
         # 如果有历史最优结果，注入作为参考上下文
-        if top_records:
+        if restart_records:
             user_content += (
                 "\n--- Previously Explored Formulas (from best to worst) ---\n"
                 "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
             )
-            for priority, sequence, record in top_records:
+            for priority, sequence, record in restart_records:
                 formula = record.get('formula', 'N/A')
                 mse = record.get('mse', float('inf'))
                 r2 = record.get('r2', None)
@@ -331,8 +340,8 @@ class SRAgent(FactoryMixin):
                 f"LLM tool calls: ({len(tool_calls)} tool calls)"
             )
             _logger.debug(tool_calls_for_log)
-        self.record_llm_result(llm_result, R=R, L=L, C=C)
-        return response_list
+        usage = self.record_llm_result(llm_result, R=R, L=L, C=C)
+        return response_list, usage
     
     def get_results(self, response_list, R: int, L: int, C: int):
         """执行 Tool Calls 得到 Results。"""
@@ -368,48 +377,66 @@ class SRAgent(FactoryMixin):
                     f.write('\n')
         return results_list
     
-    def update_buffer(self, buffer, response_list, results_list, R: int, L: int, C: int):
+    def update_buffer(
+        self,
+        buffer: List[Dict[str, Any]],
+        response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
+        results_list: List[List[ToolCallResult]],
+        node_parents: Dict[str, str],
+        prompt: List[Dict[str, Any]],
+        usage: Dict[str, Any],
+        R: int,
+        L: int,
+        C: int,
+    ):
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
         # 如果没有成功的回复，跳过本轮更新
         if len(response_list) == 0:
-            return buffer
+            return buffer, node_parents
+        # 记录本轮搜索迭代的原始数据和选中分支信息，供后续分析和可视化使用
+        self.record_search_iteration(response_list, results_list, node_parents, prompt, usage, R, L, C)
+        node_parents = {}
         # 选择产生了最佳 mse 的 tool_call 所在的 response 分支
-        selected_idx = 0
+        selected_K = 1
         selected_mse = float('inf')
-        for results_idx, results in enumerate(results_list):
+        for K, results in enumerate(results_list, 1):
             for result in results:
                 if (metrics := result.get('metrics')) is not None and metrics['mse'] < selected_mse:
-                    selected_idx = results_idx
+                    selected_K = K
                     selected_mse = metrics['mse']
-        _logger.info(f"Selected LLM branch: {selected_idx + 1}/{len(results_list)}")
-        _, tool_calls, message = response_list[selected_idx]
-        results = results_list[selected_idx]
+        node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=selected_K)] = 'direct_parent'
+        _logger.info(f"Selected LLM branch: {selected_K}/{len(results_list)}")
+        _, tool_calls, message = response_list[selected_K - 1]
+        results = results_list[selected_K - 1]
         tool_calls = tool_calls.copy()
         message = deepcopy(message)
         results = results.copy()
         # 将其他 (tool_call, result) pairs 中不涉及 formula & metrics 的 pair 也加入 buffer, 以免丢失有用信息
-        for idx, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list)):
+        for K, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list), 1):
             for tool_call, result in zip(extra_tool_calls, extra_results):
                 # 只考虑不涉及 formula & metrics 的工具调用结果
-                if idx == selected_idx or result.get('metrics') is not None:
+                if K == selected_K or result.get('metrics') is not None:
                     continue
                 tool_calls.append(tool_call)
                 results.append(result)
                 # 对于 openai parser, 将 extra_message['tool_calls'] 拼到 message 中
                 if self.tool_parser == 'openai':
+                    if not isinstance(message.get('tool_calls'), list):
+                        message['tool_calls'] = []
                     message['tool_calls'].append(tool_call.raw)
                 # 对于 non-openai parser, 将 tool_calls 拼到 content 中
                 else:
                     message['content'] += "\n\n" + tool_call.raw_str
+                node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=K)] = 'tool_call_parent'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
         buffer.append(message)
         buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
-        return buffer
+        return buffer, node_parents
 
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
-        for idx in range(len(response_list)):
-            for act, res in zip(response_list[idx][1], results_list[idx]):
+        for K in range(1, len(response_list) + 1):
+            for act, res in zip(response_list[K - 1][1], results_list[K - 1]):
                 if res.result.get('is_candidate'):
                     record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
@@ -417,6 +444,7 @@ class SRAgent(FactoryMixin):
                         "rmse": res.result['metrics'].get('rmse'),
                         "mae": res.result['metrics'].get('mae'),
                         "r2": res.result['metrics'].get('r2'),
+                        "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
                     priority = res.result['metrics']['mse'] # 按照 mse 排序 (越小越重要)
                     sequence = len(topk_records) # 相同 priority 时按照 sequence 排序 (越小越重要)
@@ -461,6 +489,25 @@ class SRAgent(FactoryMixin):
                     "usage": usage,
                 }, f)
                 f.write('\n')
+        return usage
+    
+    def record_search_iteration(
+        self, response_list, results_list, parent_nodes, prompt, usage, R, L, C,
+    ):
+        """Record one visualization node for each local sample."""
+        parents = []
+        for parent_node_id, relation in parent_nodes.items():
+            if relation == 'restart_parent':
+                parents.append(self.search_record_writer.node_parent(parent_node_id, "restart_parent", "strong"))
+            elif relation == 'direct_parent':
+                parents.append(self.search_record_writer.node_parent(parent_node_id, "direct_parent", "strong"))
+            elif relation == 'tool_call_parent':
+                parents.append(self.search_record_writer.node_parent(parent_node_id, "tool_call_parent", "weak"))
+            else:
+                _logger.warning(f"Unknown parent relation: {relation} for node_id: {parent_node_id}.")
+                parents.append(self.search_record_writer.node_parent(parent_node_id, relation, "strong"))
+
+        self.search_record_writer.record_iteration(response_list, results_list, parents, prompt, usage, R, L, C)
 
     def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
         """执行 Action。"""

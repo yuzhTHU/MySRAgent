@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SR Agent Search Viewer</title>
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [["\\(", "\\)"], ["$", "$"]],
+        displayMath: [["\\[", "\\]"], ["$$", "$$"]]
+      },
+      svg: { fontCache: "global" },
+      startup: { typeset: false }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #1e252f;
+      --muted: #687385;
+      --line: #d8dee8;
+      --edge: #7f8b9d;
+      --root: #263238;
+      --accent: #157a6e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    select, button {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 10px;
+      font: inherit;
+    }
+    button { cursor: pointer; }
+    main {
+      height: calc(100vh - 56px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 410px;
+      min-height: 0;
+    }
+    #graph-wrap {
+      position: relative;
+      min-width: 0;
+      overflow: auto;
+      cursor: grab;
+      background:
+        linear-gradient(#edf1f5 1px, transparent 1px),
+        linear-gradient(90deg, #edf1f5 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    #graph-wrap:active { cursor: grabbing; }
+    svg {
+      display: block;
+      min-width: 100%;
+      min-height: 100%;
+      user-select: none;
+    }
+    .edge {
+      fill: none;
+      stroke: var(--edge);
+      stroke-width: 1.6;
+      opacity: 0.68;
+    }
+    .edge.weak {
+      stroke-dasharray: 6 6;
+      opacity: 0.45;
+    }
+    .edge.root {
+      stroke: #5c6674;
+      opacity: 0.5;
+    }
+    .node {
+      cursor: grab;
+      stroke: #ffffff;
+      stroke-width: 2;
+      filter: drop-shadow(0 1px 2px rgba(20, 30, 40, 0.24));
+    }
+    .node:active { cursor: grabbing; }
+    .node.root { fill: var(--root); }
+    .node-label {
+      pointer-events: none;
+      fill: #334155;
+      font-size: 11px;
+      text-anchor: middle;
+    }
+    .root-label {
+      fill: #17202a;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .legend {
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      width: 260px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 4px 16px rgba(20, 30, 40, 0.08);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .legend strong {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .legend-toggle {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 7px solid #334155;
+      transition: transform 120ms ease;
+    }
+    .legend.collapsed .legend-toggle {
+      transform: rotate(-90deg);
+    }
+    .legend.collapsed .legend-body {
+      display: none;
+    }
+    .legend-row {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      margin: 7px 0;
+    }
+    .sample {
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .sample.node-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #718096;
+      border: 2px solid #fff;
+    }
+    .sample.line {
+      width: 28px;
+      height: 0;
+      border-top: 2px solid var(--edge);
+    }
+    .sample.line.weak {
+      border-top-style: dashed;
+      opacity: 0.6;
+    }
+    aside {
+      min-width: 0;
+      overflow: auto;
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .side-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 0;
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .muted { color: var(--muted); }
+    .formula-box {
+      max-height: 150px;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+    .formula-code {
+      margin-top: 8px;
+      max-height: 92px;
+      overflow: auto;
+      color: var(--muted);
+    }
+    .preview-box {
+      min-height: 90px;
+      max-height: 55vh;
+      height: 180px;
+      resize: vertical;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+    .tool-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .tool-item {
+      width: 58px;
+      display: grid;
+      justify-items: center;
+      gap: 5px;
+      color: var(--muted);
+    }
+    .tool-icon {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #a6adba;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 750;
+      line-height: 1;
+      box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 1px 2px rgba(20, 30, 40, 0.14);
+    }
+    .tool-item.inactive .tool-icon {
+      background: #c6ccd5 !important;
+      box-shadow: none;
+      opacity: 0.72;
+    }
+    .tool-badge {
+      position: absolute;
+      right: -5px;
+      top: -5px;
+      min-width: 17px;
+      height: 17px;
+      display: grid;
+      place-items: center;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: #d22f27;
+      color: #fff;
+      border: 2px solid #fff;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .tool-count {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.1;
+      text-align: center;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .json-viewer {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .json-node {
+      margin-left: 14px;
+    }
+    .json-row {
+      min-height: 18px;
+    }
+    .json-toggle {
+      display: inline-block;
+      width: 14px;
+      color: #64748b;
+      cursor: pointer;
+      user-select: none;
+    }
+    .json-toggle.empty {
+      cursor: default;
+      color: transparent;
+    }
+    .json-key {
+      color: #7c3aed;
+    }
+    .json-string {
+      color: #0f766e;
+    }
+    .json-number {
+      color: #b45309;
+    }
+    .json-bool, .json-null {
+      color: #be123c;
+    }
+    .json-bracket {
+      cursor: default;
+      border-radius: 3px;
+      padding: 0 1px;
+    }
+    .json-bracket.match {
+      background: #ffe08a;
+      color: #111827;
+    }
+    .json-summary {
+      color: #64748b;
+      cursor: pointer;
+    }
+    .json-hidden {
+      display: none;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; grid-template-rows: minmax(430px, 58vh) minmax(320px, 1fr); }
+      aside { border-left: 0; border-top: 1px solid var(--line); }
+      header { flex-wrap: wrap; }
+      .legend { position: static; width: auto; margin: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SR Agent Search Viewer</h1>
+    <select id="run-select" aria-label="Run"></select>
+    <button id="refresh">Refresh</button>
+    <button id="layout">Auto Layout</button>
+    <button id="weak-edges">Hide Weak Edges</button>
+    <button id="labels">Hide Labels</button>
+    <select id="export-format" aria-label="Export format">
+      <option value="png">PNG</option>
+      <option value="svg">SVG</option>
+      <option value="pdf">PDF</option>
+    </select>
+    <button id="export">Export</button>
+    <span id="status" class="muted"></span>
+  </header>
+  <main>
+    <section id="graph-wrap">
+      <div id="legend" class="legend">
+        <strong id="legend-title"><span class="legend-toggle"></span><span>Legend</span></strong>
+        <div class="legend-body">
+          <div class="legend-row"><span class="sample node-dot"></span><span>Node: one local sample from the agent.</span></div>
+          <div class="legend-row"><span class="sample line"></span><span>Solid edge: strong context inheritance.</span></div>
+          <div class="legend-row"><span class="sample line weak"></span><span>Dashed edge: weak parent, partial tool-call context.</span></div>
+          <div class="legend-row"><span></span><span>Color: better MSE shifts from gray/red toward green.</span></div>
+        </div>
+      </div>
+      <svg id="graph" width="1200" height="760" role="img" aria-label="Search graph"></svg>
+    </section>
+    <aside>
+      <section class="side-section">
+        <strong id="node-title">No node selected</strong>
+        <div id="node-subtitle" class="muted"></div>
+        <div id="metrics" class="metric-grid"></div>
+      </section>
+      <section class="side-section">
+        <strong>Formula</strong>
+        <div id="formula-latex" class="formula-box muted">(no candidate formula)</div>
+        <pre id="formula-code" class="formula-code"></pre>
+      </section>
+      <section class="side-section">
+        <strong>Preview</strong>
+        <pre id="preview" class="preview-box muted"></pre>
+      </section>
+      <section class="side-section">
+        <strong>Tool Call</strong>
+        <div id="tool-call" class="tool-grid"></div>
+      </section>
+      <section class="side-section">
+        <strong>Detail</strong>
+        <div id="detail" class="json-viewer muted"></div>
+      </section>
+    </aside>
+  </main>
+  <script>
+    const ROOT_PREFIX = "__root__:";
+    const LEVEL_GAP = 118;
+    const SIBLING_GAP = 64;
+    const runSelect = document.getElementById("run-select");
+    const refreshButton = document.getElementById("refresh");
+    const layoutButton = document.getElementById("layout");
+    const weakEdgesButton = document.getElementById("weak-edges");
+    const labelsButton = document.getElementById("labels");
+    const exportFormat = document.getElementById("export-format");
+    const exportButton = document.getElementById("export");
+    const legend = document.getElementById("legend");
+    const legendTitle = document.getElementById("legend-title");
+    const statusEl = document.getElementById("status");
+    const svg = document.getElementById("graph");
+    const state = {
+      runId: null,
+      records: new Map(),
+      lastSeq: 0,
+      source: null,
+      positions: new Map(),
+      userMoved: new Set(),
+      dragging: null,
+      panning: null,
+      view: { x: 0, y: 0, scale: 1 },
+      showWeakEdges: true,
+      showLabels: true
+    };
+    const mathJaxReady = new Promise(resolve => {
+      const wait = () => {
+        if (window.MathJax && typeof MathJax.typesetPromise === "function") resolve();
+        else setTimeout(wait, 80);
+      };
+      wait();
+    });
+
+    refreshButton.addEventListener("click", loadRuns);
+    layoutButton.addEventListener("click", () => {
+      state.userMoved.clear();
+      state.positions = computeLayout(buildGraphNodes(), true);
+      renderGraph();
+    });
+    weakEdgesButton.addEventListener("click", () => {
+      state.showWeakEdges = !state.showWeakEdges;
+      weakEdgesButton.textContent = state.showWeakEdges ? "Hide Weak Edges" : "Show Weak Edges";
+      renderGraph();
+    });
+    labelsButton.addEventListener("click", () => {
+      state.showLabels = !state.showLabels;
+      labelsButton.textContent = state.showLabels ? "Hide Labels" : "Show Labels";
+      renderGraph();
+    });
+    exportButton.addEventListener("click", () => exportScene(exportFormat.value));
+    legendTitle.addEventListener("click", () => legend.classList.toggle("collapsed"));
+    runSelect.addEventListener("change", () => selectRun(runSelect.value));
+    svg.addEventListener("pointermove", onPointerMove);
+    svg.addEventListener("pointerup", onPointerUp);
+    svg.addEventListener("pointerleave", onPointerUp);
+    svg.addEventListener("pointerdown", onBackgroundPointerDown);
+    svg.addEventListener("wheel", onWheel, { passive: false });
+
+    async function loadRuns() {
+      const data = await fetchJson("/api/runs");
+      runSelect.innerHTML = "";
+      for (const run of data.runs) {
+        const option = document.createElement("option");
+        option.value = run.run_id;
+        option.textContent = `${run.run_id} (${run.record_count})`;
+        runSelect.appendChild(option);
+      }
+      if (data.runs.length && (!state.runId || !data.runs.some(run => run.run_id === state.runId))) {
+        selectRun(data.runs[0].run_id);
+      }
+      statusEl.textContent = data.runs.length ? "" : "No runs with records.jsonl found";
+    }
+
+    async function selectRun(runId) {
+      if (!runId) return;
+      if (state.source) state.source.close();
+      state.runId = runId;
+      state.records.clear();
+      state.positions.clear();
+      state.userMoved.clear();
+      state.lastSeq = 0;
+      await loadRecords();
+      startStream();
+    }
+
+    async function loadRecords() {
+      const data = await fetchJson(`/api/runs/${encodeURIComponent(state.runId)}/records?after_seq=${state.lastSeq}`);
+      ingestRecords(data.records || []);
+      renderGraph();
+    }
+
+    function startStream() {
+      state.source = new EventSource(`/api/runs/${encodeURIComponent(state.runId)}/stream?after_seq=${state.lastSeq}`);
+      state.source.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        ingestRecords(data.records || []);
+        renderGraph();
+      };
+      state.source.onerror = () => {
+        statusEl.textContent = `${state.records.size} nodes, reconnecting`;
+      };
+    }
+
+    function ingestRecords(records) {
+      for (const record of records) {
+        state.records.set(record.node_id, record);
+        state.lastSeq = Math.max(state.lastSeq, record.seq || 0);
+      }
+      enrichToolSummaries();
+      state.positions = computeLayout(buildGraphNodes(), false);
+      statusEl.textContent = `${state.records.size} nodes`;
+    }
+
+    function enrichToolSummaries() {
+      for (const record of state.records.values()) {
+        const ancestorCounts = ancestorToolCounts(record, new Set());
+        const outputCounts = new Map();
+        for (const name of record.core.tool_names || []) {
+          outputCounts.set(name, (outputCounts.get(name) || 0) + 1);
+        }
+        const existing = record.core.tool_summary || [];
+        const existingPrompt = new Map(existing.map(item => [item.name, Number(item.prompt_count || 0)]));
+        const names = [...new Set([
+          ...ancestorCounts.keys(),
+          ...outputCounts.keys(),
+          ...existing.map(item => item.name),
+        ])].filter(Boolean).sort();
+        record.core.tool_summary = names.map(name => ({
+          name,
+          display_name: displayToolName(name),
+          prompt_count: Math.max(existingPrompt.get(name) || 0, ancestorCounts.get(name) || 0),
+          output_count: outputCounts.get(name) || Number((existing.find(item => item.name === name) || {}).output_count || 0),
+        }));
+      }
+    }
+
+    function ancestorToolCounts(record, seen) {
+      const counts = new Map();
+      for (const parent of record.parents || []) {
+        const parentId = parent && parent.node_id;
+        if (!parentId || seen.has(parentId)) continue;
+        const parentRecord = state.records.get(parentId);
+        if (!parentRecord) continue;
+        seen.add(parentId);
+        for (const name of parentRecord.core.tool_names || []) {
+          counts.set(name, (counts.get(name) || 0) + 1);
+        }
+        for (const [name, count] of ancestorToolCounts(parentRecord, seen)) {
+          counts.set(name, (counts.get(name) || 0) + count);
+        }
+      }
+      return counts;
+    }
+
+    function buildGraphNodes() {
+      const records = [...state.records.values()].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+      const treeIds = [...new Set(records.map(record => treeIdFor(record)))].sort();
+      const roots = treeIds.map((treeId, index) => ({
+        node_id: rootId(treeId),
+        tree_id: treeId,
+        tree_index: index,
+        virtual_root: true,
+        parents: [],
+        core: { tool_names: [], tool_count: 0 },
+        coord: { R: 0, C: 0, L: 0, K: 0 },
+      }));
+      return [...roots, ...records.map(record => {
+        const treeId = treeIdFor(record);
+        const parents = (record.parents || []).length
+          ? record.parents
+          : [{ node_id: rootId(treeId), kind: "virtual_root", strength: "strong" }];
+        return { ...record, tree_id: treeId, parents };
+      })];
+    }
+
+    function computeLayout(nodes, resetMoved) {
+      const old = resetMoved ? new Map() : state.positions;
+      const byId = new Map(nodes.map(node => [node.node_id, node]));
+      const children = new Map(nodes.map(node => [node.node_id, []]));
+      const indegree = new Map(nodes.map(node => [node.node_id, 0]));
+      for (const node of nodes) {
+        for (const parent of node.parents || []) {
+          if (!byId.has(parent.node_id)) continue;
+          children.get(parent.node_id).push(node.node_id);
+          indegree.set(node.node_id, (indegree.get(node.node_id) || 0) + 1);
+        }
+      }
+
+      const rootNodes = nodes.filter(node => node.virtual_root);
+      const levels = new Map(rootNodes.map(node => [node.node_id, 0]));
+      const queue = rootNodes.map(node => node.node_id);
+      while (queue.length) {
+        const id = queue.shift();
+        const nextLevel = (levels.get(id) || 0) + 1;
+        for (const childId of children.get(id) || []) {
+          if (!levels.has(childId) || nextLevel > levels.get(childId)) {
+            levels.set(childId, nextLevel);
+          }
+          indegree.set(childId, (indegree.get(childId) || 1) - 1);
+          if (indegree.get(childId) <= 0) queue.push(childId);
+        }
+      }
+      for (const node of nodes) {
+        if (!levels.has(node.node_id)) levels.set(node.node_id, fallbackLevel(node));
+      }
+
+      const byLevel = new Map();
+      for (const node of nodes) {
+        const level = levels.get(node.node_id);
+        if (!byLevel.has(level)) byLevel.set(level, []);
+        byLevel.get(level).push(node);
+      }
+
+      const positions = new Map();
+      for (const root of rootNodes) {
+        const existing = old.get(root.node_id);
+        positions.set(root.node_id, existing && state.userMoved.has(root.node_id)
+          ? existing
+          : { x: 360 + root.tree_index * 520, y: 70 });
+      }
+      const sortedLevels = [...byLevel.keys()].sort((a, b) => a - b);
+      for (const level of sortedLevels) {
+        if (level === 0) continue;
+        const layer = byLevel.get(level);
+        const treeGroups = new Map();
+        for (const node of layer) {
+          const treeId = treeIdFor(node);
+          if (!treeGroups.has(treeId)) treeGroups.set(treeId, []);
+          treeGroups.get(treeId).push(node);
+        }
+        for (const [treeId, group] of treeGroups) {
+          group.sort((a, b) => {
+            const ap = parentX(a, positions, old);
+            const bp = parentX(b, positions, old);
+            return ap - bp || (a.seq || 0) - (b.seq || 0);
+          });
+          const width = Math.max(0, (group.length - 1) * SIBLING_GAP);
+          const root = positions.get(rootId(treeId));
+          const center = averageParentX(group, positions, old) || (root && root.x) || 640;
+          let start = Math.max(80, center - width / 2);
+          for (let index = 0; index < group.length; index++) {
+            const node = group[index];
+            const existing = old.get(node.node_id);
+            if (existing && state.userMoved.has(node.node_id)) {
+              positions.set(node.node_id, existing);
+              continue;
+            }
+            positions.set(node.node_id, {
+              x: start + index * SIBLING_GAP,
+              y: 70 + level * LEVEL_GAP
+            });
+          }
+        }
+      }
+      return positions;
+    }
+
+    function renderGraph() {
+      const nodes = buildGraphNodes();
+      if (!state.positions.size) state.positions = computeLayout(nodes, false);
+      const byId = new Map(nodes.map(node => [node.node_id, node]));
+      const maxX = Math.max(...[...state.positions.values()].map(p => p.x), 1000);
+      const maxY = Math.max(...[...state.positions.values()].map(p => p.y), 650);
+      svg.setAttribute("width", Math.max(1200, maxX + 220));
+      svg.setAttribute("height", Math.max(760, maxY + 160));
+      svg.innerHTML = "";
+
+      const edgeGroup = svgEl("g");
+      const nodeGroup = svgEl("g");
+      const viewport = svgEl("g");
+      viewport.setAttribute("transform", viewTransform());
+      viewport.append(edgeGroup, nodeGroup);
+      svg.append(viewport);
+
+      for (const node of nodes) {
+        if (node.virtual_root) continue;
+        const target = state.positions.get(node.node_id);
+        for (const parent of node.parents || []) {
+          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          if (!byId.has(parent.node_id)) continue;
+          const source = state.positions.get(parent.node_id);
+          if (!source || !target) continue;
+          const path = svgEl("path");
+          const mid = (source.y + target.y) / 2;
+          path.setAttribute("d", `M${source.x},${source.y} C${source.x},${mid} ${target.x},${mid} ${target.x},${target.y}`);
+          path.setAttribute("class", `edge ${parent.strength === "weak" ? "weak" : "strong"} ${parent.node_id.startsWith(ROOT_PREFIX) ? "root" : ""}`);
+          edgeGroup.appendChild(path);
+        }
+      }
+
+      for (const node of nodes) {
+        const point = state.positions.get(node.node_id);
+        if (!point) continue;
+        const circle = svgEl("circle");
+        const radius = node.virtual_root ? 14 : 9;
+        circle.setAttribute("cx", point.x);
+        circle.setAttribute("cy", point.y);
+        circle.setAttribute("r", radius);
+        circle.setAttribute("class", `node ${node.virtual_root ? "root" : ""}`);
+        circle.setAttribute("fill", node.virtual_root ? "var(--root)" : colorFor(node));
+        circle.dataset.nodeId = node.node_id;
+        circle.addEventListener("pointerdown", onPointerDown);
+        circle.addEventListener("mouseenter", () => showCore(node));
+        circle.addEventListener("click", () => {
+          if (!node.virtual_root) loadDetail(node.node_id);
+        });
+        nodeGroup.appendChild(circle);
+
+        if (state.showLabels) {
+          const label = svgEl("text");
+          label.setAttribute("x", point.x);
+          label.setAttribute("y", point.y + radius + 15);
+          label.setAttribute("class", `node-label ${node.virtual_root ? "root-label" : ""}`);
+          label.textContent = node.virtual_root ? `root ${shortTreeId(node.tree_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
+          nodeGroup.appendChild(label);
+        }
+      }
+    }
+
+    function onPointerDown(event) {
+      const nodeId = event.target.dataset.nodeId;
+      if (!nodeId) return;
+      event.stopPropagation();
+      const point = clientToSvg(event);
+      const current = state.positions.get(nodeId);
+      state.dragging = { nodeId, dx: current.x - point.x, dy: current.y - point.y };
+      event.target.setPointerCapture(event.pointerId);
+    }
+
+    function onBackgroundPointerDown(event) {
+      if (event.target !== svg) return;
+      const point = clientPoint(event);
+      state.panning = { x: point.x, y: point.y, viewX: state.view.x, viewY: state.view.y };
+      svg.setPointerCapture(event.pointerId);
+    }
+
+    function onPointerMove(event) {
+      if (state.dragging) {
+        const point = clientToSvg(event);
+        const y = state.positions.get(state.dragging.nodeId).y;
+        state.positions.set(state.dragging.nodeId, {
+          x: Math.max(40, point.x + state.dragging.dx),
+          y
+        });
+        state.userMoved.add(state.dragging.nodeId);
+        renderGraph();
+      } else if (state.panning) {
+        const point = clientPoint(event);
+        state.view.x = state.panning.viewX + point.x - state.panning.x;
+        state.view.y = state.panning.viewY + point.y - state.panning.y;
+        renderGraph();
+      }
+    }
+
+    function onPointerUp() {
+      state.dragging = null;
+      state.panning = null;
+    }
+
+    function onWheel(event) {
+      event.preventDefault();
+      const before = clientToSvg(event);
+      const factor = Math.exp(-event.deltaY * 0.001);
+      const nextScale = Math.max(0.25, Math.min(3.5, state.view.scale * factor));
+      if (nextScale === state.view.scale) return;
+      state.view.scale = nextScale;
+      state.view.x = event.clientX - before.x * state.view.scale;
+      state.view.y = event.clientY - before.y * state.view.scale;
+      renderGraph();
+    }
+
+    function clientToSvg(event) {
+      const point = clientPoint(event);
+      return {
+        x: (point.x - state.view.x) / state.view.scale,
+        y: (point.y - state.view.y) / state.view.scale
+      };
+    }
+
+    function clientPoint(event) {
+      const pt = svg.createSVGPoint();
+      pt.x = event.clientX;
+      pt.y = event.clientY;
+      return pt.matrixTransform(svg.getScreenCTM().inverse());
+    }
+
+    function viewTransform() {
+      return `translate(${state.view.x} ${state.view.y}) scale(${state.view.scale})`;
+    }
+
+    function colorFor(record) {
+      const score = record.core && record.core.score;
+      const mse = score && Number(score.mse);
+      if (!Number.isFinite(mse)) return "#718096";
+      if (mse === 0) return "#1b8a5a";
+      const value = Math.max(0, Math.min(1, -Math.log10(mse + 1e-12) / 8));
+      const hue = 8 + value * 132;
+      return `hsl(${hue}, 62%, 44%)`;
+    }
+
+    function showCore(record) {
+      if (record.virtual_root) {
+        document.getElementById("node-title").textContent = "Virtual root";
+        document.getElementById("node-subtitle").textContent = `Tree ${record.tree_id}`;
+        document.getElementById("metrics").innerHTML = "";
+        setFormula(null, null);
+        document.getElementById("preview").textContent = "";
+        document.getElementById("tool-call").innerHTML = "";
+        setDetailText("Drag nodes horizontally to adjust layout. Auto Layout resets manual positions.");
+        return;
+      }
+      document.getElementById("node-title").textContent = record.node_label || record.node_id;
+      document.getElementById("node-subtitle").textContent = `${(record.core.tool_names || []).join(", ") || "no tools"}`;
+      setFormula(record.core.formula, record.core.formula_latex);
+      document.getElementById("preview").textContent = record.core.content_preview || "";
+      renderToolCall(record.core.tool_summary || fallbackToolSummary(record));
+      setDetailText("Click node to load detail.");
+      const metrics = document.getElementById("metrics");
+      metrics.innerHTML = "";
+      const score = record.core.score || {};
+      for (const key of ["mse", "rmse", "mae", "r2"]) {
+        const box = document.createElement("div");
+        box.className = "metric";
+        box.innerHTML = `<span>${key}</span><strong>${score[key] ?? "n/a"}</strong>`;
+        metrics.appendChild(box);
+      }
+    }
+
+    function setFormula(formula, latex) {
+      const latexBox = document.getElementById("formula-latex");
+      const codeBox = document.getElementById("formula-code");
+      if (!formula) {
+        latexBox.textContent = "(no candidate formula)";
+        codeBox.textContent = "";
+        return;
+      }
+      latexBox.textContent = latex ? `$$${latex}$$` : formula;
+      codeBox.textContent = formula;
+      if (latex) {
+        mathJaxReady.then(() => MathJax.typesetPromise([latexBox])).catch(() => {});
+      }
+    }
+
+    function renderToolCall(summary) {
+      const box = document.getElementById("tool-call");
+      box.innerHTML = "";
+      if (!summary.length) {
+        const empty = document.createElement("span");
+        empty.className = "muted";
+        empty.textContent = "No tools in prompt or output.";
+        box.appendChild(empty);
+        return;
+      }
+      for (const item of summary) {
+        const active = Number(item.output_count || 0) > 0;
+        const wrap = document.createElement("div");
+        wrap.className = `tool-item ${active ? "active" : "inactive"}`;
+        const icon = document.createElement("div");
+        icon.className = "tool-icon";
+        icon.style.background = toolColor(item.name);
+        icon.title = item.display_name || displayToolName(item.name);
+        icon.textContent = toolInitial(item.name);
+        if (Number(item.output_count || 0) > 1) {
+          const badge = document.createElement("span");
+          badge.className = "tool-badge";
+          badge.textContent = item.output_count;
+          icon.appendChild(badge);
+        }
+        const count = document.createElement("div");
+        count.className = "tool-count";
+        count.textContent = `${item.prompt_count || 0} in prompt`;
+        wrap.append(icon, count);
+        box.appendChild(wrap);
+      }
+    }
+
+    function fallbackToolSummary(record) {
+      const counts = new Map();
+      for (const name of record.core.tool_names || []) {
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+      return [...counts.entries()].map(([name, outputCount]) => ({
+        name,
+        display_name: displayToolName(name),
+        prompt_count: 0,
+        output_count: outputCount
+      }));
+    }
+
+    function detailToolSummary(record) {
+      const promptCounts = countPromptTools(record.detail && record.detail.prompt);
+      const outputCounts = new Map();
+      for (const name of record.core.tool_names || []) {
+        outputCounts.set(name, (outputCounts.get(name) || 0) + 1);
+      }
+      const names = [...new Set([...promptCounts.keys(), ...outputCounts.keys()])].sort();
+      return names.map(name => ({
+        name,
+        display_name: displayToolName(name),
+        prompt_count: promptCounts.get(name) || 0,
+        output_count: outputCounts.get(name) || 0
+      }));
+    }
+
+    function countPromptTools(prompt) {
+      const counts = new Map();
+      if (!Array.isArray(prompt)) return counts;
+      for (const msg of prompt) {
+        if (msg && msg.role === "tool" && msg.name) {
+          counts.set(msg.name, (counts.get(msg.name) || 0) + 1);
+        }
+      }
+      for (const msg of prompt) {
+        for (const call of (msg && msg.tool_calls) || []) {
+          const name = call.name || (call.function && call.function.name);
+          if (name && !counts.has(name)) counts.set(name, 0);
+        }
+      }
+      return counts;
+    }
+
+    function displayToolName(name) {
+      return String(name || "").replaceAll("_", " ").replace(/\b\w/g, char => char.toUpperCase());
+    }
+
+    function toolInitial(name) {
+      const words = displayToolName(name).split(/\s+/).filter(Boolean);
+      if (!words.length) return "?";
+      return words.slice(0, 2).map(word => word[0]).join("");
+    }
+
+    function toolColor(name) {
+      const palette = ["#157a6e", "#6f5bd6", "#b54f9b", "#c75a2b", "#3f7fba", "#7b6d2d", "#2f855a", "#a33f4a", "#4a6f28", "#8b5e34"];
+      let hash = 0;
+      const text = String(name || "");
+      for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+      return palette[hash % palette.length];
+    }
+
+    async function loadDetail(nodeId) {
+      const record = await fetchJson(`/api/runs/${encodeURIComponent(state.runId)}/records/${encodeURIComponent(nodeId)}`);
+      showCore(record);
+      renderToolCall(record.core.tool_summary || detailToolSummary(record));
+      renderJsonDetail(record.detail || {});
+    }
+
+    function setDetailText(text) {
+      const detail = document.getElementById("detail");
+      detail.textContent = text;
+    }
+
+    function renderJsonDetail(value) {
+      const detail = document.getElementById("detail");
+      detail.innerHTML = "";
+      detail.appendChild(jsonNode(value, null, true));
+    }
+
+    function jsonNode(value, key, isRoot = false) {
+      const wrapper = document.createElement("div");
+      const type = jsonType(value);
+      const row = document.createElement("div");
+      row.className = "json-row";
+      const toggle = document.createElement("span");
+      toggle.className = type === "object" || type === "array" ? "json-toggle" : "json-toggle empty";
+      toggle.textContent = type === "object" || type === "array" ? "▾" : " ";
+      row.appendChild(toggle);
+      if (key !== null) {
+        const keySpan = document.createElement("span");
+        keySpan.className = "json-key";
+        keySpan.textContent = JSON.stringify(String(key)) + ": ";
+        row.appendChild(keySpan);
+      }
+
+      if (type !== "object" && type !== "array") {
+        row.appendChild(jsonPrimitive(value, type));
+        wrapper.appendChild(row);
+        return wrapper;
+      }
+
+      const entries = type === "array" ? value.map((item, index) => [index, item]) : Object.entries(value);
+      const open = bracket(type === "array" ? "[" : "{");
+      const close = bracket(type === "array" ? "]" : "}");
+      const matchId = globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Math.random());
+      open.dataset.matchId = close.dataset.matchId = matchId;
+      row.appendChild(open);
+      const summary = document.createElement("span");
+      summary.className = "json-summary json-hidden";
+      summary.textContent = type === "array" ? ` ${entries.length} items ` : ` ${entries.length} keys `;
+      row.appendChild(summary);
+      row.appendChild(close);
+      wrapper.appendChild(row);
+
+      const children = document.createElement("div");
+      children.className = isRoot ? "json-node" : "json-node";
+      entries.forEach(([childKey, childValue], index) => {
+        const child = jsonNode(childValue, childKey);
+        if (index < entries.length - 1) child.appendChild(document.createTextNode(","));
+        children.appendChild(child);
+      });
+      const closingRow = document.createElement("div");
+      closingRow.className = "json-row";
+      closingRow.appendChild(document.createElement("span")).className = "json-toggle empty";
+      const closingBracket = bracket(type === "array" ? "]" : "}");
+      closingBracket.dataset.matchId = matchId;
+      closingRow.appendChild(closingBracket);
+      children.appendChild(closingRow);
+      wrapper.appendChild(children);
+
+      const setCollapsed = collapsed => {
+        children.classList.toggle("json-hidden", collapsed);
+        summary.classList.toggle("json-hidden", !collapsed);
+        row.lastChild.classList.toggle("json-hidden", !collapsed);
+        toggle.textContent = collapsed ? "▸" : "▾";
+      };
+      row.addEventListener("click", event => {
+        if (event.target.classList.contains("json-bracket") || event.target.classList.contains("json-summary") || event.target.classList.contains("json-toggle")) {
+          setCollapsed(!children.classList.contains("json-hidden"));
+        }
+      });
+      toggle.addEventListener("click", event => {
+        event.stopPropagation();
+        setCollapsed(!children.classList.contains("json-hidden"));
+      });
+      setCollapsed(false);
+      return wrapper;
+    }
+
+    function bracket(text) {
+      const span = document.createElement("span");
+      span.className = "json-bracket";
+      span.textContent = text;
+      span.addEventListener("mouseenter", () => {
+        document.querySelectorAll(`[data-match-id="${span.dataset.matchId}"]`).forEach(item => item.classList.add("match"));
+      });
+      span.addEventListener("mouseleave", () => {
+        document.querySelectorAll(`[data-match-id="${span.dataset.matchId}"]`).forEach(item => item.classList.remove("match"));
+      });
+      return span;
+    }
+
+    function jsonPrimitive(value, type) {
+      const span = document.createElement("span");
+      span.className = `json-${type}`;
+      span.textContent = type === "string" ? JSON.stringify(value) : String(value);
+      return span;
+    }
+
+    function jsonType(value) {
+      if (value === null) return "null";
+      if (Array.isArray(value)) return "array";
+      return typeof value === "object" ? "object" : typeof value;
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    }
+
+    async function exportScene(format) {
+      const exported = buildExportSvg();
+      if (!exported) return;
+      const fileBase = `${state.runId || "sr-agent"}-layout`;
+      if (format === "svg") {
+        downloadBlob(new Blob([exported.svgText], { type: "image/svg+xml;charset=utf-8" }), `${fileBase}.svg`);
+        return;
+      }
+      if (format === "png") {
+        const canvas = await svgTextToCanvas(exported.svgText, exported.width, exported.height, 3);
+        canvas.toBlob(blob => downloadBlob(blob, `${fileBase}.png`), "image/png");
+        return;
+      }
+      const pdfBlob = vectorPdfBlob();
+      downloadBlob(pdfBlob, `${fileBase}.pdf`);
+    }
+
+    function buildExportSvg() {
+      const viewport = svg.querySelector("g");
+      if (!viewport) return null;
+      const box = viewport.getBBox();
+      const padding = 36;
+      const width = Math.ceil(box.width + padding * 2);
+      const height = Math.ceil(box.height + padding * 2);
+      const clone = viewport.cloneNode(true);
+      clone.removeAttribute("transform");
+      clone.setAttribute("transform", `translate(${padding - box.x} ${padding - box.y})`);
+      inlineExportStyles(clone);
+      const exportSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      exportSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      exportSvg.setAttribute("width", width);
+      exportSvg.setAttribute("height", height);
+      exportSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      exportSvg.appendChild(clone);
+      return {
+        width,
+        height,
+        svgText: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(exportSvg)}`
+      };
+    }
+
+    function inlineExportStyles(root) {
+      root.querySelectorAll("path.edge").forEach(path => {
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "#7f8b9d");
+        path.setAttribute("stroke-width", "1.6");
+        path.setAttribute("opacity", path.classList.contains("weak") ? "0.45" : "0.68");
+        if (path.classList.contains("weak")) path.setAttribute("stroke-dasharray", "6 6");
+        if (path.classList.contains("root")) path.setAttribute("stroke", "#5c6674");
+      });
+      root.querySelectorAll("circle.node").forEach(circle => {
+        circle.setAttribute("stroke", "#ffffff");
+        circle.setAttribute("stroke-width", "2");
+      });
+      root.querySelectorAll("text").forEach(text => {
+        text.setAttribute("fill", text.classList.contains("root-label") ? "#17202a" : "#334155");
+        text.setAttribute("font-size", text.classList.contains("root-label") ? "12" : "11");
+        text.setAttribute("font-family", "Arial, sans-serif");
+        text.setAttribute("text-anchor", "middle");
+        if (text.classList.contains("root-label")) text.setAttribute("font-weight", "650");
+      });
+    }
+
+    function svgTextToCanvas(svgText, width, height, scale) {
+      return new Promise((resolve, reject) => {
+        const blob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.ceil(width * scale));
+          canvas.height = Math.max(1, Math.ceil(height * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(canvas);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Failed to render SVG export."));
+        };
+        image.src = url;
+      });
+    }
+
+    function vectorPdfBlob() {
+      const nodes = buildGraphNodes();
+      const byId = new Map(nodes.map(node => [node.node_id, node]));
+      const drawable = nodes.filter(node => state.positions.has(node.node_id));
+      if (!drawable.length) return new Blob([], { type: "application/pdf" });
+      const padding = 36;
+      const radii = new Map(drawable.map(node => [node.node_id, node.virtual_root ? 14 : 9]));
+      const xs = drawable.map(node => state.positions.get(node.node_id).x);
+      const ys = drawable.map(node => state.positions.get(node.node_id).y);
+      const minX = Math.min(...xs) - 80;
+      const minY = Math.min(...ys) - 50;
+      const maxX = Math.max(...xs) + 80;
+      const maxY = Math.max(...ys) + 70;
+      const pageWidth = maxX - minX + padding * 2;
+      const pageHeight = maxY - minY + padding * 2;
+      const tx = x => x - minX + padding;
+      const ty = y => pageHeight - (y - minY + padding);
+      const commands = [];
+
+      commands.push("1 1 1 rg");
+      commands.push(`0 0 ${fmt(pageWidth)} ${fmt(pageHeight)} re f`);
+
+      for (const node of nodes) {
+        if (node.virtual_root) continue;
+        const target = state.positions.get(node.node_id);
+        if (!target) continue;
+        for (const parent of node.parents || []) {
+          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          if (!byId.has(parent.node_id)) continue;
+          const source = state.positions.get(parent.node_id);
+          if (!source) continue;
+          const mid = (source.y + target.y) / 2;
+          commands.push(parent.strength === "weak" ? "[6 6] 0 d" : "[] 0 d");
+          commands.push(parent.node_id.startsWith(ROOT_PREFIX) ? "0.36 0.40 0.45 RG" : "0.50 0.55 0.62 RG");
+          commands.push("1.6 w");
+          commands.push(`${fmt(tx(source.x))} ${fmt(ty(source.y))} m ${fmt(tx(source.x))} ${fmt(ty(mid))} ${fmt(tx(target.x))} ${fmt(ty(mid))} ${fmt(tx(target.x))} ${fmt(ty(target.y))} c S`);
+        }
+      }
+      commands.push("[] 0 d");
+
+      for (const node of drawable) {
+        const point = state.positions.get(node.node_id);
+        const radius = radii.get(node.node_id);
+        const fill = node.virtual_root ? [0.15, 0.20, 0.22] : rgb01(colorFor(node));
+        const stroke = [1, 1, 1];
+        commands.push(`${fmt(fill[0])} ${fmt(fill[1])} ${fmt(fill[2])} rg`);
+        commands.push(`${fmt(stroke[0])} ${fmt(stroke[1])} ${fmt(stroke[2])} RG`);
+        commands.push("2 w");
+        commands.push(circlePath(tx(point.x), ty(point.y), radius) + " B");
+      }
+
+      if (state.showLabels) for (const node of drawable) {
+        const point = state.positions.get(node.node_id);
+        const radius = radii.get(node.node_id);
+        const label = node.virtual_root ? `root ${shortTreeId(node.tree_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
+        const size = node.virtual_root ? 12 : 11;
+        const y = point.y + radius + 15;
+        const textWidth = label.length * size * 0.45;
+        commands.push("0.20 0.25 0.32 rg");
+        commands.push(`BT /F1 ${size} Tf ${fmt(tx(point.x) - textWidth / 2)} ${fmt(ty(y))} Td (${escapePdfText(label)}) Tj ET`);
+      }
+
+      const stream = commands.join("\n");
+      const objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(pageWidth)} ${fmt(pageHeight)}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+      ];
+      let pdf = "%PDF-1.4\n";
+      const offsets = [0];
+      objects.forEach((object, index) => {
+        offsets.push(pdf.length);
+        pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+      });
+      const xrefOffset = pdf.length;
+      pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+      for (let index = 1; index < offsets.length; index++) {
+        pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+      }
+      pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+      const bytes = new Uint8Array(pdf.length);
+      for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xff;
+      return new Blob([bytes], { type: "application/pdf" });
+    }
+
+    function circlePath(cx, cy, r) {
+      const k = 0.5522847498 * r;
+      return [
+        `${fmt(cx + r)} ${fmt(cy)} m`,
+        `${fmt(cx + r)} ${fmt(cy + k)} ${fmt(cx + k)} ${fmt(cy + r)} ${fmt(cx)} ${fmt(cy + r)} c`,
+        `${fmt(cx - k)} ${fmt(cy + r)} ${fmt(cx - r)} ${fmt(cy + k)} ${fmt(cx - r)} ${fmt(cy)} c`,
+        `${fmt(cx - r)} ${fmt(cy - k)} ${fmt(cx - k)} ${fmt(cy - r)} ${fmt(cx)} ${fmt(cy - r)} c`,
+        `${fmt(cx + k)} ${fmt(cy - r)} ${fmt(cx + r)} ${fmt(cy - k)} ${fmt(cx + r)} ${fmt(cy)} c`,
+        "h"
+      ].join(" ");
+    }
+
+    function rgb01(cssColor) {
+      const probe = document.createElement("span");
+      probe.style.color = cssColor;
+      document.body.appendChild(probe);
+      const match = getComputedStyle(probe).color.match(/\d+(\.\d+)?/g);
+      probe.remove();
+      if (!match || match.length < 3) return [0.45, 0.50, 0.56];
+      return match.slice(0, 3).map(value => Number(value) / 255);
+    }
+
+    function escapePdfText(text) {
+      return String(text).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+    }
+
+    function fmt(value) {
+      return Number(value).toFixed(2).replace(/\.?0+$/, "");
+    }
+
+    function downloadBlob(blob, filename) {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function svgEl(name) {
+      return document.createElementNS("http://www.w3.org/2000/svg", name);
+    }
+
+    function fallbackLevel(node) {
+      return node.virtual_root ? 0 : (node.coord.R - 1) * 1000 + node.coord.L;
+    }
+
+    function parentX(node, positions, old) {
+      const xs = (node.parents || [])
+        .map(parent => positions.get(parent.node_id) || old.get(parent.node_id))
+        .filter(Boolean)
+        .map(point => point.x);
+      return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 640;
+    }
+
+    function averageParentX(layer, positions, old) {
+      const xs = layer.map(node => parentX(node, positions, old)).filter(Number.isFinite);
+      return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 640;
+    }
+
+    function treeIdFor(record) {
+      return record.tree_id || "legacy";
+    }
+
+    function rootId(treeId) {
+      return `${ROOT_PREFIX}${treeId}`;
+    }
+
+    function shortTreeId(treeId) {
+      return String(treeId || "legacy").slice(0, 8);
+    }
+
+    loadRuns().catch(error => {
+      statusEl.textContent = error.message;
+    });
+  </script>
+</body>
+</html>

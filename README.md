@@ -26,6 +26,27 @@
       --llm-model qwen/qwen3.5-flash-02-23
   ```
 
+## Web 可视化
+
+Agent 运行时会在 `save_path` 下写入 `manifest.json` 和 `records.jsonl`，允许通过 Web 界面实时查看搜索树（包括节点详情、工具调用和公式结果等信息）。
+
+![SR Agent Web](assets/web.png)
+
+安装 Web 依赖：
+
+```bash
+pip install -e ".[web]"
+```
+
+启动后端（sr-agent-web 会在 logs/ 目录下递归查找所有 manifest.json 日志文件）：
+
+```bash
+sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
+# python -m sr_agent.cli.web --log-dir logs --host 127.0.0.1 --port 8000  # 另一种运行方案
+```
+
+然后打开 <http://127.0.0.1:8000/>。
+
 ## 项目结构
 
 ```

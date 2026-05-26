@@ -32,6 +32,7 @@ dependencies = [
 [project.scripts]
 sr-agent-download-models = "sr_agent.cli.download_models:main"
 sr-agent-upload-models = "sr_agent.cli.upload_models:main"
+sr-agent-web = "sr_agent.cli.web:main"
 
 [project.optional-dependencies]
 nn = [
@@ -49,8 +50,12 @@ dev = [
     "ipynbname>=2025.8.0.0",
     "yumeow_plot>=0.1.2",
 ]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
 all = [
-    "sr-agent[nn,tools,dev]",
+    "sr-agent[nn,tools,dev,web]",
 ]
 
 [tool.setuptools.packages.find]
@@ -63,6 +68,7 @@ sr_agent = [
     "*.yaml",
     "**/*.md",
     "**/*.yaml",
+    "web/static/*.html",
 ]
 
 [tool.pytest.ini_options]
