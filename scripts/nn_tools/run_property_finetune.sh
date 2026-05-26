@@ -1,10 +1,10 @@
 #!/bin/bash
-# v2: Finetune property model from pretrained encoder + SymPy labels + SRBench mixing
+# Finetune property model from pretrained encoder + SymPy labels + SRBench mixing
 set -e
 cd /data6/huanghao/regression_0423/SR_Agent/MySRAgent
 
 PRETRAIN_CKPT="logs/nn_tools/train/pretrain_for_prop/checkpoints/epoch_100000.pth"
-FINETUNE_DIR="logs/nn_tools/train_property_v2/finetune"
+FINETUNE_DIR="logs/nn_tools/train_property/finetune"
 mkdir -p "$FINETUNE_DIR"
 
 if [ ! -f "$PRETRAIN_CKPT" ]; then
@@ -13,7 +13,7 @@ if [ ! -f "$PRETRAIN_CKPT" ]; then
 fi
 echo "Using pretrained checkpoint: $PRETRAIN_CKPT"
 
-echo "Launching v2 finetune training..."
+echo "Launching finetune training..."
 conda run -n sragent python scripts/nn_tools/train_property.py \
     --mode finetune \
     --pretrain_checkpoint "$PRETRAIN_CKPT" \
@@ -40,7 +40,7 @@ conda run -n sragent python scripts/nn_tools/train_property.py \
     --srbench_mix_ratio 0.2 \
     2>&1 | tee "$FINETUNE_DIR/console.log"
 
-echo "Evaluating v2 finetuned model..."
+echo "Evaluating finetuned model..."
 conda run -n sragent python scripts/nn_tools/eval_property.py \
     --checkpoint "$FINETUNE_DIR/best.pth" \
     --device cuda:1 \
@@ -48,4 +48,4 @@ conda run -n sragent python scripts/nn_tools/eval_property.py \
     --sample_num 200 \
     2>&1 | tee "$FINETUNE_DIR/eval_console.log"
 
-echo "=== v2 Experiment 2 (pretrain+finetune) done ==="
+echo "=== Experiment 2 (pretrain+finetune) done ==="

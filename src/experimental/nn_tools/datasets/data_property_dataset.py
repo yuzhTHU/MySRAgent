@@ -10,7 +10,7 @@ Supports two data sources:
   1. Synthetic formulas via gplearn + nd2py (infinite, with SymPy labels)
   2. LLM-SRBench HDF5 real data (finite, mixed in with probability)
 
-Uses v2 label encoding (4-class mono/conv).
+Uses 4-class label encoding for mono/conv.
 """
 from __future__ import annotations
 import json
@@ -108,15 +108,15 @@ def _load_srbench_items(
             data[:, -1] = sampled[:, 0].astype(np.float32)
 
             vars_list = lab["variables"]
-            mono_v2 = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
-            conv_v2 = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_labels = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            conv_labels = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
             period = np.array([lab["periodicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
 
             mono_padded = np.zeros(max_var_num, dtype=np.int64)
             conv_padded = np.zeros(max_var_num, dtype=np.int64)
             period_padded = np.zeros(max_var_num, dtype=np.int64)
-            mono_padded[:n_vars] = mono_v2
-            conv_padded[:n_vars] = conv_v2
+            mono_padded[:n_vars] = mono_labels
+            conv_padded[:n_vars] = conv_labels
             period_padded[:n_vars] = period
 
             var_mask = np.zeros(max_var_num, dtype=bool)
@@ -296,7 +296,7 @@ class DataPropertyDataset(D.Dataset):
 
 
 class SRBenchPropertyDataset(D.Dataset):
-    """Finite dataset loading LLM-SRBench HDF5 data with GT labels (v2 encoding)."""
+    """Finite dataset loading LLM-SRBench HDF5 data with GT labels (4-class encoding)."""
 
     def __init__(
         self,

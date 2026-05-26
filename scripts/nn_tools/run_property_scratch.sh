@@ -1,12 +1,12 @@
 #!/bin/bash
-# v2: From-scratch property model with SymPy labels + SRBench mixing + 4-class encoding
+# From-scratch property model with SymPy labels + SRBench mixing + 4-class encoding
 set -e
 cd /data6/huanghao/regression_0423/SR_Agent/MySRAgent
 
-SCRATCH_DIR="logs/nn_tools/train_property_v2/scratch"
+SCRATCH_DIR="logs/nn_tools/train_property/scratch"
 mkdir -p "$SCRATCH_DIR"
 
-echo "Launching v2 from-scratch training..."
+echo "Launching from-scratch training..."
 conda run -n sragent python scripts/nn_tools/train_property.py \
     --mode scratch \
     --save_path "$SCRATCH_DIR" \
@@ -31,7 +31,7 @@ conda run -n sragent python scripts/nn_tools/train_property.py \
     --srbench_mix_ratio 0.2 \
     2>&1 | tee "$SCRATCH_DIR/console.log"
 
-echo "Evaluating v2 from-scratch model..."
+echo "Evaluating from-scratch model..."
 conda run -n sragent python scripts/nn_tools/eval_property.py \
     --checkpoint "$SCRATCH_DIR/best.pth" \
     --device cuda:0 \
@@ -39,4 +39,4 @@ conda run -n sragent python scripts/nn_tools/eval_property.py \
     --sample_num 200 \
     2>&1 | tee "$SCRATCH_DIR/eval_console.log"
 
-echo "=== v2 Experiment 1 (scratch) done ==="
+echo "=== Experiment 1 (scratch) done ==="

@@ -1,7 +1,7 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 """Compute property labels from (X, y) data arrays.
 
-**New 4-class encoding (v2):**
+**4-class encoding:**
   Monotonicity: 0=non-monotonic/unknown, 1=increasing, 2=decreasing, 3=constant
   Convexity:    0=neither/unknown,       1=convex,      2=concave,    3=affine
   Periodicity:  0=non-periodic,          1=periodic
@@ -20,7 +20,7 @@ __all__ = [
     "compute_all_labels_sympy",
     "label_signature",
     "coarse_label_key",
-    "remap_old_to_v2",
+    "remap_old_labels",
     "MONO_CLASSES",
     "CONV_CLASSES",
 ]
@@ -28,14 +28,14 @@ __all__ = [
 MONO_CLASSES = 4  # 0=non-mono/unk, 1=inc, 2=dec, 3=const
 CONV_CLASSES = 4  # 0=neither/unk, 1=convex, 2=concave, 3=affine
 
-_OLD_TO_V2_MONO = {0: 0, 1: 1, 2: 2, 3: 0, 4: 3}
-_OLD_TO_V2_CONV = {0: 0, 1: 1, 2: 2, 3: 0, 4: 3}
+_OLD_TO_NEW_MONO = {0: 0, 1: 1, 2: 2, 3: 0, 4: 3}
+_OLD_TO_NEW_CONV = {0: 0, 1: 1, 2: 2, 3: 0, 4: 3}
 
 
-def remap_old_to_v2(old_mono, old_conv):
+def remap_old_labels(old_mono, old_conv):
     """Convert old 5-class labels to new 4-class encoding."""
-    mono = np.array([_OLD_TO_V2_MONO[int(v)] for v in old_mono], dtype=np.int64)
-    conv = np.array([_OLD_TO_V2_CONV[int(v)] for v in old_conv], dtype=np.int64)
+    mono = np.array([_OLD_TO_NEW_MONO[int(v)] for v in old_mono], dtype=np.int64)
+    conv = np.array([_OLD_TO_NEW_CONV[int(v)] for v in old_conv], dtype=np.int64)
     return mono, conv
 
 
@@ -260,7 +260,7 @@ def _sympy_multiplicative_sep(expr, sym_dict, var_names):
 def compute_all_labels(
     X: np.ndarray, y: np.ndarray, n_vars: int,
 ) -> dict:
-    """Compute property labels using pure numerical methods (v2 encoding)."""
+    """Compute property labels using pure numerical methods (4-class encoding)."""
     mono = np.zeros(n_vars, dtype=np.int64)
     conv = np.zeros(n_vars, dtype=np.int64)
     period = np.zeros(n_vars, dtype=np.int64)
@@ -302,7 +302,7 @@ def _sorted_y(X_clean, var_idx, N):
 
 
 def _check_monotonicity(y, X, var_idx, n_bins=15, confidence=0.85):
-    """Returns v2 encoding: 0=non-mono, 1=inc, 2=dec, 3=const."""
+    """Returns 4-class encoding: 0=non-mono, 1=inc, 2=dec, 3=const."""
     x = X[:, var_idx]
     sorted_idx = np.argsort(x)
     y_sorted = y[sorted_idx]
@@ -328,7 +328,7 @@ def _numerical_monotonicity(x_col, y_sorted_placeholder):
 
 
 def _check_convexity(y, X, var_idx, n_bins=10, confidence=0.75):
-    """Returns v2 encoding: 0=neither, 1=convex, 2=concave, 3=affine."""
+    """Returns 4-class encoding: 0=neither, 1=convex, 2=concave, 3=affine."""
     x = X[:, var_idx]
     sorted_idx = np.argsort(x)
     y_sorted = y[sorted_idx]

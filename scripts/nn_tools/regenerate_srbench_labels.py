@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-# conda run -n sragent python scripts/nn_tools/regenerate_srbench_labels_v2.py
-"""Regenerate LLM-SRBench property labels with UNIFIED methods (v2 encoding).
+# conda run -n sragent python scripts/nn_tools/regenerate_srbench_labels.py
+"""Regenerate LLM-SRBench property labels with UNIFIED methods.
 
 Ensures full consistency between training labels and GT labels:
   - Mono/Conv: SymPy diff + lambdify, confidence=0.95 (same as compute_labels.py)
@@ -233,7 +233,7 @@ def sympy_check_mono_conv(expr, sym_dict, input_vars, domain_data, n_points=200)
 
 
 def analyze_problem(problem):
-    """Analyze one problem with UNIFIED methods (v2 encoding)."""
+    """Analyze one problem with UNIFIED methods (4-class encoding)."""
     dataset = problem["dataset"]
     name = problem["name"]
     symbols_list = problem["symbols"]
@@ -319,12 +319,12 @@ def main():
 
     if failed:
         print(f"\nFailed to analyze {len(failed)} formulas: {failed[:10]}...")
-    print(f"\nSuccessfully generated v2 labels for {len(labels)} formulas")
+    print(f"\nSuccessfully generated labels for {len(labels)} formulas")
 
     # Save
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    all_labels_path = OUTPUT_DIR / "all_labels_v2.json"
+    all_labels_path = OUTPUT_DIR / "all_labels.json"
     with open(all_labels_path, "w") as f:
         json.dump(labels, f, indent=2, ensure_ascii=False)
     print(f"Saved: {all_labels_path}")
@@ -333,7 +333,7 @@ def main():
     datasets = set(l["dataset"] for l in labels)
     for ds in sorted(datasets):
         ds_labels = [l for l in labels if l["dataset"] == ds]
-        ds_path = OUTPUT_DIR / f"{ds}_v2.json"
+        ds_path = OUTPUT_DIR / f"{ds}.json"
         with open(ds_path, "w") as f:
             json.dump(ds_labels, f, indent=2, ensure_ascii=False)
         print(f"Saved: {ds_path} ({len(ds_labels)} formulas)")
@@ -360,10 +360,10 @@ def print_stats(labels):
         sep_counts[lab["multiplicative_separable"]] += 1
 
     print(f"\n=== V2 Label Statistics ({len(labels)} formulas, {total_vars} var-pairs) ===")
-    print(f"\nMonotonicity (v2: 0=default, 1=inc, 2=dec, 3=const):")
+    print(f"\nMonotonicity (0=default, 1=inc, 2=dec, 3=const):")
     for k in sorted(mono_counts):
         print(f"  {k}: {mono_counts[k]} ({mono_counts[k]/total_vars*100:.1f}%)")
-    print(f"\nConvexity (v2: 0=default, 1=convex, 2=concave, 3=affine):")
+    print(f"\nConvexity (0=default, 1=convex, 2=concave, 3=affine):")
     for k in sorted(conv_counts):
         print(f"  {k}: {conv_counts[k]} ({conv_counts[k]/total_vars*100:.1f}%)")
     print(f"\nPeriodicity (0=non-periodic, 1=periodic):")

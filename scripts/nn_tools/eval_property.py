@@ -1,5 +1,5 @@
 # conda run -n sragent python scripts/nn_tools/eval_property.py --checkpoint <path>
-"""Evaluate PropertyPredictionModel on four test sets (v2: 4-class encoding):
+"""Evaluate PropertyPredictionModel on four test sets (4-class encoding):
 
 A) New synthetic formulas (gplearn, balanced rejection sampling)
 B) Seen-formula / new-range (gplearn, same seed but different sampling range)
@@ -36,7 +36,7 @@ _logger = logging.getLogger("sr_agent.eval_property")
 
 DATA_ROOT = ROOT / "data" / "llm-srbench-data"
 HDF5_PATH = DATA_ROOT / "lsr_bench_data.hdf5"
-LABEL_PATH = DATA_ROOT / "property_label" / "all_labels_v2.json"
+LABEL_PATH = DATA_ROOT / "property_label" / "all_labels.json"
 
 
 def load_model(args, ckpt_path, device):
@@ -87,7 +87,7 @@ def per_task_metrics(all_preds, all_gts, all_masks, task, n_classes):
 
 
 def eval_synthetic(args, model, float_emb, data_emb, seed, n_samples, test_name):
-    """Test set A or B: synthetic formulas (v2 labels via SymPy)."""
+    """Test set A or B: synthetic formulas (labels via SymPy)."""
     eq_gen = BaseEqGenerator.create(
         "gplearn", n_variables=args.max_var_num, random_seed=seed,
         const_range=None, depth_range=(1, 5), n_var_range=(1, args.max_var_num + 1),
@@ -192,14 +192,14 @@ def eval_llm_srbench(args, model, float_emb, data_emb, splits=("test",), test_na
             masks_all.append(mask)
 
             vars_list = lab["variables"]
-            mono_v2 = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
-            conv_v2 = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_labels = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            conv_labels = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
 
             mono_gt = np.zeros(args.max_var_num, dtype=np.int64)
             conv_gt = np.zeros(args.max_var_num, dtype=np.int64)
             period_gt = np.zeros(args.max_var_num, dtype=np.int64)
-            mono_gt[:n_vars] = mono_v2
-            conv_gt[:n_vars] = conv_v2
+            mono_gt[:n_vars] = mono_labels
+            conv_gt[:n_vars] = conv_labels
             for i, v in enumerate(vars_list[:n_vars]):
                 if i < args.max_var_num:
                     period_gt[i] = lab["periodicity"].get(v, 0)
@@ -268,7 +268,7 @@ def main(args):
             _logger.info(f"  {t}: acc={r['accuracy']:.3f}, macro_f1={r['macro_f1']:.3f}")
         _logger.info(f"  sep_acc={results['test_d_srbench_ood']['sep_acc']:.3f}")
 
-    out_path = Path(args.checkpoint).parent / "eval_results_v2.json"
+    out_path = Path(args.checkpoint).parent / "eval_results.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     _logger.info(f"Results saved to {out_path}")

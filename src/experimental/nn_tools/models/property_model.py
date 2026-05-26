@@ -1,10 +1,10 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Property prediction model: data -> property labels (v2 encoding).
+"""Property prediction model: data -> property labels (4-class encoding).
 
 Reuses the same encoder architecture as FoundationModel but replaces the
 formula decoder with per-property classification heads.
 
-v2 label encoding:
+Label encoding:
   Monotonicity: 4 classes (0=non-mono/unknown, 1=inc, 2=dec, 3=const)
   Convexity:    4 classes (0=neither/unknown, 1=convex, 2=concave, 3=affine)
   Periodicity:  2 classes (0=non-periodic, 1=periodic)

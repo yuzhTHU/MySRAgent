@@ -1,7 +1,7 @@
 # conda run -n sragent python scripts/nn_tools/train_property.py
 """Train PropertyPredictionModel to predict formula properties from data.
 
-v2: 4-class mono/conv, SymPy labels, optional SRBench HDF5 mixing.
+4-class mono/conv, SymPy labels, optional SRBench HDF5 mixing.
 
 Two modes:
   --mode scratch   : train from random initialization
@@ -40,7 +40,7 @@ _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
 DATA_ROOT = ROOT / "data" / "llm-srbench-data"
 HDF5_PATH = DATA_ROOT / "lsr_bench_data.hdf5"
-LABEL_PATH = DATA_ROOT / "property_label" / "all_labels_v2.json"
+LABEL_PATH = DATA_ROOT / "property_label" / "all_labels.json"
 
 
 def build_dataloader(args, seed, n_samples, batch_size, sampler=None, shuffle=False,
@@ -156,7 +156,7 @@ def main(args):
     ))
     optimizer = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=args.weight_decay)
 
-    # v2: 4-class weights — upweight informative classes (inc/dec/const, convex/concave/affine)
+    # 4-class weights — upweight informative classes (inc/dec/const, convex/concave/affine)
     mono_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
     conv_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
     period_weights = torch.tensor([1.0, 5.0], device=args.device)

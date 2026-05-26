@@ -18,8 +18,8 @@ _logger = logging.getLogger(f"sr_agent.{__name__}")
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 _DEFAULT_CHECKPOINTS = {
-    "scratch": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property_v2" / "scratch" / "best.pth",
-    "finetune": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property_v2" / "finetune" / "best.pth",
+    "scratch": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property" / "scratch" / "best.pth",
+    "finetune": _PROJECT_ROOT / "logs" / "nn_tools" / "train_property" / "finetune" / "best.pth",
 }
 
 _PERIOD_LABELS = {0: "non-periodic", 1: "periodic"}
