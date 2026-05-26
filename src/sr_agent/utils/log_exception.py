@@ -3,10 +3,10 @@ import traceback
 from .tag2ansi import tag2ansi
 
 
-def log_exception(e: Exception) -> str:
+def log_exception(e: Exception, with_traceback=True) -> str:
     """Format exception for logging."""
     return tag2ansi(
         f"[red bold]{type(e).__name__}[reset]: "
-        f"[red]{str(e)}[reset]\n"
-        f"[gray]{traceback.format_exc()}[reset]"
+        f"[red]{str(e)}[reset]"
+        f"\n[gray]{traceback.format_exc() if with_traceback else ''}[reset]"
     )

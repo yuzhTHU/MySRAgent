@@ -69,7 +69,7 @@ class OpenRouterAPI(LLMAPI):
                 message = completion.choices[0].message.to_dict()
                 content = message['content'] or ""
             except Exception as e:
-                _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e)}")
+                _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e, with_traceback=False)}")
                 continue
 
             token_usage = {}
