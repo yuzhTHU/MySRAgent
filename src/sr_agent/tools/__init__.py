@@ -15,6 +15,7 @@ from .create_skill import CreateSkill
 from .edit_skill import EditSkill
 from .call_sindy import SINDyTool
 from .call_pysr import PySRTool
+from .predict_property import PropertyPredictorTool
 
 __all__ = [
     "BaseTool",
@@ -31,4 +32,5 @@ __all__ = [
     "EditSkill",
     "SINDyTool",
     "PySRTool",
+    "PropertyPredictorTool",
 ]

@@ -165,3 +165,9 @@ playground/
 /AGENTS.md
 /docs/
 /third-party/
+
+# Local analysis notebooks & data
+/analysis/
+
+# Neural architecture search experiments
+/scripts/neural/
