@@ -42,22 +42,40 @@ def is_contiguous(time_info, start, final):
         return np.all(np.diff(window) == 1)
 
 
+def _call_predict(predict_func, sims, node_info, time_info_slices):
+    """对若干个窗口批量调用 predict_func.
+
+    如果算法显式提供了 predict_batch (通过 predict_func.batch = True 标记) 或者算法函数能处理
+    (B, H, N) 维度的输入, 则一次性传入所有窗口以提速; 否则退化为逐窗口循环.
+    """
+    if getattr(predict_func, "batched", False):
+        sim_batch = np.stack(sims, axis=0)  # (B, H, N)
+        preds = predict_func(sim_batch, node_info, time_info_slices)
+        return [preds[i] for i in range(len(sims))]
+    return [predict_func(sim, node_info, ts) for sim, ts in zip(sims, time_info_slices)]
+
+
 def rollout_metrics(args, predict_func, data, node_info, time_info) -> pd.DataFrame:
     positions = valid_start_positions(time_info, args.hist_steps, pred_step=0)
     simulations = [np.asarray(data[pos + 1 - args.hist_steps : pos + 1], dtype=np.float64) for pos in positions]
     rows = [{'step': 0, 'seconds': 0.0, 'pearson': 1.0, 'r2': 1.0, 'n_time': len(positions), 'n_node': data.shape[1]}]
     for step in tqdm(range(1, args.max_rollout_steps + 1), desc="Rollout", unit="step", disable=not args.verbose):
-        next_positions = []
-        next_simulations = []
-        preds, trues = [], []
+        keep_idx = []
+        kept_sims = []
+        time_slices = []
         for i, (pos, sim) in enumerate(zip(positions, simulations)):
             if is_contiguous(time_info, pos + step - args.hist_steps, pos + step + 1):
-                local_time_info = time_info.iloc[pos + step - args.hist_steps:pos + step]
-                pred = predict_func(sim, node_info, local_time_info)
-                preds.append(pred)
-                trues.append(data[pos + step])
-                next_positions.append(pos)
-                next_simulations.append(np.concatenate([sim[1:], pred[None, :]], axis=0))
+                keep_idx.append(i)
+                kept_sims.append(sim)
+                time_slices.append(time_info.iloc[pos + step - args.hist_steps:pos + step])
+        if not keep_idx:
+            rows.append({"step": step, "seconds": step / args.sampling_hz, "pearson": np.nan, "r2": np.nan, "n_time": 0, "n_node": data.shape[1]})
+            positions, simulations = [], []
+            continue
+        preds = _call_predict(predict_func, kept_sims, node_info, time_slices)
+        trues = [data[positions[i] + step] for i in keep_idx]
+        next_positions = [positions[i] for i in keep_idx]
+        next_simulations = [np.concatenate([kept_sims[k][1:], preds[k][None, :]], axis=0) for k in range(len(keep_idx))]
         positions = next_positions
         simulations = next_simulations
         rows.append({

@@ -1,5 +1,5 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Dataset that generates (data, property_labels) pairs with rejection sampling.
+"""Dataset v3: generates (data, property_labels) pairs with augmentation.
 
 Each item contains:
   - data: float tensor (sample_num, max_var_num + 1)
@@ -10,7 +10,10 @@ Supports two data sources:
   1. Synthetic formulas via gplearn + nd2py (infinite, with SymPy labels)
   2. LLM-SRBench HDF5 real data (finite, mixed in with probability)
 
-Uses 4-class label encoding for mono/conv.
+v3 augmentations:
+  1. Noise injection: Gaussian noise on y (scale-relative).
+  2. Scaling augmentation: random y-scaling (mono/conv are scale-invariant).
+  3. Variable permutation augmentation: shuffles variable order (+ labels).
 """
 from __future__ import annotations
 import json
@@ -129,6 +132,7 @@ def _load_srbench_items(
                 "convexity": torch.from_numpy(conv_padded),
                 "periodicity": torch.from_numpy(period_padded),
                 "mul_sep": torch.tensor(lab["multiplicative_separable"], dtype=torch.long),
+                "n_vars": n_vars,
             })
 
     _logger.info(f"Loaded {len(items)} SRBench items from splits={splits}")
@@ -136,9 +140,10 @@ def _load_srbench_items(
 
 
 class DataPropertyDataset(D.Dataset):
-    """Generate (data, property_labels) pairs with SymPy labels + rejection sampling.
+    """Generate (data, property_labels) pairs with SymPy labels + augmentations.
 
     Optionally mixes in LLM-SRBench HDF5 real data.
+    v3 augmentations: noise injection, y-scaling, variable permutation.
     """
 
     def __init__(
@@ -154,6 +159,9 @@ class DataPropertyDataset(D.Dataset):
         use_sympy_labels: bool = True,
         srbench_items: Optional[List[Dict]] = None,
         srbench_mix_ratio: float = 0.0,
+        noise_std: float = 0.0,
+        scale_augment: bool = False,
+        permute_vars: bool = False,
     ):
         self.max_var_num = max_var_num
         self.eq_generator = eq_generator
@@ -167,6 +175,9 @@ class DataPropertyDataset(D.Dataset):
         self.sig_counter: Counter = Counter()
         self.srbench_items = srbench_items or []
         self.srbench_mix_ratio = srbench_mix_ratio if self.srbench_items else 0.0
+        self.noise_std = noise_std
+        self.scale_augment = scale_augment
+        self.permute_vars = permute_vars
 
     def __len__(self):
         if self.n_samples is None:
@@ -177,14 +188,65 @@ class DataPropertyDataset(D.Dataset):
         rng = np.random.default_rng((self.random_state, idx) if self.random_state is not None else None)
 
         if self.srbench_items and rng.random() < self.srbench_mix_ratio:
-            return self._get_srbench_item(rng)
+            item = self._get_srbench_item(rng)
+        else:
+            item = self._get_synthetic_item(rng)
 
-        return self._get_synthetic_item(rng)
+        item = self._apply_augmentations(item, rng)
+        return item
+
+    def _apply_augmentations(self, item: dict, rng: np.random.Generator) -> dict:
+        data = item["data"].clone()
+        n_vars = int(item["var_mask"].sum().item())
+
+        # Noise injection on y
+        if self.noise_std > 0 and n_vars > 0:
+            y_col = data[:, -1]
+            y_std = y_col.std().item()
+            if y_std > 1e-10:
+                noise = torch.from_numpy(
+                    rng.normal(0, self.noise_std * y_std, size=y_col.shape).astype(np.float32)
+                )
+                data[:, -1] = y_col + noise
+
+        # Scale augmentation on y (mono/conv/period labels are scale-invariant)
+        if self.scale_augment and rng.random() < 0.3:
+            scale = float(rng.uniform(0.1, 10.0))
+            data[:, -1] *= scale
+
+        # Variable permutation augmentation
+        if self.permute_vars and n_vars > 1 and rng.random() < 0.3:
+            perm = rng.permutation(n_vars)
+            new_data = data.clone()
+            for new_i, old_i in enumerate(perm):
+                new_data[:, new_i] = data[:, old_i]
+
+            mono = item["monotonicity"].clone()
+            conv = item["convexity"].clone()
+            period = item["periodicity"].clone()
+            new_mono = mono.clone()
+            new_conv = conv.clone()
+            new_period = period.clone()
+            for new_i, old_i in enumerate(perm):
+                new_mono[new_i] = mono[old_i]
+                new_conv[new_i] = conv[old_i]
+                new_period[new_i] = period[old_i]
+
+            item = dict(item)
+            item["data"] = new_data
+            item["monotonicity"] = new_mono
+            item["convexity"] = new_conv
+            item["periodicity"] = new_period
+            return item
+
+        item = dict(item)
+        item["data"] = data
+        return item
 
     def _get_srbench_item(self, rng):
         """Return a random pre-loaded SRBench item (re-sampled)."""
         item = self.srbench_items[rng.integers(0, len(self.srbench_items))]
-        return item
+        return {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in item.items()}
 
     def _get_synthetic_item(self, rng):
         max_reject = 20

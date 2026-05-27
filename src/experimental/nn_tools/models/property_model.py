@@ -1,8 +1,13 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Property prediction model: data -> property labels (4-class encoding).
+"""Property prediction model v3: data -> property labels (4-class encoding).
 
-Reuses the same encoder architecture as FoundationModel but replaces the
-formula decoder with per-property classification heads.
+v3 architecture improvements over v2:
+  1. Per-variable cross-attention: each variable gets its own representation
+     via learned query vectors attending to encoder memory, instead of all
+     variables sharing one pooled vector.
+  2. Deeper classification heads with LayerNorm (2 hidden layers).
+  3. Higher default dropout (0.2) for better regularization.
+  4. Label smoothing support in loss computation.
 
 Label encoding:
   Monotonicity: 4 classes (0=non-mono/unknown, 1=inc, 2=dec, 3=const)
@@ -15,7 +20,7 @@ import torch.nn as nn
 
 
 class PropertyPredictionModel(nn.Module):
-    """Predict formula properties from data embeddings."""
+    """Predict formula properties from data embeddings (v3 architecture)."""
 
     N_MONO_CLASSES = 4
     N_CONV_CLASSES = 4
@@ -27,12 +32,13 @@ class PropertyPredictionModel(nn.Module):
         d = args.d_model
         self.d_model = d
         self.max_var_num = args.max_var_num
+        dropout = getattr(args, "dropout", 0.2)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d,
             nhead=args.nhead,
             dim_feedforward=args.dim_feedforward,
-            dropout=args.dropout,
+            dropout=dropout,
             batch_first=True,
         )
         self.encoder = nn.TransformerEncoder(
@@ -40,24 +46,36 @@ class PropertyPredictionModel(nn.Module):
             num_layers=args.num_encoder_layers,
         )
 
-        self.pool_attention = nn.Linear(d, 1)
+        # Global attention pool (for formula-level sep head)
+        self.global_pool_attn = nn.Linear(d, 1)
+        self.global_pool_norm = nn.LayerNorm(d)
 
-        head_hidden = d
-        self.head_mono = nn.Sequential(
-            nn.Linear(d, head_hidden), nn.ReLU(), nn.Dropout(args.dropout),
-            nn.Linear(head_hidden, self.max_var_num * self.N_MONO_CLASSES),
+        # Per-variable cross-attention: learned queries for each variable slot
+        self.var_queries = nn.Parameter(torch.randn(args.max_var_num, d) * 0.02)
+        self.var_cross_attn = nn.MultiheadAttention(
+            d, args.nhead, dropout=dropout, batch_first=True,
         )
-        self.head_conv = nn.Sequential(
-            nn.Linear(d, head_hidden), nn.ReLU(), nn.Dropout(args.dropout),
-            nn.Linear(head_hidden, self.max_var_num * self.N_CONV_CLASSES),
-        )
-        self.head_period = nn.Sequential(
-            nn.Linear(d, head_hidden), nn.ReLU(), nn.Dropout(args.dropout),
-            nn.Linear(head_hidden, self.max_var_num * self.N_PERIOD_CLASSES),
-        )
-        self.head_sep = nn.Sequential(
-            nn.Linear(d, head_hidden), nn.ReLU(), nn.Dropout(args.dropout),
-            nn.Linear(head_hidden, self.N_SEP_CLASSES),
+        self.var_norm = nn.LayerNorm(d)
+
+        # Per-variable heads: input is per-variable representation (B, max_var, d)
+        self.head_mono = self._build_head(d, self.N_MONO_CLASSES, dropout)
+        self.head_conv = self._build_head(d, self.N_CONV_CLASSES, dropout)
+        self.head_period = self._build_head(d, self.N_PERIOD_CLASSES, dropout)
+
+        # Formula-level head: input is global pooled (B, d)
+        self.head_sep = self._build_head(d, self.N_SEP_CLASSES, dropout)
+
+    @staticmethod
+    def _build_head(d: int, n_classes: int, dropout: float) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Linear(d, d),
+            nn.LayerNorm(d),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d, d),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d, n_classes),
         )
 
     def forward(
@@ -67,17 +85,27 @@ class PropertyPredictionModel(nn.Module):
     ) -> dict[str, torch.Tensor]:
         memory = self.encoder(data_embedding, src_key_padding_mask=data_padding_mask)
 
-        score = self.pool_attention(memory).squeeze(-1)
+        # Global pool for formula-level prediction
+        score = self.global_pool_attn(memory).squeeze(-1)
         if data_padding_mask is not None:
             score = score.masked_fill(data_padding_mask, float("-inf"))
         weight = torch.softmax(score, dim=1).unsqueeze(-1)
-        pooled = (memory * weight).sum(dim=1)  # (B, d)
+        pooled = self.global_pool_norm((memory * weight).sum(dim=1))  # (B, d)
 
-        B = pooled.shape[0]
-        mono = self.head_mono(pooled).view(B, self.max_var_num, self.N_MONO_CLASSES)
-        conv = self.head_conv(pooled).view(B, self.max_var_num, self.N_CONV_CLASSES)
-        period = self.head_period(pooled).view(B, self.max_var_num, self.N_PERIOD_CLASSES)
-        sep = self.head_sep(pooled)
+        # Per-variable cross-attention
+        B = memory.shape[0]
+        var_q = self.var_queries.unsqueeze(0).expand(B, -1, -1)  # (B, max_var, d)
+        var_repr, _ = self.var_cross_attn(var_q, memory, memory,
+                                          key_padding_mask=data_padding_mask)
+        var_repr = self.var_norm(var_repr)  # (B, max_var, d)
+
+        # Per-variable classification
+        mono = self.head_mono(var_repr)   # (B, max_var, 4)
+        conv = self.head_conv(var_repr)   # (B, max_var, 4)
+        period = self.head_period(var_repr)  # (B, max_var, 2)
+
+        # Formula-level classification
+        sep = self.head_sep(pooled)  # (B, 2)
 
         return {
             "monotonicity": mono,

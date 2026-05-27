@@ -100,16 +100,19 @@ def get_predict_func(args, result_dict):
     model.eval()
 
     def predict_func(data, node_info, time_info):
-        """根据历史数据预测未来数据
-        Args:
-            同 train_model 函数中的参数
-        Returns:
-            pred: np.ndarray, shape (n_nodes), 预测的下一步数据矩阵
-        """
-        x = np.asarray(data[-hist_steps:, :], dtype=np.float32)
-        x_tensor = torch.from_numpy(x.reshape(1, hist_steps * n_nodes)).to(args.mlp_device)
+        arr = np.asarray(data, dtype=np.float32)
+        if arr.ndim == 2:
+            arr = arr[None, -hist_steps:, :]
+            squeeze = True
+        else:
+            arr = arr[:, -hist_steps:, :]
+            squeeze = False
+        B = arr.shape[0]
+        x_tensor = torch.from_numpy(arr.reshape(B, hist_steps * n_nodes)).to(args.mlp_device)
         with torch.no_grad():
-            dx = model(x_tensor).cpu().numpy().squeeze()
-        return x[-1] + dx
+            dx = model(x_tensor).cpu().numpy()
+        out = arr[:, -1, :] + dx
+        return out[0] if squeeze else out
 
+    predict_func.batched = True
     return predict_func

@@ -1,10 +1,12 @@
 # conda run -n sragent python scripts/nn_tools/eval_property.py --checkpoint <path>
-"""Evaluate PropertyPredictionModel on four test sets (4-class encoding):
+"""Evaluate PropertyPredictionModel v3 on four test sets (4-class encoding):
 
 A) New synthetic formulas (gplearn, balanced rejection sampling)
 B) Seen-formula / new-range (gplearn, same seed but different sampling range)
 C) LLM-SRBench real formulas — HDF5 **test** split only
 D) LLM-SRBench real formulas — HDF5 **ood_test** split only (where available)
+
+Computes accuracy, macro-F1, per-class metrics, and also F1 for separability.
 """
 from __future__ import annotations
 import sys
@@ -86,6 +88,26 @@ def per_task_metrics(all_preds, all_gts, all_masks, task, n_classes):
     return {"accuracy": float(acc), "macro_f1": float(np.mean(f1s)), "per_class": per_class}
 
 
+def sep_metrics(sep_preds, sep_gts):
+    """Compute accuracy and macro-F1 for separability (binary)."""
+    preds = np.array(sep_preds)
+    gts = np.array(sep_gts)
+    acc = float((preds == gts).mean())
+    f1s = []
+    per_class = {}
+    for c in range(2):
+        tp = ((preds == c) & (gts == c)).sum()
+        fp = ((preds == c) & (gts != c)).sum()
+        fn = ((preds != c) & (gts == c)).sum()
+        prec = tp / max(tp + fp, 1)
+        rec = tp / max(tp + fn, 1)
+        f1 = 2 * prec * rec / max(prec + rec, 1e-8)
+        f1s.append(f1)
+        per_class[int(c)] = {"precision": float(prec), "recall": float(rec), "f1": float(f1),
+                             "support": int((gts == c).sum())}
+    return {"accuracy": acc, "macro_f1": float(np.mean(f1s)), "per_class": per_class}
+
+
 def eval_synthetic(args, model, float_emb, data_emb, seed, n_samples, test_name):
     """Test set A or B: synthetic formulas (labels via SymPy)."""
     eq_gen = BaseEqGenerator.create(
@@ -105,7 +127,7 @@ def eval_synthetic(args, model, float_emb, data_emb, seed, n_samples, test_name)
     preds_dict = {t: [] for t in ("monotonicity", "convexity", "periodicity")}
     gts_dict = {t: [] for t in ("monotonicity", "convexity", "periodicity")}
     masks_all = []
-    sep_preds, sep_gts = [], []
+    sep_preds_list, sep_gts_list = [], []
 
     for i in range(n_samples):
         item = ds[i]
@@ -116,15 +138,14 @@ def eval_synthetic(args, model, float_emb, data_emb, seed, n_samples, test_name)
         for t in ("monotonicity", "convexity", "periodicity"):
             preds_dict[t].append(out[t][0].argmax(dim=-1).numpy())
             gts_dict[t].append(item[t].numpy())
-        sep_preds.append(out["multiplicative_separable"][0].argmax().item())
-        sep_gts.append(item["mul_sep"].item())
+        sep_preds_list.append(out["multiplicative_separable"][0].argmax().item())
+        sep_gts_list.append(item["mul_sep"].item())
 
     results = {}
     for t, nc in [("monotonicity", MONO_CLASSES), ("convexity", CONV_CLASSES), ("periodicity", 2)]:
         results[t] = per_task_metrics(preds_dict[t], gts_dict[t], masks_all, t, nc)
-    sep_preds = np.array(sep_preds)
-    sep_gts = np.array(sep_gts)
-    results["sep_acc"] = float((sep_preds == sep_gts).mean())
+    results["separability"] = sep_metrics(sep_preds_list, sep_gts_list)
+    results["sep_acc"] = results["separability"]["accuracy"]
     return results
 
 
@@ -138,7 +159,7 @@ def eval_llm_srbench(args, model, float_emb, data_emb, splits=("test",), test_na
     preds_dict = {t: [] for t in ("monotonicity", "convexity", "periodicity")}
     gts_dict = {t: [] for t in ("monotonicity", "convexity", "periodicity")}
     masks_all = []
-    sep_preds, sep_gts = [], []
+    sep_preds_list, sep_gts_list = [], []
 
     ds_map = {"lsr_synth_chem_react": "chem_react", "lsr_synth_phys_osc": "phys_osc", "lsr_synth_matsci": "matsci"}
     skipped = 0
@@ -210,8 +231,8 @@ def eval_llm_srbench(args, model, float_emb, data_emb, splits=("test",), test_na
             gts_dict["monotonicity"].append(mono_gt)
             gts_dict["convexity"].append(conv_gt)
             gts_dict["periodicity"].append(period_gt)
-            sep_preds.append(out["multiplicative_separable"][0].argmax().item())
-            sep_gts.append(lab["multiplicative_separable"])
+            sep_preds_list.append(out["multiplicative_separable"][0].argmax().item())
+            sep_gts_list.append(lab["multiplicative_separable"])
 
     if not masks_all:
         _logger.warning(f"No valid formulas for {test_name} (skipped={skipped})")
@@ -222,9 +243,8 @@ def eval_llm_srbench(args, model, float_emb, data_emb, splits=("test",), test_na
     results = {}
     for t, nc in [("monotonicity", MONO_CLASSES), ("convexity", CONV_CLASSES), ("periodicity", 2)]:
         results[t] = per_task_metrics(preds_dict[t], gts_dict[t], masks_all, t, nc)
-    sep_preds = np.array(sep_preds)
-    sep_gts = np.array(sep_gts)
-    results["sep_acc"] = float((sep_preds == sep_gts).mean())
+    results["separability"] = sep_metrics(sep_preds_list, sep_gts_list)
+    results["sep_acc"] = results["separability"]["accuracy"]
     return results
 
 
@@ -240,7 +260,8 @@ def main(args):
     for t in ("monotonicity", "convexity", "periodicity"):
         r = results["test_a_new_synthetic"][t]
         _logger.info(f"  {t}: acc={r['accuracy']:.3f}, macro_f1={r['macro_f1']:.3f}")
-    _logger.info(f"  sep_acc={results['test_a_new_synthetic']['sep_acc']:.3f}")
+    sr = results["test_a_new_synthetic"]["separability"]
+    _logger.info(f"  sep: acc={sr['accuracy']:.3f}, macro_f1={sr['macro_f1']:.3f}")
 
     _logger.info("=== Test B: Seen formulas, new range ===")
     results["test_b_seen_new_range"] = eval_synthetic(
@@ -248,7 +269,8 @@ def main(args):
     for t in ("monotonicity", "convexity", "periodicity"):
         r = results["test_b_seen_new_range"][t]
         _logger.info(f"  {t}: acc={r['accuracy']:.3f}, macro_f1={r['macro_f1']:.3f}")
-    _logger.info(f"  sep_acc={results['test_b_seen_new_range']['sep_acc']:.3f}")
+    sr = results["test_b_seen_new_range"]["separability"]
+    _logger.info(f"  sep: acc={sr['accuracy']:.3f}, macro_f1={sr['macro_f1']:.3f}")
 
     _logger.info("=== Test C: LLM-SRBench (test split) ===")
     results["test_c_srbench_test"] = eval_llm_srbench(
@@ -257,7 +279,8 @@ def main(args):
         for t in ("monotonicity", "convexity", "periodicity"):
             r = results["test_c_srbench_test"][t]
             _logger.info(f"  {t}: acc={r['accuracy']:.3f}, macro_f1={r['macro_f1']:.3f}")
-        _logger.info(f"  sep_acc={results['test_c_srbench_test']['sep_acc']:.3f}")
+        sr = results["test_c_srbench_test"]["separability"]
+        _logger.info(f"  sep: acc={sr['accuracy']:.3f}, macro_f1={sr['macro_f1']:.3f}")
 
     _logger.info("=== Test D: LLM-SRBench (ood_test split) ===")
     results["test_d_srbench_ood"] = eval_llm_srbench(
@@ -266,7 +289,8 @@ def main(args):
         for t in ("monotonicity", "convexity", "periodicity"):
             r = results["test_d_srbench_ood"][t]
             _logger.info(f"  {t}: acc={r['accuracy']:.3f}, macro_f1={r['macro_f1']:.3f}")
-        _logger.info(f"  sep_acc={results['test_d_srbench_ood']['sep_acc']:.3f}")
+        sr = results["test_d_srbench_ood"]["separability"]
+        _logger.info(f"  sep: acc={sr['accuracy']:.3f}, macro_f1={sr['macro_f1']:.3f}")
 
     out_path = Path(args.checkpoint).parent / "eval_results.json"
     with open(out_path, "w") as f:
@@ -289,7 +313,7 @@ if __name__ == "__main__":
     p.add_argument("--nhead", type=int, default=8)
     p.add_argument("--num_encoder_layers", type=int, default=4)
     p.add_argument("--dim_feedforward", type=int, default=512)
-    p.add_argument("--dropout", type=float, default=0.1)
+    p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--data_pooling", default="attention")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
