@@ -68,3 +68,14 @@ python bench_sr_agent.py \
     --llm_provider openrouter \
     --llm_model "deepseek/deepseek-v4-flash" \
     --ban_tools "predict_property"
+
+python bench_sr_agent.py \
+    --algorithm sr_scientist \
+    --datasets lsrtransform \
+    --exp_name bench_sr_scientist-v4-flash \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash" \
+    --sr_scientist_sandbox_urls http://127.0.0.1:8080/run_code \
+    --sr_scientist_num_turns 2 \
+    --sr_scientist_max_assistant_turns 20 \
+    --sr_scientist_top_k 2
