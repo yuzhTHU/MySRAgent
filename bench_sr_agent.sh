@@ -79,3 +79,12 @@ python bench_sr_agent.py \
     --sr_scientist_num_turns 2 \
     --sr_scientist_max_assistant_turns 20 \
     --sr_scientist_top_k 2
+
+python bench_sr_agent.py \
+    --dataset lsrtransform \
+    --exp_name bench_my_sr_agent_gpt-4o-mini \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "openai/gpt-4o-mini"
+
+    
