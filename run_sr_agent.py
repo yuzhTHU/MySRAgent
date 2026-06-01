@@ -211,7 +211,7 @@ if __name__ == "__main__":
 
     if unknown:
         _logger.warning(f"Unknown args: {unknown}")
-    _logger.note(f"Args: {args}")    
+    _logger.note(f"Args: {args}")
 
     save_args(args, save_path / "args.json")
 

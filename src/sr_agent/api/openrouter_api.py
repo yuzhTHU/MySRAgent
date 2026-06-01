@@ -1,5 +1,6 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 import os
+import time
 import logging
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -63,35 +64,53 @@ class OpenRouterAPI(LLMAPI):
         # see https://github.com/OpenRouterTeam/openrouter-runner/issues/99
         details = []
         for idx in range(1, n + 1):
-            try:
-                completion = client.chat.completions.create(**payload)
-                response_dict = completion.to_dict()
-                message = completion.choices[0].message.to_dict()
-                content = message['content'] or ""
-            except Exception as e:
-                _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e, with_traceback=False)}")
-                continue
+            max_retry = 3
+            for attempt in range(1, max_retry + 1):
+                try:
+                    completion = client.chat.completions.create(**payload)
+                    response_dict = completion.to_dict()
+                    message = completion.choices[0].message.to_dict()
+                    content = message['content'] or ""
+                except Exception as e:
+                    _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e, with_traceback=False)}")
+                    time.sleep(1)
+                    continue
 
-            token_usage = {}
-            price_usage = {}
-            if usage := completion.usage:
-                token_usage["prompt"] = usage.prompt_tokens
-                token_usage["answer"] = usage.completion_tokens
-                total_tokens = getattr(usage, "total_tokens", usage.prompt_tokens + usage.completion_tokens)
-                if (other := total_tokens - usage.prompt_tokens - usage.completion_tokens) > 0:
-                    token_usage["others"] = other
-                price_usage['total'] = getattr(usage, "cost", 0)
+                token_usage = {}
+                price_usage = {}
+                if usage := completion.usage:
+                    token_usage["prompt"] = usage.prompt_tokens
+                    token_usage["answer"] = usage.completion_tokens
+                    total_tokens = getattr(usage, "total_tokens", usage.prompt_tokens + usage.completion_tokens)
+                    if (other := total_tokens - usage.prompt_tokens - usage.completion_tokens) > 0:
+                        token_usage["others"] = other
+                    price_usage['total'] = getattr(usage, "cost", 0)
 
-            if not self.tool_list:
-                tool_call = []
-            elif self.tool_parser:
-                tool_call = self.tool_parser.parse_response(content)
-            elif 'tool_calls' in message:
-                tool_call = self.normalize_openai_tool_calls(message['tool_calls'])
-                message['tool_calls'] = [call.raw for call in tool_call]
-            else:
-                tool_call = []
+                if not self.tool_list:
+                    tool_call = []
+                elif self.tool_parser:
+                    tool_call = self.tool_parser.parse_response(content)
+                elif 'tool_calls' in message:
+                    tool_call = self.normalize_openai_tool_calls(message['tool_calls'])
+                    message['tool_calls'] = [call.raw for call in tool_call]
+                else:
+                    tool_call = []
                 
+                # Avoid yielding empty messages
+                if not (tool_call or content.strip()) and attempt < max_retry:
+                    _logger.trace(
+                        f"Received empty content and no tool calls from "
+                        f"OpenRouterAPI({self.model}), retrying... "
+                        f"(attempt {attempt}/{max_retry})"
+                    )
+                    time.sleep(1)
+                    continue
+                break
+            else:
+                _logger.warning(
+                    f"All {max_retry} retries returned empty responses from "
+                    f"OpenRouterAPI({self.model}), giving up for sample {idx}/{n}."
+                )
             details.append({
                 "content": content,
                 "tool_call": tool_call,

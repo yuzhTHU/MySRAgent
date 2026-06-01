@@ -54,7 +54,7 @@ class SRAgent(FactoryMixin):
         llm_model: str,
         tools: List[BaseTool] | None = None,
         verbose: bool = False,
-        tool_parser: str | BaseParser = 'text',
+        tool_parser: str | BaseParser = 'openai',
         save_path: Optional[str] = None,
         local_sample_size: int = 1,
         max_refinement_depth: int = 20,
@@ -80,7 +80,7 @@ class SRAgent(FactoryMixin):
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
-        setup_logging(info_level='debug' if verbose else 'info', save_path=save_path, force=False)
+        setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
 
         # 参数
         self.llm_provider = llm_provider
@@ -113,7 +113,7 @@ class SRAgent(FactoryMixin):
     def fit( # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
         self,
         X: Dict[str, np.ndarray],
-        y: np.ndarray,
+        y: Dict[str, np.ndarray] | np.ndarray,
         problem_description: str,
     ) -> Dict[str, Any]:
         """执行符号回归任务的主入口。
@@ -429,8 +429,11 @@ class SRAgent(FactoryMixin):
                     message['content'] += "\n\n" + tool_call.raw_str
                 node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=K)] = 'tool_call_parent'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
-        buffer.append(message)
-        buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+        if tool_calls or (message.get('content') or '').strip():
+            buffer.append(message)
+            buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+        else:
+            _logger.warning("Skipping empty LLM response (no content nor tool calls).")
         return buffer, node_parents
 
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
