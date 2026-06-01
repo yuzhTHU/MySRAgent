@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 from .base_tool import BaseTool, ToolMetadata
+from .code_executor import LimitedWriter
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
@@ -35,8 +36,8 @@ class Workspace:
     提供路径解析和安全校验，严格防止路径逃逸。
     """
 
-    def __init__(self, workspace_files: List[str] | None = None):
-        self._path = Path(tempfile.mkdtemp(prefix="sr_workspace_"))
+    def __init__(self, workspace_files: List[str] | None = None, temp_dir: str | None = None):
+        self._path = Path(tempfile.mkdtemp(prefix="sr_workspace_", dir=temp_dir))
         _logger.info(f"Created workspace at {self._path}")
         for src in (workspace_files or []):
             self.link_item(Path(src))
@@ -116,7 +117,14 @@ class Workspace:
 class WorkspaceShellTool(BaseTool):
     metadata = ToolMetadata(name="workspace_shell")
 
-    def execute(self, command: str) -> Dict[str, Any]:
+    DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024
+    MAX_OUTPUT_LIMIT_BYTES = 1024 * 1024
+
+    def execute(
+        self,
+        command: str,
+        output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT_BYTES,
+    ) -> Dict[str, Any]:
         """Execute a restricted shell command in the workspace directory.
         Supported commands: ls, cat, head, tail, wc, grep, sort, cut, cp, mv, rm, mkdir,
         gunzip, gzip, unzip, tar.
@@ -126,10 +134,12 @@ class WorkspaceShellTool(BaseTool):
         Args:
             command: A shell command string. 
                 Examples: "ls", "cat data.csv | head -5", "gunzip data.csv.gz".
+            output_limit_bytes: Maximum stdout size returned by each command segment.
         """
         workspace: Workspace = self.context.get("workspace")
         if workspace is None:
             return self._error("Workspace not initialized.")
+        output_limit_bytes = self._bounded_output_limit(output_limit_bytes)
 
         # 处理管道：分割为多个命令，顺序执行，前一个的 stdout 作为后一个的 stdin
         pipe_segments = [seg.strip() for seg in command.split("|")]
@@ -139,7 +149,7 @@ class WorkspaceShellTool(BaseTool):
                 result = self.execute_single(segment, workspace, stdin_text)
                 if not result.get("success", False):
                     return result
-                stdin_text = result.get("stdout", "")
+                stdin_text = self._limit_output(result.get("stdout", ""), output_limit_bytes)
             except Exception as e:
                 _logger.error(f"Error executing command segment '{segment}': {log_exception(e)}")
                 return self._error(f"Error executing command segment '{segment}', ask human for help: {e}")
@@ -187,6 +197,20 @@ class WorkspaceShellTool(BaseTool):
     @staticmethod
     def _error(msg: str) -> Dict[str, Any]:
         return {"success": False, "stdout": "", "stderr": "", "error": msg, "exit_code": 1}
+
+    @classmethod
+    def _bounded_output_limit(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = cls.DEFAULT_OUTPUT_LIMIT_BYTES
+        return max(1024, min(cls.MAX_OUTPUT_LIMIT_BYTES, parsed))
+
+    @staticmethod
+    def _limit_output(stdout: str, output_limit_bytes: int) -> str:
+        writer = LimitedWriter(output_limit_bytes)
+        writer.write(stdout)
+        return writer.getvalue()
 
     def _cmd_ls(self, args: list, ws: Workspace, stdin: str) -> Dict[str, Any]:
         targets = args if args else ["."]

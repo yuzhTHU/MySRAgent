@@ -328,6 +328,21 @@ class TestWorkspaceShellTool:
         parts = result["stdout"].strip().split()
         assert int(parts[0]) == 4
 
+    def test_output_is_limited(self):
+        """长输出会被截断。"""
+        (self.ws.path / "large.txt").write_text("x" * 5000)
+        result = self.tool.execute("cat large.txt", output_limit_bytes=1024)
+        assert result.get("success") is True
+        assert result["stdout"].endswith("...[truncated]")
+        assert len(result["stdout"]) == 1024
+
+    def test_pipe_intermediate_output_is_limited(self):
+        """管道中间结果也会被截断，避免传递过长输出。"""
+        (self.ws.path / "large.txt").write_text("x" * 5000)
+        result = self.tool.execute("cat large.txt | wc", output_limit_bytes=1024)
+        assert result.get("success") is True
+        assert result["stdout"].strip().split() == ["1", "1", "1024"]
+
     # ─── 文件操作命令 ───
 
     def test_mkdir(self):

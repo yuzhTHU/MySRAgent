@@ -121,7 +121,7 @@ class SRAgentInteractive(SRAgent):
         if not isinstance(y, dict):
             y = {"target": y}
 
-        with Workspace(self.workspace_files) as workspace:
+        with Workspace(self.workspace_files, self.save_path) as workspace:
             _logger.note(f"Workspace initialized at: {workspace.path}")
 
             ## 实例化工具和 LLM API
