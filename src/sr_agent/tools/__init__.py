@@ -16,6 +16,8 @@ from .edit_skill import EditSkill
 from .call_sindy import SINDyTool
 from .call_pysr import PySRTool
 from .predict_property import PropertyPredictorTool
+from .ask_human import AskHumanTool
+from .workspace_shell import WorkspaceShellTool
 
 __all__ = [
     "BaseTool",
@@ -33,4 +35,6 @@ __all__ = [
     "SINDyTool",
     "PySRTool",
     "PropertyPredictorTool",
+    "AskHumanTool",
+    "WorkspaceShellTool",
 ]

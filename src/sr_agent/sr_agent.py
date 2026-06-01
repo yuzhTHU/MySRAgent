@@ -48,6 +48,9 @@ class SRAgent(FactoryMixin):
         max_refinement_depth: 最大迭代次数。
     """
 
+    # 默认排除 ask_human, workspace_code_executor 工具, 因为它们需要特殊的交互和权限管理, 不适合在端到端的自动化流程中使用
+    DEFAULT_EXCLUDED_TOOLS = {"ask_human", "workspace_code_executor"}
+
     def __init__(
         self,
         llm_provider: str,
@@ -82,6 +85,13 @@ class SRAgent(FactoryMixin):
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
 
+        tool_cls_list = []
+        for tool_cls in BaseTool.load_tool_classes(tools):
+            if (name := tool_cls.metadata.name) in self.DEFAULT_EXCLUDED_TOOLS:
+                _logger.info(f"Excluding tool {name} from the agent's toolset.")
+            else:
+                tool_cls_list.append(tool_cls)
+
         # 参数
         self.llm_provider = llm_provider
         self.llm_model = llm_model
@@ -94,7 +104,7 @@ class SRAgent(FactoryMixin):
         self.max_workers = max_workers
 
         # 关键组件
-        self.tool_cls_list = BaseTool.load_tool_classes(tools)
+        self.tool_cls_list = tool_cls_list
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
         self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表

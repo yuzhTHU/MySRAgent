@@ -27,6 +27,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "h5py>=3.16.0",
     "datasets>=4.8.0",
+    "textual>=1.0.0",
+    "prompt_toolkit>=3.0.0",
 ]
 
 [project.scripts]
