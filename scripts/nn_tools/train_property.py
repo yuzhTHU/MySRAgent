@@ -1,9 +1,11 @@
 # conda run -n sragent python scripts/nn_tools/train_property.py
-"""Train PropertyPredictionModel v3 to predict formula properties from data.
+"""Train PropertyPredictionModel v5 to predict formula properties from data.
 
-4-class mono/conv, SymPy labels, optional SRBench HDF5 mixing.
-v3 improvements: OneCycleLR, Focal Loss, data augmentation, gradual unfreezing,
-discriminative learning rates for finetune mode.
+v5 improvements over v4:
+  Variable combination augmentation: randomly combine pairs of variables
+  (x_i*x_j, x_i+x_j, x_i-x_j, x_i/x_j) and compute labels numerically.
+  Applies to BOTH synthetic and SRBench data.
+  All v4 features retained.
 
 Two modes:
   --mode scratch   : train from random initialization
@@ -95,6 +97,8 @@ def build_dataloader(args, seed, n_samples, batch_size, sampler=None, shuffle=Fa
         noise_std=getattr(args, "noise_std", 0.0),
         scale_augment=getattr(args, "scale_augment", False),
         permute_vars=getattr(args, "permute_vars", False),
+        reject_trivial_prob=getattr(args, "reject_trivial_prob", 0.0),
+        combo_augment_prob=getattr(args, "combo_augment_prob", 0.0),
     )
     return D.DataLoader(
         ds, batch_size=batch_size, num_workers=args.num_workers,
@@ -126,6 +130,9 @@ def compute_metrics(preds: dict, labels: dict, var_mask: torch.Tensor) -> dict:
     pred_sep = preds["multiplicative_separable"].argmax(dim=-1)
     gt_sep = labels["mul_sep"]
     metrics["sep_acc"] = (pred_sep == gt_sep).float().mean().item()
+
+    # Composite target metric for early stopping
+    metrics["target_f1"] = (metrics["monotonicity_f1"] + metrics["convexity_f1"]) / 2
     return metrics
 
 
@@ -231,26 +238,24 @@ def main(args):
         anneal_strategy="cos", final_div_factor=100,
     )
 
-    # Build loss functions
+    # v4: per-task loss — Focal Loss for mono/conv, Weighted CE for periodicity
     label_smoothing = getattr(args, "label_smoothing", 0.0)
+    mono_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
+    conv_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
+    period_weights = torch.tensor([1.0, 5.0], device=args.device)
+
     if getattr(args, "use_focal_loss", False):
-        mono_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
-        conv_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
-        period_weights = torch.tensor([1.0, 5.0], device=args.device)
         criterion_dict = {
             "monotonicity": FocalLoss(alpha=mono_weights, gamma=2.0, label_smoothing=label_smoothing),
             "convexity": FocalLoss(alpha=conv_weights, gamma=2.0, label_smoothing=label_smoothing),
-            "periodicity": FocalLoss(alpha=period_weights, gamma=2.0, label_smoothing=label_smoothing),
+            "periodicity": nn.CrossEntropyLoss(weight=period_weights),
             "sep": FocalLoss(gamma=2.0, label_smoothing=label_smoothing),
         }
     else:
-        mono_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
-        conv_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
-        period_weights = torch.tensor([1.0, 5.0], device=args.device)
         criterion_dict = {
             "monotonicity": nn.CrossEntropyLoss(weight=mono_weights, label_smoothing=label_smoothing),
             "convexity": nn.CrossEntropyLoss(weight=conv_weights, label_smoothing=label_smoothing),
-            "periodicity": nn.CrossEntropyLoss(weight=period_weights, label_smoothing=label_smoothing),
+            "periodicity": nn.CrossEntropyLoss(weight=period_weights),
             "sep": nn.CrossEntropyLoss(label_smoothing=label_smoothing),
         }
 
@@ -279,6 +284,7 @@ def main(args):
     save_path = Path(args.save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     best_loss = float("inf")
+    best_f1 = -1.0
     patience_left = args.patience
     history = []
 
@@ -333,19 +339,41 @@ def main(args):
             record = {"step": step, "train": train_metrics, "eval": eval_metrics}
             history.append(record)
 
-            improved = eval_metrics["loss"] < best_loss
-            if improved:
+            # v4: dual early stopping — save both best_loss and best_f1 checkpoints
+            loss_improved = eval_metrics["loss"] < best_loss
+            if loss_improved:
                 best_loss = eval_metrics["loss"]
-                patience_left = args.patience
                 torch.save({
                     "step": step, "args": vars(args),
                     "model": model.state_dict(),
                     "float_embedder": float_embedder.state_dict(),
                     "data_embedder": data_embedder.state_dict(),
                     "optimizer": optimizer.state_dict(),
-                }, save_path / "best.pth")
+                }, save_path / "best_loss.pth")
 
-            marker = " *BEST*" if improved else ""
+            f1_improved = eval_metrics["target_f1"] > best_f1
+            if f1_improved:
+                best_f1 = eval_metrics["target_f1"]
+                torch.save({
+                    "step": step, "args": vars(args),
+                    "model": model.state_dict(),
+                    "float_embedder": float_embedder.state_dict(),
+                    "data_embedder": data_embedder.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                }, save_path / "best_f1.pth")
+
+            # Early stopping based on F1 (primary) with loss as tiebreaker
+            improved = f1_improved or loss_improved
+            if improved:
+                patience_left = args.patience
+
+            markers = []
+            if loss_improved:
+                markers.append("BEST_LOSS")
+            if f1_improved:
+                markers.append("BEST_F1")
+            marker = f" *{'|'.join(markers)}*" if markers else ""
+
             current_lr = optimizer.param_groups[0]["lr"]
             _logger.info(
                 f"[step {step:>6d}] "
@@ -358,6 +386,7 @@ def main(args):
                 f"mono_f1={eval_metrics['monotonicity_f1']:.3f}  "
                 f"conv_f1={eval_metrics['convexity_f1']:.3f}  "
                 f"period_f1={eval_metrics['periodicity_f1']:.3f}  "
+                f"target_f1={eval_metrics['target_f1']:.3f}  "
                 f"lr={current_lr:.2e}"
                 f"{marker}"
             )
@@ -376,10 +405,19 @@ def main(args):
         "data_embedder": data_embedder.state_dict(),
     }, save_path / "last.pth")
 
+    # Symlink best.pth -> best_f1.pth for backward compatibility
+    best_pth = save_path / "best.pth"
+    best_f1_pth = save_path / "best_f1.pth"
+    if best_f1_pth.exists():
+        if best_pth.exists() or best_pth.is_symlink():
+            best_pth.unlink()
+        import shutil
+        shutil.copy2(str(best_f1_pth), str(best_pth))
+
     with open(save_path / "history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    _logger.info(f"Training finished in {elapsed:.0f}s, best eval_loss={best_loss:.4f}")
+    _logger.info(f"Training finished in {elapsed:.0f}s, best_loss={best_loss:.4f}, best_f1={best_f1:.4f}")
     return history
 
 
@@ -412,7 +450,7 @@ def build_argparser():
     p.add_argument("--eq_generator", default="gplearn")
     p.add_argument("--data_generator", default="uniform")
     p.add_argument("--max_per_signature", type=int, default=9999)
-    p.add_argument("--srbench_mix_ratio", type=float, default=0.4,
+    p.add_argument("--srbench_mix_ratio", type=float, default=0.55,
                    help="Probability of returning a SRBench HDF5 item per training sample")
 
     p.add_argument("--d_model", type=int, default=128)
@@ -426,12 +464,16 @@ def build_argparser():
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip", type=float, default=1.0)
 
-    # v3 flags
-    p.add_argument("--use_focal_loss", action="store_true", help="Use Focal Loss instead of CE")
+    # v4 flags
+    p.add_argument("--use_focal_loss", action="store_true", help="Use Focal Loss for mono/conv (CE for period)")
     p.add_argument("--label_smoothing", type=float, default=0.05)
     p.add_argument("--noise_std", type=float, default=0.01, help="Gaussian noise std on y (relative)")
     p.add_argument("--scale_augment", action="store_true", help="Random y-scaling augmentation")
     p.add_argument("--permute_vars", action="store_true", help="Variable permutation augmentation")
+    p.add_argument("--reject_trivial_prob", type=float, default=0.6,
+                   help="Probability of rejecting all-constant/affine synthetic samples")
+    p.add_argument("--combo_augment_prob", type=float, default=0.0,
+                   help="Probability of applying variable combination augmentation per sample")
     return p
 
 

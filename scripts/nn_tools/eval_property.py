@@ -213,8 +213,12 @@ def eval_llm_srbench(args, model, float_emb, data_emb, splits=("test",), test_na
             masks_all.append(mask)
 
             vars_list = lab["variables"]
-            mono_labels = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
-            conv_labels = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_raw = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            conv_raw = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_labels = np.clip(mono_raw, 0, 3)
+            mono_labels[mono_raw == 4] = 3
+            conv_labels = np.clip(conv_raw, 0, 3)
+            conv_labels[conv_raw == 4] = 3
 
             mono_gt = np.zeros(args.max_var_num, dtype=np.int64)
             conv_gt = np.zeros(args.max_var_num, dtype=np.int64)

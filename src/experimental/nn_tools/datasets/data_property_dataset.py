@@ -1,19 +1,17 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Dataset v3: generates (data, property_labels) pairs with augmentation.
+"""Dataset v5: generates (data, property_labels) pairs with variable combination augmentation.
 
 Each item contains:
   - data: float tensor (sample_num, max_var_num + 1)
   - var_mask: bool tensor (max_var_num,) — True for active variables
   - labels: dict of tensors {monotonicity, convexity, periodicity, mul_sep}
 
-Supports two data sources:
-  1. Synthetic formulas via gplearn + nd2py (infinite, with SymPy labels)
-  2. LLM-SRBench HDF5 real data (finite, mixed in with probability)
-
-v3 augmentations:
-  1. Noise injection: Gaussian noise on y (scale-relative).
-  2. Scaling augmentation: random y-scaling (mono/conv are scale-invariant).
-  3. Variable permutation augmentation: shuffles variable order (+ labels).
+v5 improvements over v4:
+  1. Variable combination augmentation: randomly combine pairs of variables
+     (x_i*x_j, x_i+x_j, x_i-x_j, x_i/x_j) and compute properties of y
+     w.r.t. the combined variable using numerical methods. Applies to BOTH
+     synthetic (gplearn) and SRBench data.
+  2. All v4 features retained.
 """
 from __future__ import annotations
 import json
@@ -111,9 +109,13 @@ def _load_srbench_items(
             data[:, -1] = sampled[:, 0].astype(np.float32)
 
             vars_list = lab["variables"]
-            mono_labels = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
-            conv_labels = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_raw = np.array([lab["monotonicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            conv_raw = np.array([lab["convexity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
             period = np.array([lab["periodicity"].get(v, 0) for v in vars_list[:n_vars]], dtype=np.int64)
+            mono_labels = np.clip(mono_raw, 0, 3)
+            mono_labels[mono_raw == 4] = 3
+            conv_labels = np.clip(conv_raw, 0, 3)
+            conv_labels[conv_raw == 4] = 3
 
             mono_padded = np.zeros(max_var_num, dtype=np.int64)
             conv_padded = np.zeros(max_var_num, dtype=np.int64)
@@ -132,18 +134,117 @@ def _load_srbench_items(
                 "convexity": torch.from_numpy(conv_padded),
                 "periodicity": torch.from_numpy(period_padded),
                 "mul_sep": torch.tensor(lab["multiplicative_separable"], dtype=torch.long),
-                "n_vars": n_vars,
             })
 
     _logger.info(f"Loaded {len(items)} SRBench items from splits={splits}")
     return items
 
 
+def _is_trivial_sample(mono_labels, conv_labels, n_vars):
+    return (
+        all(mono_labels[i] == 3 for i in range(n_vars)) and
+        all(conv_labels[i] == 3 for i in range(n_vars))
+    )
+
+
+def _is_all_default(mono_labels, conv_labels, n_vars):
+    return (
+        all(mono_labels[i] == 0 for i in range(n_vars)) and
+        all(conv_labels[i] == 0 for i in range(n_vars))
+    )
+
+
+def _create_combo_item(item: dict, max_var_num: int, rng: np.random.Generator) -> dict | None:
+    """Create a new training sample by combining two variables into one.
+
+    Given an item with variables [x0, x1, x2, ...], randomly pick a pair (i, j),
+    compute x_combo = x_i op x_j (where op in {*, +, -, /}), then produce a new
+    item with variables [x_combo, remaining...]. Labels for x_combo are computed
+    numerically from the data; labels for remaining variables are kept as-is.
+    """
+    data = item["data"]       # (S, max_var_num+1), torch
+    var_mask = item["var_mask"]  # (max_var_num,), bool
+    n_vars = int(var_mask.sum().item())
+
+    if n_vars < 2:
+        return None
+
+    S = data.shape[0]
+    y_np = data[:, -1].numpy()
+
+    # Collect active variable columns
+    active_cols = [data[:, k].numpy().copy() for k in range(n_vars)]
+
+    # Pick two distinct active variables
+    pair = rng.choice(n_vars, size=2, replace=False)
+    i, j = int(pair[0]), int(pair[1])
+
+    # Pick combination operation (/ less frequent due to div-by-zero risk)
+    op_weights = np.array([0.3, 0.25, 0.25, 0.2])  # *, +, -, /
+    op = rng.choice(["*", "+", "-", "/"], p=op_weights)
+
+    xi, xj = active_cols[i], active_cols[j]
+    if op == "*":
+        x_combo = xi * xj
+    elif op == "+":
+        x_combo = xi + xj
+    elif op == "-":
+        x_combo = xi - xj
+    else:  # /
+        safe = np.abs(xj) > 1e-8
+        if safe.sum() < 30:
+            return None
+        x_combo = np.where(safe, xi / xj, 0.0)
+
+    if not np.all(np.isfinite(x_combo)) or np.std(x_combo) < 1e-12:
+        return None
+
+    # Build new variable list: [combo, remaining vars (excluding i and j)]
+    new_cols = [x_combo]
+    old_indices = []  # tracks which original slot each new var came from
+    for k in range(n_vars):
+        if k != i and k != j:
+            new_cols.append(active_cols[k])
+            old_indices.append(k)
+
+    new_n_vars = len(new_cols)
+    if new_n_vars > max_var_num:
+        return None
+
+    # Build new data matrix
+    new_data = np.zeros((S, max_var_num + 1), dtype=np.float32)
+    for k, col in enumerate(new_cols):
+        new_data[:, k] = col.astype(np.float32)
+    new_data[:, -1] = y_np
+
+    # Compute ALL labels numerically for the new variable arrangement
+    X_new = new_data[:, :max_var_num]
+    labels = compute_all_labels(X_new, y_np, new_n_vars)
+
+    new_var_mask = np.zeros(max_var_num, dtype=bool)
+    new_var_mask[:new_n_vars] = True
+
+    mono_padded = np.zeros(max_var_num, dtype=np.int64)
+    conv_padded = np.zeros(max_var_num, dtype=np.int64)
+    period_padded = np.zeros(max_var_num, dtype=np.int64)
+    mono_padded[:new_n_vars] = labels["monotonicity"]
+    conv_padded[:new_n_vars] = labels["convexity"]
+    period_padded[:new_n_vars] = labels["periodicity"]
+
+    return {
+        "data": torch.from_numpy(new_data),
+        "var_mask": torch.from_numpy(new_var_mask),
+        "monotonicity": torch.from_numpy(mono_padded),
+        "convexity": torch.from_numpy(conv_padded),
+        "periodicity": torch.from_numpy(period_padded),
+        "mul_sep": torch.tensor(labels["multiplicative_separable"], dtype=torch.long),
+    }
+
+
 class DataPropertyDataset(D.Dataset):
     """Generate (data, property_labels) pairs with SymPy labels + augmentations.
 
-    Optionally mixes in LLM-SRBench HDF5 real data.
-    v3 augmentations: noise injection, y-scaling, variable permutation.
+    v5: variable combination augmentation for both synthetic and SRBench data.
     """
 
     def __init__(
@@ -162,6 +263,8 @@ class DataPropertyDataset(D.Dataset):
         noise_std: float = 0.0,
         scale_augment: bool = False,
         permute_vars: bool = False,
+        reject_trivial_prob: float = 0.0,
+        combo_augment_prob: float = 0.0,
     ):
         self.max_var_num = max_var_num
         self.eq_generator = eq_generator
@@ -178,6 +281,8 @@ class DataPropertyDataset(D.Dataset):
         self.noise_std = noise_std
         self.scale_augment = scale_augment
         self.permute_vars = permute_vars
+        self.reject_trivial_prob = reject_trivial_prob
+        self.combo_augment_prob = combo_augment_prob
 
     def __len__(self):
         if self.n_samples is None:
@@ -192,6 +297,12 @@ class DataPropertyDataset(D.Dataset):
         else:
             item = self._get_synthetic_item(rng)
 
+        # v5: variable combination augmentation (applies to BOTH sources)
+        if self.combo_augment_prob > 0 and rng.random() < self.combo_augment_prob:
+            combo = _create_combo_item(item, self.max_var_num, rng)
+            if combo is not None:
+                item = combo
+
         item = self._apply_augmentations(item, rng)
         return item
 
@@ -199,7 +310,6 @@ class DataPropertyDataset(D.Dataset):
         data = item["data"].clone()
         n_vars = int(item["var_mask"].sum().item())
 
-        # Noise injection on y
         if self.noise_std > 0 and n_vars > 0:
             y_col = data[:, -1]
             y_std = y_col.std().item()
@@ -209,12 +319,10 @@ class DataPropertyDataset(D.Dataset):
                 )
                 data[:, -1] = y_col + noise
 
-        # Scale augmentation on y (mono/conv/period labels are scale-invariant)
         if self.scale_augment and rng.random() < 0.3:
             scale = float(rng.uniform(0.1, 10.0))
             data[:, -1] *= scale
 
-        # Variable permutation augmentation
         if self.permute_vars and n_vars > 1 and rng.random() < 0.3:
             perm = rng.permutation(n_vars)
             new_data = data.clone()
@@ -244,12 +352,23 @@ class DataPropertyDataset(D.Dataset):
         return item
 
     def _get_srbench_item(self, rng):
-        """Return a random pre-loaded SRBench item (re-sampled)."""
         item = self.srbench_items[rng.integers(0, len(self.srbench_items))]
-        return {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in item.items()}
+        result = {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in item.items()}
+
+        data = result["data"]
+        S = data.shape[0]
+        if S > 30 and rng.random() < 0.3:
+            keep = max(20, int(S * rng.uniform(0.7, 0.9)))
+            idx = rng.choice(S, keep, replace=False)
+            idx.sort()
+            new_data = torch.zeros_like(data)
+            new_data[:keep] = data[idx]
+            result["data"] = new_data
+
+        return result
 
     def _get_synthetic_item(self, rng):
-        max_reject = 20
+        max_reject = 30
         for attempt in range(max_reject):
             eqtree = self.eq_generator(_rng=rng)
 
@@ -301,6 +420,14 @@ class DataPropertyDataset(D.Dataset):
                 labels = compute_all_labels_sympy(expr_str, X, y, n_vars)
             else:
                 labels = compute_all_labels(X, y, n_vars)
+
+            if self.reject_trivial_prob > 0 and attempt < max_reject - 1:
+                if _is_trivial_sample(labels["monotonicity"], labels["convexity"], n_vars):
+                    if rng.random() < self.reject_trivial_prob:
+                        continue
+                if _is_all_default(labels["monotonicity"], labels["convexity"], n_vars):
+                    if rng.random() < self.reject_trivial_prob * 0.5:
+                        continue
 
             coarse_key = coarse_label_key(
                 labels["monotonicity"], labels["convexity"],

@@ -1,13 +1,12 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Property prediction model v3: data -> property labels (4-class encoding).
+"""Property prediction model v4: data -> property labels (4-class encoding).
 
-v3 architecture improvements over v2:
-  1. Per-variable cross-attention: each variable gets its own representation
-     via learned query vectors attending to encoder memory, instead of all
-     variables sharing one pooled vector.
-  2. Deeper classification heads with LayerNorm (2 hidden layers).
-  3. Higher default dropout (0.2) for better regularization.
-  4. Label smoothing support in loss computation.
+v4 architecture improvements over v3:
+  1. Variable self-attention after cross-attention: lets variables exchange
+     information (e.g., "x1 is monotonic but x1+x2 is not").
+  2. Shallower period head (1 hidden layer) to reduce overfitting on binary task.
+  3. All other v3 features retained: per-variable cross-attention, deeper
+     mono/conv heads with LayerNorm, GELU, higher dropout.
 
 Label encoding:
   Monotonicity: 4 classes (0=non-mono/unknown, 1=inc, 2=dec, 3=const)
@@ -20,7 +19,7 @@ import torch.nn as nn
 
 
 class PropertyPredictionModel(nn.Module):
-    """Predict formula properties from data embeddings (v3 architecture)."""
+    """Predict formula properties from data embeddings (v4 architecture)."""
 
     N_MONO_CLASSES = 4
     N_CONV_CLASSES = 4
@@ -57,21 +56,38 @@ class PropertyPredictionModel(nn.Module):
         )
         self.var_norm = nn.LayerNorm(d)
 
-        # Per-variable heads: input is per-variable representation (B, max_var, d)
-        self.head_mono = self._build_head(d, self.N_MONO_CLASSES, dropout)
-        self.head_conv = self._build_head(d, self.N_CONV_CLASSES, dropout)
-        self.head_period = self._build_head(d, self.N_PERIOD_CLASSES, dropout)
+        # Variable self-attention: lets variables exchange information
+        self.var_self_attn = nn.MultiheadAttention(
+            d, args.nhead, dropout=dropout, batch_first=True,
+        )
+        self.var_self_norm = nn.LayerNorm(d)
+
+        # Deep heads for mono/conv (2 hidden layers)
+        self.head_mono = self._build_deep_head(d, self.N_MONO_CLASSES, dropout)
+        self.head_conv = self._build_deep_head(d, self.N_CONV_CLASSES, dropout)
+
+        # Shallow head for periodicity (1 hidden layer — binary task)
+        self.head_period = self._build_shallow_head(d, self.N_PERIOD_CLASSES, dropout)
 
         # Formula-level head: input is global pooled (B, d)
-        self.head_sep = self._build_head(d, self.N_SEP_CLASSES, dropout)
+        self.head_sep = self._build_deep_head(d, self.N_SEP_CLASSES, dropout)
 
     @staticmethod
-    def _build_head(d: int, n_classes: int, dropout: float) -> nn.Sequential:
+    def _build_deep_head(d: int, n_classes: int, dropout: float) -> nn.Sequential:
         return nn.Sequential(
             nn.Linear(d, d),
             nn.LayerNorm(d),
             nn.GELU(),
             nn.Dropout(dropout),
+            nn.Linear(d, d),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d, n_classes),
+        )
+
+    @staticmethod
+    def _build_shallow_head(d: int, n_classes: int, dropout: float) -> nn.Sequential:
+        return nn.Sequential(
             nn.Linear(d, d),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -99,9 +115,13 @@ class PropertyPredictionModel(nn.Module):
                                           key_padding_mask=data_padding_mask)
         var_repr = self.var_norm(var_repr)  # (B, max_var, d)
 
+        # Variable self-attention (residual connection)
+        var_repr2, _ = self.var_self_attn(var_repr, var_repr, var_repr)
+        var_repr = self.var_self_norm(var_repr + var_repr2)  # (B, max_var, d)
+
         # Per-variable classification
-        mono = self.head_mono(var_repr)   # (B, max_var, 4)
-        conv = self.head_conv(var_repr)   # (B, max_var, 4)
+        mono = self.head_mono(var_repr)      # (B, max_var, 4)
+        conv = self.head_conv(var_repr)      # (B, max_var, 4)
         period = self.head_period(var_repr)  # (B, max_var, 2)
 
         # Formula-level classification
