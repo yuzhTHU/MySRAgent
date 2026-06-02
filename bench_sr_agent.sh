@@ -51,3 +51,40 @@ python bench_sr_agent.py \
     --algorithm pysr \
     --dataset lsrtransform \
     --exp_name bench_pysr
+
+
+python bench_sr_agent.py \
+    --dataset lsrtransform \
+    --exp_name bench_my_sr_agent-v4-flash_ban_pysr_sindy \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash" \
+    --ban_tools "call_pysr" "call_sindy"
+
+python bench_sr_agent.py \
+    --dataset lsrtransform \
+    --exp_name bench_my_sr_agent-v4-flash_ban_predict_property \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash" \
+    --ban_tools "predict_property"
+
+python bench_sr_agent.py \
+    --algorithm sr_scientist \
+    --datasets lsrtransform \
+    --exp_name bench_sr_scientist-v4-flash \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash" \
+    --sr_scientist_sandbox_urls http://127.0.0.1:8080/run_code \
+    --sr_scientist_num_turns 2 \
+    --sr_scientist_max_assistant_turns 20 \
+    --sr_scientist_top_k 2
+
+python bench_sr_agent.py \
+    --dataset lsrtransform \
+    --exp_name bench_my_sr_agent_gpt-4o-mini \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "openai/gpt-4o-mini"
+
+    

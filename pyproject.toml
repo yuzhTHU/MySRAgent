@@ -27,12 +27,15 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "h5py>=3.16.0",
     "datasets>=4.8.0",
+    "textual>=1.0.0",
+    "prompt_toolkit>=3.0.0",
 ]
 
 [project.scripts]
 sr-agent-download-models = "sr_agent.cli.download_models:main"
 sr-agent-upload-models = "sr_agent.cli.upload_models:main"
 sr-agent-web = "sr_agent.cli.web:main"
+sr-agent-tool = "sr_agent.cli.tool:main"
 
 [project.optional-dependencies]
 nn = [

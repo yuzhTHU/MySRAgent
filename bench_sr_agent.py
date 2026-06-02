@@ -156,7 +156,7 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
         }
 
 
-def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
+def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) -> Dict:
     """对单个问题运行 SR 方法并评估"""
     task = problem.create_task()
 
@@ -189,12 +189,13 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable) -> Dict:
             llm_provider='openrouter',
             llm_model='deepseek/deepseek-v4-flash',
         )
-        foo = lambda x: tag2ansi(('[green]EQUIVALENT[reset]' if x is True else '[red]NOT EQUIVALENT[reset]' if x is False else f'[gray]{x!r}[reset]'))
-        _logger.note(
+        foo = lambda x: tag2ansi(('[green bold]EQUIVALENT[reset]' if x is True else '[red bold]NOT EQUIVALENT[reset]' if x is False else f'[gray bold]{x!r}[reset]'))
+        _logger.note(tag2ansi(
             f"[{problem.equation_idx}] The predicted formula is judged to be {foo(symbolic_acc['equivalent'])} since {symbolic_acc.get('reason')}:\n"
-            f"  f_true = {f_true.to_str()}\n"
-            f"  f_pred = {f_pred.to_str()}"
-        )
+            f"  f_true = [green]{f_true.to_str()}[reset]\n"
+            f"  f_pred = [red]{f_pred.to_str()}[reset]"
+            f"Manually modify [green bold]{exp_path}[reset] if you want to override the symbolic accuracy judgment."
+        ))
     except Exception as e:
         symbolic_acc = {
             "equivalent": None,
@@ -390,7 +391,7 @@ def main(args: argparse.Namespace) -> dict:
                 continue
 
         try:
-            result = evaluate_problem(args, problem, sr_fn)
+            result = evaluate_problem(args, problem, sr_fn, exp_path)
             results.append(result)
             _logger.note(f"\n{log_result(result)}")
             with open(exp_path, "a", encoding="utf-8") as f:

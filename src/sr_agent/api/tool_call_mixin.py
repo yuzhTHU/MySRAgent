@@ -6,6 +6,7 @@ import logging
 from functools import cached_property
 from typing import Any, Dict, List, TYPE_CHECKING
 from .core import ToolCall
+from ..utils import log_exception
 if TYPE_CHECKING:
     from .llm_api import ToolParserName, ToolList
 

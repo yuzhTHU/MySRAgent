@@ -1,5 +1,5 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Command-line entry point for running a small SRAgent experiment."""
+"""Command-line entry point for running SRAgentInteractive."""
 
 from __future__ import annotations
 
@@ -17,18 +17,19 @@ import nd2py as nd
 from pathlib import Path
 from datetime import datetime
 from socket import gethostname
-from sr_agent import SRAgent
+from sr_agent import SRAgentInteractive
 from sr_agent.tools import BaseTool
 from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, log_exception, tag2ansi
+from run_sr_agent import sanitize_filename, save_args, make_dataset
 
 
-SCRIPT_NAME = Path(__file__).stem  # run_sr_agent
+SCRIPT_NAME = Path(__file__).stem  # run_sr_agent_interactive
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
 
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run SRAgent on a synthetic symbolic-regression problem.",
+        description="Run SRAgentInteractive on a symbolic-regression problem with human-in-the-loop.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
@@ -43,65 +44,23 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
     parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
+    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash", help="LLM model name.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
-    parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help="Maximum agent refinement depth.")
-    parser.add_argument("-C", "--global_width", type=int, default=2, help="Number of independent branches per restart loop.")
-    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help="Maximum number of best-solution restart loops.")
+    parser.add_argument("-K", "--local_sample_size", type=int, default=1, help="Number of LLM samples per step.")
+    parser.add_argument("-L", "--max_refinement_depth", type=int, default=50, help="Maximum agent refinement depth (main search dimension).")
+    parser.add_argument("-C", "--global_width", type=int, default=1, help="Number of independent branches per restart loop.")
+    parser.add_argument("-R", "--max_restart_loop", type=int, default=1, help="Maximum number of best-solution restart loops.")
     parser.add_argument("--restart_top_k", type=int, default=1, help="Number of previous best formulas to inject into the next restart prompt.")
     parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
     parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--workspace_files", default=None, type=str, nargs='+', help="Files or directories to link into the workspace.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
     parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
     parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
+    parser.add_argument("--use_workspace", action="store_true", default=False, help="Whether to set up a workspace directory for the agent to use. If enabled, --workspace_files will be linked into the workspace.")
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
     return parser
-
-
-def sanitize_filename(value: str) -> str:
-    value = re.compile(r'[ <>:"/\\|?*\x00-\x1f]').sub("_", value.strip())
-    return (value or "unnamed")[:255]
-
-
-def save_args(args, args_path: Path):
-    if args_path.exists():
-        i = 1
-        while args_path.with_suffix(f".json.{i}").exists():
-            i += 1
-        args_path.rename(args_path.with_suffix(f".json.{i}"))
-        _logger.warning(f"args.json already exists, backup to args.json.{i}")
-    with open(args_path, "w", encoding="utf-8") as f:
-        json.dump(vars(args), f, indent=4, ensure_ascii=False)
-
-
-def make_dataset(args):
-    if '=' in args.equation:
-        pass
-    elif 'target' in args.equation:
-        raise ValueError("It seems you provided an equation without '=', but it contains the word 'target'. Did you forget to format it like 'target = ...'?")
-    else:
-        args.equation = f'target = {args.equation}'
-    target, formula_str = args.equation.split('=')
-    target = target.strip()
-    formula_str = formula_str.strip()
-    formula = nd.parse(formula_str)
-    features = set(var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable))
-    features = sorted(list(features))
-
-    rng = np.random.default_rng(args.seed)
-    data = {}
-    for name in features:
-        assert name not in data
-        data[name] = rng.uniform(args.x_low, args.x_high, size=args.n_samples)
-    assert target not in data
-    data[target] = formula.eval(data)
-
-    if args.noise_std_ratio > 0:
-        data[target] += rng.normal(0.0, args.noise_std_ratio * np.std(data[target]), size=data[target].shape)
-
-    return features, target, formula, data
 
 
 def main(args: argparse.Namespace) -> dict:
@@ -119,7 +78,7 @@ def main(args: argparse.Namespace) -> dict:
         f"Generated {args.n_samples} samples with seed {args.seed}\n"
     )
 
-    agent = SRAgent(
+    agent = SRAgentInteractive(
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
         tools=args.tools,
@@ -131,6 +90,8 @@ def main(args: argparse.Namespace) -> dict:
         verbose=args.verbose,
         tool_parser=args.tool_parser,
         save_path=args.save_path,
+        workspace_files=args.workspace_files,
+        use_workspace=args.use_workspace,
         max_workers=args.max_workers,
     )
 
@@ -150,7 +111,7 @@ def main(args: argparse.Namespace) -> dict:
         "llm_model": f"{args.llm_model} @ {args.llm_provider}",
     }
     try:
-        result |= agent.fit(X=X, y=y, problem_description=problem_description)
+        result |= agent.run(X=X, y=y, problem_description=problem_description)
     except KeyboardInterrupt as e:
         _logger.note("Experiment interrupted by user.")
         result |= getattr(e, "partial_result", {"status": "interrupted"})

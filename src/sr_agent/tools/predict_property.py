@@ -113,7 +113,7 @@ class PropertyPredictorTool(BaseTool):
         if len(input_vars) > max_var_num:
             input_vars = input_vars[:max_var_num]
             exceptions.append(f"Too many variables ({len(data) - 1}), only the first {max_var_num} are analyzed: {input_vars}")
-            _logger.warning(f"Too many variables ({len(input_vars)}), truncated to {max_var_num}")
+            # _logger.warning(f"Too many variables ({len(input_vars)}), truncated to {max_var_num}")
 
         n_vars = len(input_vars)
         y_arr = np.asarray(data[target_name], dtype=np.float32).flatten()

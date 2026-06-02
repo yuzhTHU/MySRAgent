@@ -48,13 +48,16 @@ class SRAgent(FactoryMixin):
         max_refinement_depth: 最大迭代次数。
     """
 
+    # 默认排除 ask_human, workspace_code_executor 工具, 因为它们需要特殊的交互和权限管理, 不适合在端到端的自动化流程中使用
+    DEFAULT_EXCLUDED_TOOLS = {"ask_human", "workspace_code_executor"}
+
     def __init__(
         self,
         llm_provider: str,
         llm_model: str,
         tools: List[BaseTool] | None = None,
         verbose: bool = False,
-        tool_parser: str | BaseParser = 'text',
+        tool_parser: str | BaseParser = 'openai',
         save_path: Optional[str] = None,
         local_sample_size: int = 1,
         max_refinement_depth: int = 20,
@@ -80,7 +83,14 @@ class SRAgent(FactoryMixin):
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
-        setup_logging(info_level='debug' if verbose else 'info', save_path=save_path, force=False)
+        setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
+
+        tool_cls_list = []
+        for tool_cls in BaseTool.load_tool_classes(tools):
+            if (name := tool_cls.metadata.name) in self.DEFAULT_EXCLUDED_TOOLS:
+                _logger.info(f"Excluding tool {name} from the agent's toolset.")
+            else:
+                tool_cls_list.append(tool_cls)
 
         # 参数
         self.llm_provider = llm_provider
@@ -94,7 +104,7 @@ class SRAgent(FactoryMixin):
         self.max_workers = max_workers
 
         # 关键组件
-        self.tool_cls_list = BaseTool.load_tool_classes(tools)
+        self.tool_cls_list = tool_cls_list
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
         self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表
@@ -113,7 +123,7 @@ class SRAgent(FactoryMixin):
     def fit( # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
         self,
         X: Dict[str, np.ndarray],
-        y: np.ndarray,
+        y: Dict[str, np.ndarray] | np.ndarray,
         problem_description: str,
     ) -> Dict[str, Any]:
         """执行符号回归任务的主入口。
@@ -429,8 +439,11 @@ class SRAgent(FactoryMixin):
                     message['content'] += "\n\n" + tool_call.raw_str
                 node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=K)] = 'tool_call_parent'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
-        buffer.append(message)
-        buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+        if tool_calls or (message.get('content') or '').strip():
+            buffer.append(message)
+            buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+        else:
+            _logger.warning("Skipping empty LLM response (no content nor tool calls).")
         return buffer, node_parents
 
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
