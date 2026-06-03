@@ -100,10 +100,16 @@ def get_predict_func(args, result_dict):
         Returns:
             pred: np.ndarray, shape (n_nodes), 预测的下一步数据矩阵
         """
-        data_dict = {f'x_{n}': data[args.hist_steps - 1 -n] for n in range(args.hist_steps)}
+        if data.ndim == 2: # (History, Nodes)
+            data_dict = {f'x_{n}': data[args.hist_steps - 1 - n, :] for n in range(args.hist_steps)}
+        elif data.ndim == 3: # (Batch, History, Nodes)
+            data_dict = {f'x_{n}': data[:, args.hist_steps - 1 - n, :] for n in range(args.hist_steps)}
+        else:
+            raise ValueError(f"Input data must have shape (History, Nodes) or (Batch, History, Nodes), but got {data.shape}")
         dx = eq.eval(data_dict, edge_list=edge_list, num_nodes=num_nodes)
         return data_dict['x_0'] + dx
 
+    predict_func.batched = True
     return predict_func
 
 

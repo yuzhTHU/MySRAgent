@@ -1,7 +1,7 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 from __future__ import annotations
-import importlib
 import sys
+import importlib
 from pathlib import Path
 
 _ALGO_DIR = Path(__file__).parent

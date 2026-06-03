@@ -95,7 +95,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     for var in f.iter_preorder():
         if not isinstance(var, nd.Variable) or var.name in features:
             pass
-        if var.name.lower() == 'pi':
+        elif var.name.lower() == 'pi':
             constants[var.name] = np.pi
         elif var.name.lower() == 'e':
             constants[var.name] = np.e
@@ -105,6 +105,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     def predict(X: np.ndarray) -> np.ndarray:
         pred_data = {feat: X[:, i] for i, feat in enumerate(features)}
         pred_data[target] = np.zeros(len(X))  # 占位，不会被使用
+        pred_data |= constants # 将常数也加入数据字典，供表达式求值使用
         return f.eval(pred_data).flatten()
     
     return SRResult(predict=predict, expression=expression)
