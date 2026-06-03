@@ -120,15 +120,36 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
                 h5_path = f"/lsr_transform/{name}"
             else:
                 h5_path = f"/lsr_synth/{dataset_name}/{name}"
-
+            
+            expression = entry["expression"]
             samples = {k: v[...].astype(np.float64) for k, v in f[h5_path].items()}
+
+            # expression 中有一些 P(t) 这样的写法，需要将它替换成 P
+            for symbol in entry['symbols']:
+                try: 
+                    expression = re.sub(rf"\b{re.escape(symbol)}\b\(t\)", symbol, expression)
+                except Exception as e:
+                    _logger.warning(f"Failed to replace {symbol}(t) -> {symbol} in {entry['expression']!r}")
+            
+            # expression 中有一些 pi, e 这样的常数, 确保除此之外没有别的常数
+            try:
+                formula = nd.parse(expression)
+                for var in formula.iter_preorder():
+                    if not isinstance(var, nd.Variable): pass
+                    elif var.name in entry['symbols']: pass
+                    elif var.name.lower() in ['pi', 'e']: pass
+                    else: raise ValueError(f"Unknown variable {var.name!r}.")
+            except Exception as e:
+                _logger.warning(f"Error parsing expression {expression!r} for {name} in {dataset_name}: {log_exception(e)}.")
+                continue
+
             problems.append(Problem(
                 dataset_identifier=dataset_name,
                 equation_idx=name,
                 symbols=entry["symbols"],
                 symbol_descs=entry["symbol_descs"],
                 symbol_properties=entry["symbol_properties"],
-                expression=entry["expression"],
+                expression=expression,
                 samples=samples,
             ))
     return problems

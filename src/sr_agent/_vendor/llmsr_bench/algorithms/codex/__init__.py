@@ -78,6 +78,9 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     result['duration_seconds'] = (end_time - artifacts["start_time"]).total_seconds()
     if expression := (result.pop("discovered_expression", None) or result.pop("formula", None)):
         result['discovered_expression'] = expression
+    elif expression := best_formula_from_tool_calls(artifacts["tool_call_log_path"]):
+        result['discovered_expression'] = expression
+        result['notes'] = (result.get('notes') or '') + "\nFallback: selected the lowest-mse formula from tool-call records."
     elif status != 0:
         raise RuntimeError(f"Codex exited with status {status} and did not write discovered_expression. See {artifacts['event_path']}")
     else:
@@ -88,6 +91,16 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     f = nd.parse(expression.strip().replace("^", "**").replace("np.", "").replace("math.", ""))
     target = task.symbols[0]
     features = task.symbols[1:]
+    constants = {}
+    for var in f.iter_preorder():
+        if not isinstance(var, nd.Variable) or var.name in features:
+            pass
+        if var.name.lower() == 'pi':
+            constants[var.name] = np.pi
+        elif var.name.lower() == 'e':
+            constants[var.name] = np.e
+        else:
+            raise ValueError(f"Unknown variable '{var.name}' in discovered expression that is not in features. Please ensure all variables are either features or known constants like pi and e.")
 
     def predict(X: np.ndarray) -> np.ndarray:
         pred_data = {feat: X[:, i] for i, feat in enumerate(features)}
@@ -134,13 +147,14 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
         "symbol_descs": task.symbol_descs,
         "symbol_properties": task.symbol_properties,
         "num_train": int(len(task.train_y)),
-        "problem_path": str(problem_path),
-        "context_path": str(context_path),
-        "manifest_path": str(manifest_path),
-        "result_path": str(result_path),
-        "readme_path": str(readme_path),
-        "call_tool_path": str(call_tool_path),
-        "tool_call_log_path": str(tool_call_log_path),
+        "problem_dir": str(problem_dir.absolute()),
+        "problem_path": str(problem_path.relative_to(problem_dir)),
+        "context_path": str(context_path.relative_to(problem_dir)),
+        "manifest_path": str(manifest_path.relative_to(problem_dir)),
+        "result_path": str(result_path.relative_to(problem_dir)),
+        "readme_path": str(readme_path.relative_to(problem_dir)),
+        "call_tool_path": str(call_tool_path.relative_to(problem_dir)),
+        "tool_call_log_path": str(tool_call_log_path.relative_to(problem_dir)),
         "problem_description": problem_description,
     }, indent=2, ensure_ascii=False, allow_nan=True), encoding="utf-8")
 
@@ -149,8 +163,6 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
         "symbol_descs": task.symbol_descs,
         "symbol_properties": task.symbol_properties,
         "problem_description": problem_description,
-        "context_path": str(context_path),
-        "result_path": str(result_path),
     }, indent=2, ensure_ascii=False, allow_nan=True), encoding="utf-8")
     
     np.savez(context_path, **{
@@ -345,6 +357,24 @@ def count_jsonl(path: Path) -> int | None:
         return None
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return sum(1 for line in f if line.strip())
+
+
+def best_formula_from_tool_calls(path: Path) -> str | None:
+    best_record = None
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            record = json.loads(line)
+            result = record["tool_call_result"]["result"]
+            formula = result["formula"]
+            metrics = result["metrics"]
+            mse = float(metrics["mse"])
+        except Exception:
+            continue
+        if best_record is None or mse < best_record["mse"]:
+            best_record = {"formula": formula, **metrics}
+    return best_record["formula"] if best_record else None
 
 
 def codex_command_prefix(args: argparse.Namespace) -> list[str]:

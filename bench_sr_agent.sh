@@ -90,8 +90,19 @@ python bench_sr_agent.py \
 
 python bench_sr_agent.py \
     --algorithm codex \
+    --dataset lsrtransform \
     --exp-name codex_gpt55 \
     --codex-cmd "npx --yes @openai/codex@latest" \
     --codex-echo-events \
     --skip-successful \
     --ban-tools "ask_human" "workspace_shell"
+
+python bench_sr_agent.py \
+    --algorithm codex \
+    --dataset lsrtransform \
+    --exp-name codex_gpt55_anonymize \
+    --codex-cmd "npx --yes @openai/codex@latest" \
+    --codex-echo-events \
+    --skip-successful \
+    --ban-tools "ask_human" "workspace_shell" \
+    --anonymize
