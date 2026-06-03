@@ -29,4 +29,7 @@ def list_algorithms():
     for p in ALGORITHMS_DIR.glob("*.py"):
         if p.stem != "__init__":
             algorithms.append(p.stem)
-    return algorithms
+    for p in ALGORITHMS_DIR.iterdir():
+        if p.is_dir() and (p / "__init__.py").exists() and not p.name.startswith("__"):
+            algorithms.append(p.name)
+    return sorted(algorithms)

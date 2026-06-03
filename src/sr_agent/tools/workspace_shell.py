@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 from .base_tool import BaseTool, ToolMetadata
-from .code_executor import LimitedWriter as _LimitedWriter
+from .code_executor import LimitedWriter
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
@@ -208,7 +208,7 @@ class WorkspaceShellTool(BaseTool):
 
     @staticmethod
     def _limit_output(stdout: str, output_limit_bytes: int) -> str:
-        writer = _LimitedWriter(output_limit_bytes)
+        writer = LimitedWriter(output_limit_bytes)
         writer.write(stdout)
         return writer.getvalue()
 

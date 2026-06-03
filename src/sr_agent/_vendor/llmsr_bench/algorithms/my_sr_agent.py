@@ -42,10 +42,9 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     - task.name: str                    — 问题标识符
     - task.symbols: List[str]           — 所有符号名, 第一个为输出变量
     - task.symbol_descs: List[str]      — 符号的自然语言描述
-    - task.symbol_properties: List[str] — 符号属性 ('O'=输出, 'V'=输入变量, 'C'=常数)
+    - task.symbol_properties: List[str] — 符号属性 ('O'=输出, 'V'=输入变量)
     - task.train_X: np.ndarray          — 训练输入, shape=(n_samples, n_input_vars)
     - task.train_y: np.ndarray          — 训练输出, shape=(n_samples,)
-    - task.desc: Optional[str]          — 问题描述
 
     Returns: SRResult 包含了 SR 方法的输出:
     - predict: Callable[[np.ndarray], np.ndarray] — 输入 X, shape=(n, n_input_vars); 输出 y, shape=(n,)
@@ -65,10 +64,9 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
     # 构建问题描述
     problem_description = []
-    if task.desc is not None:
-        problem_description.append(f"Problem Description: {task.desc}")
     for sym, desc, prop in zip(task.symbols, task.symbol_descs, task.symbol_properties):
-        problem_description.append(f"{sym} ({'Output' if prop == 'O' else 'Input Variable' if prop == 'V' else 'Constant'}): {desc}")
+        kind = {'O': "Output", 'V': "Input Variable"}.get(prop, "Unknown")
+        problem_description.append(f"{sym} ({kind}): {desc}")
     problem_description = "\n".join(problem_description)
     _logger.note(f"Problem Description:\n{problem_description}")
 
