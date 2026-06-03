@@ -66,3 +66,13 @@ def get_predict_func(args, result_dict):
         return x[-1] + dx_dt
 
     return predict_func
+
+
+def format_result(args, result_dict) -> str:
+    """ 将训练结果格式化为字符串, 以便打印给用户看 """
+    model = result_dict["model"]
+    formula = "dx = "
+    for i, coef in enumerate(model.coef_):
+        formula += f"{coef:.6f} * x(t-{result_dict['hist_steps']-i}) + "
+    formula = formula.rstrip(" + ")
+    return f"Formula: {formula}"

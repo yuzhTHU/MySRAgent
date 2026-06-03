@@ -85,6 +85,7 @@ def train_model(args, data, node_info, time_info):
 
     return {
         "model": model.cpu(),
+        "loss": loss.item(),
         "hist_steps": hist_steps,
         "n_nodes": n_nodes,
         "hidden_dims": hidden_dims,
@@ -116,3 +117,14 @@ def get_predict_func(args, result_dict):
 
     predict_func.batched = True
     return predict_func
+
+
+def format_result(args, result_dict) -> str:
+    """将训练结果格式化为字符串, 以便打印给用户看"""
+    hidden_dims_str = ",".join(str(dim) for dim in result_dict["hidden_dims"])
+    return (
+        f"MLP with hidden dims: {hidden_dims_str}\n"
+        f"Parameters: {sum(p.numel() for p in result_dict['model'].parameters()):,}\n"
+        f"Trained on {result_dict['train_rows']} samples\n"
+        f"Final loss: {result_dict['loss']:.6f}"
+    )

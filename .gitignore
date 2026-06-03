@@ -168,6 +168,3 @@ playground/
 
 # Local analysis notebooks & data
 /analysis/
-
-# Neural architecture search experiments
-/scripts/neural/
