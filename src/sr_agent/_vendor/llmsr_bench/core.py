@@ -27,7 +27,6 @@ class SEDTask:
     symbol_properties: List[str]
     train_X: np.ndarray        # shape: (n_train, n_input_vars)
     train_y: np.ndarray        # shape: (n_train,)
-    desc: Optional[str] = None
 
 
 @dataclass
@@ -53,7 +52,6 @@ class Problem:
     symbol_properties: List[str]
     expression: str  # ground truth 表达式 (如 "8*pi*Ef*epsilon*r**3/(3*sin(2*theta))")
     samples: Dict[str, np.ndarray]  # {"train": ..., "test": ..., "ood_test"?}
-    desc: Optional[str] = None
 
     @property
     def train_samples(self) -> np.ndarray:
@@ -77,5 +75,4 @@ class Problem:
             symbol_properties=self.symbol_properties,
             train_X=data[:, 1:],
             train_y=data[:, 0],
-            desc=self.desc,
         )

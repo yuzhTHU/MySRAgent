@@ -46,10 +46,8 @@ def _json_default(value: Any) -> Any:
 
 def build_problem_description(problem) -> str:
     lines = []
-    if problem.desc:
-        lines.append(f"Problem Description: {problem.desc}")
     for sym, desc, prop in zip(problem.symbols, problem.symbol_descs, problem.symbol_properties):
-        kind = "Output" if prop == "O" else "Input Variable" if prop == "V" else "Constant"
+        kind = {'O': "Output", 'V': "Input Variable"}.get(prop, "Unknown")
         lines.append(f"{sym} ({kind}): {desc}")
     return "\n".join(lines)
 
