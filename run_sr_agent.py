@@ -37,6 +37,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("-f", "--equation", default="y = sin(x1 - x2)", help="Target equation. Example: 'y = sin(x1 - x2)'.")
     parser.add_argument("--problem_description", default=None, help="Problem description passed to the agent. Defaults to one derived from --equation.")
     parser.add_argument("--features", default=None, help="Optional comma-separated feature names. Defaults to variables parsed from --equation.")
+    parser.add_argument("--anonymize", action="store_true", help="Anonymize agent-facing variables as x1..xn and target as y.")
     parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
     parser.add_argument("--x_low", type=float, default=0.0, help="Lower bound for random features.")
@@ -106,6 +107,32 @@ def make_dataset(args):
 
 def main(args: argparse.Namespace) -> dict:
     features, target, formula, data = make_dataset(args)
+
+    if args.anonymize:
+        feature_mapping = {name: f"x{i}" for i, name in enumerate(features, start=1)} | {target: "y"}
+        anonymized_data = {feature_mapping[name]: values for name, values in data.items()}
+        anonymized_features = [feature_mapping[name] for name in features]
+        anonymized_target = feature_mapping[target]
+        anonymized_formula = formula.copy()
+        for var in anonymized_formula.iter_preorder():
+            if not isinstance(var, nd.Variable):
+                pass
+            elif var.name not in feature_mapping:
+                raise ValueError(f"Variable '{var.name}' in the formula is not in the feature mapping.")
+            else:
+                var.name = feature_mapping[var.name]
+        _logger.note(
+            f"Anonymization enabled. "
+            f"Original features {features} mapped to {anonymized_features}, "
+            f"target {target} mapped to {anonymized_target}.\n"
+            f"Original formula: {target} = {formula}\n"
+            f"Anonymized formula: {anonymized_target} = {anonymized_formula}\n"
+        )
+        features = anonymized_features
+        target = anonymized_target
+        formula = anonymized_formula
+        data = anonymized_data
+
     X = {name: data[name] for name in features}
     y = {target: data[target]}
     problem_description = args.problem_description or (

@@ -73,6 +73,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
     parser.add_argument("--skip_existing", action="store_true", default=False, help="如果结果文件已存在则跳过评估")
     parser.add_argument("--skip_successful", action="store_true", default=True, help="如果结果文件已存在且成功则跳过评估")
+    parser.add_argument("--anonymize", action="store_true", help="Anonymize agent-facing variables as x1..xn and target as y.")
     # 解析 --alg 参数以获取对应的 update_parser
     args, _ = parser.parse_known_args()
     if (update_parser_fn := get_update_parser(args.algorithm)):
@@ -131,6 +132,45 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
                 samples=samples,
             ))
     return problems
+
+
+def anonymize_problem(problem: Problem) -> Problem:
+    """Return an agent-facing anonymized copy of a benchmark problem."""
+
+    target = problem.symbols[0]
+    features = problem.symbols[1:]
+    feature_mapping = {name: f"x{i}" for i, name in enumerate(features, start=1)} | {target: "y"}
+    
+    anonymized_symbols = [feature_mapping[sym] for sym in problem.symbols]
+    anonymized_symbol_descs = ["target variable", *[f"input variable {i}" for i in range(1, len(features) + 1)]]
+
+    anonymized_expression = nd.parse(problem.expression.replace("^", "**").replace("np.", ""))
+    for var in anonymized_expression.iter_preorder():
+        if not isinstance(var, nd.Variable):
+            pass
+        elif var.name not in feature_mapping:
+            pass # 可能是 pi, e 之类的常数
+        else:
+            var.name = feature_mapping[var.name]
+    anonymized_expression = anonymized_expression.to_str()
+    _logger.debug(
+        f"[{problem.equation_idx} @ {problem.dataset_identifier}]"
+        f"Anonymization enabled. "
+        f"Variable mapping: {feature_mapping}\n"
+        f"Original formula: {target} = {problem.expression}\n"
+        f"Anonymized formula: {anonymized_symbols[0]} = {anonymized_expression}\n"
+    )
+
+    anonymized_problem = Problem(
+        dataset_identifier=problem.dataset_identifier,
+        equation_idx=problem.equation_idx,
+        symbols=anonymized_symbols,
+        symbol_descs=anonymized_symbol_descs,
+        symbol_properties=problem.symbol_properties,
+        expression=anonymized_expression,
+        samples=problem.samples,
+    )
+    return anonymized_problem
 
 
 def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
@@ -360,6 +400,11 @@ def main(args: argparse.Namespace) -> dict:
         if not problems:
             _logger.error("No valid problems found after filtering. Check your --problem_names.")
             return
+    
+    # 将 agent-facing 问题匿名化。样本矩阵列顺序不变，只替换符号名和自然语言描述。
+    if args.anonymize:
+        problems = [anonymize_problem(problem) for problem in problems]
+        _logger.note("Anonymization enabled for benchmark tasks.")
 
     # 获取算法的 run 函数
     sr_fn = get_algorithm(args.algorithm)
