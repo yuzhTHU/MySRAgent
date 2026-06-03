@@ -99,37 +99,27 @@ def tool_class(name: str) -> type[BaseTool]:
     return BaseTool.create(name, create_instance=False)
 
 
-def main(
-    argv: list[str] | None = None,
-    on_tool_result: Callable[[argparse.Namespace, dict[str, Any], ToolCallResult], None] | None = None,
-) -> None:
-    parser = build_argparser()
-    args = parser.parse_args(argv)
-
+def main(args) -> None:
     if args.command == "list":
-        names = list(BaseTool.REGISTRY_DICT)
-        print(json.dumps(names, indent=2, ensure_ascii=False) if args.json else "\n".join(names))
-        return
-
-    if args.command == "schema":
+        for idx, (name, tool_cls) in enumerate(BaseTool.REGISTRY_DICT.items()):
+            description = (tool_cls.metadata.description or "").strip()
+            print(f"[{idx:02d}] {name}: {description}")
+    elif args.command == "schema":
         schema = tool_class(args.tool).to_dict() if args.tool else BaseTool.to_tool_list()
         print(json.dumps(schema, indent=2, ensure_ascii=False))
-        return
-
-    if args.command == "call":
+    elif args.command == "call":
         tool_cls = tool_class(args.tool)
         context = load_context(args.context, target=args.target)
         params = load_params(args.params, args.params_file)
         result = tool_cls(**context)(**params)
-        if on_tool_result is not None:
-            on_tool_result(args, params, result)
         print(result.result_str)
         if not result.ok:
             raise SystemExit(1)
-        return
-
-    parser.error(f"Unknown command: {args.command}")
+    else:
+        parser.error(f"Unknown command: {args.command}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = build_argparser()
+    args = parser.parse_args()
+    main(args)
