@@ -279,7 +279,7 @@ if __name__ == "__main__":
     if args.debug:
         args.verbose = True
     seed_all(42)
-    save_path = Path(args.save_dir) / args.exp_name / args.algorithm
+    save_path = Path(args.save_dir) / args.exp_name
     save_path.mkdir(parents=True, exist_ok=True)
     args.save_path = str(save_path)
     args.command = " ".join(map(shlex.quote, [sys.executable, *sys.argv]))
