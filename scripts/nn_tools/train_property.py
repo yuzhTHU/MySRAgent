@@ -1,12 +1,16 @@
 # conda run -n sragent python scripts/nn_tools/train_property.py
-"""Train PropertyPredictionModel to predict formula properties from data.
+"""Train PropertyPredictionModel v5 to predict formula properties from data.
 
-4-class mono/conv, SymPy labels, optional SRBench HDF5 mixing.
+v5 improvements over v4:
+  Variable combination augmentation: randomly combine pairs of variables
+  (x_i*x_j, x_i+x_j, x_i-x_j, x_i/x_j) and compute labels numerically.
+  Applies to BOTH synthetic and SRBench data.
+  All v4 features retained.
 
 Two modes:
   --mode scratch   : train from random initialization
-  --mode finetune  : load encoder from a FoundationModel checkpoint, freeze
-                     encoder for --freeze_steps then unfreeze
+  --mode finetune  : load encoder from a FoundationModel checkpoint, gradual
+                     unfreezing + discriminative learning rates
 """
 from __future__ import annotations
 import sys
@@ -23,6 +27,7 @@ import logging
 import argparse
 import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data as D
 from datetime import datetime
 from socket import gethostname
@@ -41,6 +46,28 @@ _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 DATA_ROOT = ROOT / "data" / "llm-srbench-data"
 HDF5_PATH = DATA_ROOT / "lsr_bench_data.hdf5"
 LABEL_PATH = DATA_ROOT / "property_label" / "all_labels.json"
+
+
+class FocalLoss(nn.Module):
+    """Focal loss with optional label smoothing and per-class weights."""
+
+    def __init__(self, alpha=None, gamma=2.0, label_smoothing=0.0, reduction="mean"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        ce_loss = F.cross_entropy(
+            logits, targets, weight=self.alpha,
+            reduction="none", label_smoothing=self.label_smoothing,
+        )
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        return focal_loss.sum()
 
 
 def build_dataloader(args, seed, n_samples, batch_size, sampler=None, shuffle=False,
@@ -67,6 +94,11 @@ def build_dataloader(args, seed, n_samples, batch_size, sampler=None, shuffle=Fa
         use_sympy_labels=True,
         srbench_items=srbench_items,
         srbench_mix_ratio=srbench_mix_ratio,
+        noise_std=getattr(args, "noise_std", 0.0),
+        scale_augment=getattr(args, "scale_augment", False),
+        permute_vars=getattr(args, "permute_vars", False),
+        reject_trivial_prob=getattr(args, "reject_trivial_prob", 0.0),
+        combo_augment_prob=getattr(args, "combo_augment_prob", 0.0),
     )
     return D.DataLoader(
         ds, batch_size=batch_size, num_workers=args.num_workers,
@@ -98,6 +130,9 @@ def compute_metrics(preds: dict, labels: dict, var_mask: torch.Tensor) -> dict:
     pred_sep = preds["multiplicative_separable"].argmax(dim=-1)
     gt_sep = labels["mul_sep"]
     metrics["sep_acc"] = (pred_sep == gt_sep).float().mean().item()
+
+    # Composite target metric for early stopping
+    metrics["target_f1"] = (metrics["monotonicity_f1"] + metrics["convexity_f1"]) / 2
     return metrics
 
 
@@ -129,6 +164,50 @@ def run_step(args, model, float_embedder, data_embedder, batch, criterion_dict, 
     return loss, metrics
 
 
+def build_param_groups(args, model, float_embedder, data_embedder):
+    """Build optimizer parameter groups with discriminative LR for finetune."""
+    seen_ids = set()
+
+    encoder_params = []
+    for p in model.encoder.parameters():
+        pid = id(p)
+        if pid not in seen_ids and p.requires_grad:
+            seen_ids.add(pid)
+            encoder_params.append(p)
+
+    head_params = []
+    for name, p in model.named_parameters():
+        pid = id(p)
+        if pid not in seen_ids and p.requires_grad and not name.startswith("encoder."):
+            seen_ids.add(pid)
+            head_params.append(p)
+
+    embedder_params = []
+    for p in float_embedder.parameters():
+        pid = id(p)
+        if pid not in seen_ids and p.requires_grad:
+            seen_ids.add(pid)
+            embedder_params.append(p)
+    for p in data_embedder.parameters():
+        pid = id(p)
+        if pid not in seen_ids and p.requires_grad:
+            seen_ids.add(pid)
+            embedder_params.append(p)
+
+    if args.mode == "finetune":
+        groups = [
+            {"params": encoder_params, "lr": args.lr * 0.1},
+            {"params": head_params, "lr": args.lr},
+            {"params": embedder_params, "lr": args.lr * 0.3},
+        ]
+    else:
+        groups = [
+            {"params": encoder_params + head_params + embedder_params, "lr": args.lr},
+        ]
+
+    return [g for g in groups if g["params"]]
+
+
 def main(args):
     float_embedder = FloatEmbedder(d_model=args.d_model).to(args.device)
     data_embedder = DataEmbedder(
@@ -149,23 +228,36 @@ def main(args):
             data_embedder.load_state_dict(ckpt["data_embedder"])
             _logger.info("  loaded data_embedder weights")
 
-    trainable = list(set(
-        list(model.parameters()) +
-        list(float_embedder.parameters()) +
-        list(data_embedder.parameters())
-    ))
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=args.weight_decay)
+    param_groups = build_param_groups(args, model, float_embedder, data_embedder)
+    optimizer = torch.optim.AdamW(param_groups, lr=args.lr, weight_decay=args.weight_decay)
 
-    # 4-class weights — upweight informative classes (inc/dec/const, convex/concave/affine)
+    total_steps = args.max_steps
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=[g["lr"] for g in param_groups],
+        total_steps=total_steps, pct_start=0.1,
+        anneal_strategy="cos", final_div_factor=100,
+    )
+
+    # v4: per-task loss — Focal Loss for mono/conv, Weighted CE for periodicity
+    label_smoothing = getattr(args, "label_smoothing", 0.0)
     mono_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
     conv_weights = torch.tensor([0.5, 5.0, 5.0, 5.0], device=args.device)
     period_weights = torch.tensor([1.0, 5.0], device=args.device)
-    criterion_dict = {
-        "monotonicity": nn.CrossEntropyLoss(weight=mono_weights),
-        "convexity": nn.CrossEntropyLoss(weight=conv_weights),
-        "periodicity": nn.CrossEntropyLoss(weight=period_weights),
-        "sep": nn.CrossEntropyLoss(),
-    }
+
+    if getattr(args, "use_focal_loss", False):
+        criterion_dict = {
+            "monotonicity": FocalLoss(alpha=mono_weights, gamma=2.0, label_smoothing=label_smoothing),
+            "convexity": FocalLoss(alpha=conv_weights, gamma=2.0, label_smoothing=label_smoothing),
+            "periodicity": nn.CrossEntropyLoss(weight=period_weights),
+            "sep": FocalLoss(gamma=2.0, label_smoothing=label_smoothing),
+        }
+    else:
+        criterion_dict = {
+            "monotonicity": nn.CrossEntropyLoss(weight=mono_weights, label_smoothing=label_smoothing),
+            "convexity": nn.CrossEntropyLoss(weight=conv_weights, label_smoothing=label_smoothing),
+            "periodicity": nn.CrossEntropyLoss(weight=period_weights),
+            "sep": nn.CrossEntropyLoss(label_smoothing=label_smoothing),
+        }
 
     # Load SRBench HDF5 train data for mixing
     srbench_items = []
@@ -192,6 +284,7 @@ def main(args):
     save_path = Path(args.save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     best_loss = float("inf")
+    best_f1 = -1.0
     patience_left = args.patience
     history = []
 
@@ -209,19 +302,30 @@ def main(args):
         if step >= args.max_steps:
             break
 
+        # Gradual unfreezing for finetune mode
         if encoder_frozen and step >= args.freeze_steps:
             for p in model.encoder.parameters():
                 p.requires_grad = True
             encoder_frozen = False
-            _logger.info(f"Encoder unfrozen at step {step}")
+            param_groups_new = build_param_groups(args, model, float_embedder, data_embedder)
+            optimizer = torch.optim.AdamW(param_groups_new, lr=args.lr, weight_decay=args.weight_decay)
+            remaining_steps = max(1, args.max_steps - step)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer, max_lr=[g["lr"] for g in param_groups_new],
+                total_steps=remaining_steps, pct_start=0.1,
+                anneal_strategy="cos", final_div_factor=100,
+            )
+            _logger.info(f"Encoder unfrozen at step {step}, rebuilt optimizer with discriminative LR")
 
         model.train(); float_embedder.train(); data_embedder.train()
         loss, train_metrics = run_step(args, model, float_embedder, data_embedder, batch, criterion_dict, "train")
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         if args.grad_clip > 0:
-            nn.utils.clip_grad_norm_(trainable, args.grad_clip)
+            all_params = [p for g in optimizer.param_groups for p in g["params"]]
+            nn.utils.clip_grad_norm_(all_params, args.grad_clip)
         optimizer.step()
+        scheduler.step()
 
         if step % args.eval_every == 0:
             model.eval(); float_embedder.eval(); data_embedder.eval()
@@ -235,19 +339,42 @@ def main(args):
             record = {"step": step, "train": train_metrics, "eval": eval_metrics}
             history.append(record)
 
-            improved = eval_metrics["loss"] < best_loss
-            if improved:
+            # v4: dual early stopping — save both best_loss and best_f1 checkpoints
+            loss_improved = eval_metrics["loss"] < best_loss
+            if loss_improved:
                 best_loss = eval_metrics["loss"]
-                patience_left = args.patience
                 torch.save({
                     "step": step, "args": vars(args),
                     "model": model.state_dict(),
                     "float_embedder": float_embedder.state_dict(),
                     "data_embedder": data_embedder.state_dict(),
                     "optimizer": optimizer.state_dict(),
-                }, save_path / "best.pth")
+                }, save_path / "best_loss.pth")
 
-            marker = " *BEST*" if improved else ""
+            f1_improved = eval_metrics["target_f1"] > best_f1
+            if f1_improved:
+                best_f1 = eval_metrics["target_f1"]
+                torch.save({
+                    "step": step, "args": vars(args),
+                    "model": model.state_dict(),
+                    "float_embedder": float_embedder.state_dict(),
+                    "data_embedder": data_embedder.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                }, save_path / "best_f1.pth")
+
+            # Early stopping based on F1 (primary) with loss as tiebreaker
+            improved = f1_improved or loss_improved
+            if improved:
+                patience_left = args.patience
+
+            markers = []
+            if loss_improved:
+                markers.append("BEST_LOSS")
+            if f1_improved:
+                markers.append("BEST_F1")
+            marker = f" *{'|'.join(markers)}*" if markers else ""
+
+            current_lr = optimizer.param_groups[0]["lr"]
             _logger.info(
                 f"[step {step:>6d}] "
                 f"train_loss={train_metrics['loss']:.4f}  "
@@ -258,7 +385,9 @@ def main(args):
                 f"sep_acc={eval_metrics['sep_acc']:.3f}  "
                 f"mono_f1={eval_metrics['monotonicity_f1']:.3f}  "
                 f"conv_f1={eval_metrics['convexity_f1']:.3f}  "
-                f"period_f1={eval_metrics['periodicity_f1']:.3f}"
+                f"period_f1={eval_metrics['periodicity_f1']:.3f}  "
+                f"target_f1={eval_metrics['target_f1']:.3f}  "
+                f"lr={current_lr:.2e}"
                 f"{marker}"
             )
 
@@ -276,10 +405,19 @@ def main(args):
         "data_embedder": data_embedder.state_dict(),
     }, save_path / "last.pth")
 
+    # Symlink best.pth -> best_f1.pth for backward compatibility
+    best_pth = save_path / "best.pth"
+    best_f1_pth = save_path / "best_f1.pth"
+    if best_f1_pth.exists():
+        if best_pth.exists() or best_pth.is_symlink():
+            best_pth.unlink()
+        import shutil
+        shutil.copy2(str(best_f1_pth), str(best_pth))
+
     with open(save_path / "history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    _logger.info(f"Training finished in {elapsed:.0f}s, best eval_loss={best_loss:.4f}")
+    _logger.info(f"Training finished in {elapsed:.0f}s, best_loss={best_loss:.4f}, best_f1={best_f1:.4f}")
     return history
 
 
@@ -296,35 +434,46 @@ def build_argparser():
     p.add_argument("--eval_seed", type=int, default=0)
     p.add_argument("--verbose", action="store_true")
 
-    p.add_argument("--max_steps", type=int, default=20000)
-    p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--eval_batch_size", type=int, default=32)
+    p.add_argument("--max_steps", type=int, default=10000)
+    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--eval_batch_size", type=int, default=64)
     p.add_argument("--eval_size", type=int, default=256)
-    p.add_argument("--eval_every", type=int, default=500)
+    p.add_argument("--eval_every", type=int, default=200)
     p.add_argument("--num_workers", type=int, default=0)
-    p.add_argument("--patience", type=int, default=15)
+    p.add_argument("--patience", type=int, default=25)
     p.add_argument("--sample_num", type=int, default=200)
     p.add_argument("--max_var_num", type=int, default=5)
-    p.add_argument("--min_depth", type=int, default=2)
+    p.add_argument("--min_depth", type=int, default=1)
     p.add_argument("--max_depth", type=int, default=5)
     p.add_argument("--data_min", type=float, default=-10.0)
     p.add_argument("--data_max", type=float, default=10.0)
     p.add_argument("--eq_generator", default="gplearn")
     p.add_argument("--data_generator", default="uniform")
-    p.add_argument("--max_per_signature", type=int, default=50)
-    p.add_argument("--srbench_mix_ratio", type=float, default=0.0,
+    p.add_argument("--max_per_signature", type=int, default=9999)
+    p.add_argument("--srbench_mix_ratio", type=float, default=0.55,
                    help="Probability of returning a SRBench HDF5 item per training sample")
 
     p.add_argument("--d_model", type=int, default=128)
     p.add_argument("--nhead", type=int, default=8)
     p.add_argument("--num_encoder_layers", type=int, default=4)
     p.add_argument("--dim_feedforward", type=int, default=512)
-    p.add_argument("--dropout", type=float, default=0.1)
+    p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--data_pooling", choices=["attention", "average", "sum"], default="attention")
 
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip", type=float, default=1.0)
+
+    # v4 flags
+    p.add_argument("--use_focal_loss", action="store_true", help="Use Focal Loss for mono/conv (CE for period)")
+    p.add_argument("--label_smoothing", type=float, default=0.05)
+    p.add_argument("--noise_std", type=float, default=0.01, help="Gaussian noise std on y (relative)")
+    p.add_argument("--scale_augment", action="store_true", help="Random y-scaling augmentation")
+    p.add_argument("--permute_vars", action="store_true", help="Variable permutation augmentation")
+    p.add_argument("--reject_trivial_prob", type=float, default=0.6,
+                   help="Probability of rejecting all-constant/affine synthetic samples")
+    p.add_argument("--combo_augment_prob", type=float, default=0.0,
+                   help="Probability of applying variable combination augmentation per sample")
     return p
 
 
