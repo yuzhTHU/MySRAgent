@@ -19,9 +19,10 @@ x_0, x_1, ..., x_{N-1}: 历史数据
 - 指定 fit_params 时，算法会根据给定的方程式结构拟合参数（例如上面例子中的 1.0 和 0.5）以最小化预测值与真实值之间的误差；不指定 fit_params 时，则直接使用给定的方程式进行预测，不进行参数拟合。
 - 根据指定的 network_builder (需要在 build_network 中实现对应算法) 构造 edge_list 和 num_nodes 以供方程式中的 sour, targ, aggr 算符使用。
     如果不指定 network_builder, 则无法使用 sour, targ, aggr 等网络动力学算符, 只能拟合类似 dx = 1.0 * x_0 + 0.5 * x_1 这样不包含节点间相关性的方程式。
-- 如果你认为连边是有权重的，例如：dx_i = x_i + 0.5 * sum_j w_{k such that edge_list[k] = (i, j)} * sin(x_j - x_i)，你可以先在 _build_data 中算出这个 w (长度为 len(edge_list) 的一维数组), 然后用
-    eq = nd.parse(eq_str, variables=variables | {'w': nd2py.Number(w, nettype='edge')})
-  此时 eq.eval(data_dict) 时会自动将 w[k] 与 sour(x_0)[k] 进行逐元素乘法。
+- 如果你认为连边是有权重的，例如：dx_i = x_i + 0.5 * sum_j w_{k such that edge_list[k] = (i, j)} * sin(x_j - x_i)
+    你可以在 network_builder.build_network 中算出这个 w (长度为 len(edge_list) 的一维数组), 然后返回
+        {'edge_list': edge_list, 'num_nodes': num_nodes, 'w': nd2py.Number(w, nettype='edge')}
+    此时 eq = nd.parse(eq_str, variables=variables) 会将这个 w 记录在 eq 中, 随后的 eq.eval(data_dict) 会自动将 w[k] 与 sour(x_0)[k] 进行逐元素乘法。
 """
 from __future__ import annotations
 import sys
@@ -32,6 +33,7 @@ sys.path.insert(0, str(ROOT / "src" / "experimental"))
 import logging
 import numpy as np
 import nd2py as nd
+from pathlib import Path
 from collections import defaultdict
 from .build_network import list_algorithms, get_algorithm
 
@@ -41,7 +43,7 @@ _logger = logging.getLogger(f"sr_agent.{__name__}")
 def update_parser(parser):
     """ 当前算法添加的命令行参数 """
     parser.add_argument("--equation", type=str, required=True, help="Equation string, e.g., dx = 1.0 * x_0 + 0.0 * x_1 or dx = 1.0 * x_0 + 0.5 * aggr(sin(sour(x_0) - targ(x_0)))")
-    parser.add_argument("--fit_params", type=bool, default=True, help="Whether to fit parameters in --equation from data. If False, will directly use the equation without fitting.")
+    parser.add_argument("--fit_params", action='store_true', default=True, help="Whether to fit parameters in --equation from data. If False, will directly use the equation without fitting.")
     parser.add_argument("--network_builder", type=str, default=None, choices=list_algorithms(), help="Optional name of a network builder function defined in build_network, used to construct edge_list and num_nodes for equation evaluation.")
     parser.set_defaults(hist_steps=2) # 与 equation 中的 x_0, x_1 数量保持一致
     return parser
@@ -66,7 +68,7 @@ def _build_dataset(args, data, node_info, time_info):
     
     if args.network_builder is not None:
         network_builder = get_algorithm(args.network_builder)
-        data_dict |= network_builder(data, node_info, time_info)
+        data_dict |= network_builder.build_network(args, data, node_info, time_info)
 
     return data_dict
 
@@ -92,6 +94,9 @@ def train_model(args, data, node_info, time_info):
     else:
         eq_str = args.equation.strip()
     variables = {f'x_{n}': nd.Variable(f'x_{n}', nettype='node') for n in range(args.hist_steps)}
+    for key in data_dict:
+        if key not in variables:
+            variables[key] = data_dict[key]
     eq = nd.parse(eq_str, variables=variables)
 
     for var in eq.iter_preorder():
@@ -109,8 +114,9 @@ def train_model(args, data, node_info, time_info):
     _logger.note(f"Fitted equation: dx = {eq.to_str(number_format='.4f')}")
     result_dict = {"eq": eq, "edge_list": edge_list, "num_nodes": num_nodes}
     if edge_list is not None:
-        np.save(args.save_path / "edge_list.npy", edge_list)
-        result_dict['edge_list_path'] = str(args.save_path / "edge_list.npy")
+        save_path = Path(args.save_path)
+        np.save(save_path / "edge_list.npy", np.column_stack(edge_list))
+        result_dict['edge_list_path'] = str(save_path / "edge_list.npy")
     return result_dict
 
 

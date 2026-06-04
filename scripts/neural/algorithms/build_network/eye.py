@@ -3,8 +3,10 @@
 构造一个最简单的网络, 每个节点只与自己有一条边
 """
 
+import numpy as np
 
-def build_network(data, node_info, time_info):
+
+def build_network(args, data, node_info, time_info):
     """构造一个最简单的网络, 每个节点只与自己有一条边
     Args:
         data: np.ndarray, shape (n_times, n_nodes), 训练数据矩阵
@@ -21,5 +23,5 @@ def build_network(data, node_info, time_info):
         num_nodes: int, 节点数量
     """
     num_nodes = len(node_info)
-    edge_list = [(i, i) for i in range(num_nodes)]
-    return {'edge_list': edge_list, 'num_nodes': num_nodes}
+    nodes = np.arange(num_nodes, dtype=np.int64)
+    return {'edge_list': (nodes, nodes.copy()), 'num_nodes': num_nodes}
