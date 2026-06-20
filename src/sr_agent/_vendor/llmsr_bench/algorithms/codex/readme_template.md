@@ -60,6 +60,8 @@ python <CALL_TOOL_PATH> call evaluate_formula --params '{"f": "sin(x1) + x2", "f
 
 7. When you have a final formula, update `<RESULT_PATH>`. Preserve the existing fields and fill at least:
 
+8. During ablation experiments, some tools may be removed. Don't be surprised if you find that some of the tools mentioned above are not provided by `call_tool.py`.
+
 ```json
 {
   "discovered_expression": "sin(x1) + x2",
