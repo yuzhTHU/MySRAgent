@@ -139,11 +139,20 @@ class PropertyPredictorTool(BaseTool):
         ## 加载模型 checkpoint
         default_ckpt_path = _MODEL_CACHE_DIR / f"{self.MODEL_TYPE}.pth"
         ckpt_path = Path(os.getenv("SR_AGENT_PROPERTY_MODEL_CHECKPOINT") or default_ckpt_path).expanduser()
+        repo = get_default("repo")
+        release_url = f"https://github.com/{repo}/releases/tag/{self.MODEL_RELEASE_TAG}"
         if not ckpt_path.exists() and self.AUTO_DOWNLOAD:
+            _logger.info(
+                f"Model checkpoint {ckpt_path} not found, attempting to download from GitHub..."
+                f"You can also download it manually if it takes too long or fails. To do so, visit the GitHub Release page\n"
+                f"  [blue bold]{release_url}[reset]\n"
+                f"and download the asset named\n"
+                f"  [blue bold]{self.MODEL_TYPE!r}[reset]\n"
+                f"Then save it as\n"
+                f"  [blue bold]{ckpt_path}[reset]\n"
+            )
             download_model(name=self.MODEL_TYPE, checkpoint=ckpt_path, release_tag=self.MODEL_RELEASE_TAG)
         if not ckpt_path.exists():
-            repo = get_default("repo")
-            release_url = f"https://github.com/{repo}/releases/tag/{self.MODEL_RELEASE_TAG}"
             raise ToolRunAbort(tag2ansi(
                 f"Model checkpoint not found: {ckpt_path}.\n"
                 f"Automatic download was not available. To use predict_property, please visit the GitHub Release page\n"
