@@ -17,7 +17,7 @@ from docstring_parser import DocstringStyle, parse
 from abc import ABC, abstractmethod
 from types import NoneType, UnionType
 from inspect import Parameter, signature
-from typing import Any, Dict, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
 from ..utils import FactoryMixin
 
 _logger = getLogger(f'sr_agent.{__name__}')
@@ -392,3 +392,8 @@ class BaseTool(ABC, FactoryMixin):
             "pearson_r": pearson_r,
             "spearman_r": spearman_r,
         }
+
+
+def is_numeric_array(data: List[Any]) -> bool:
+    arr = np.asarray(data)
+    return np.issubdtype(arr.dtype, np.integer) or np.issubdtype(arr.dtype, np.floating)

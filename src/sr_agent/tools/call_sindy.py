@@ -10,7 +10,7 @@ import logging
 import numpy as np
 import nd2py as nd
 from typing import Dict, Any, List
-from .base_tool import BaseTool, ToolMetadata
+from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
 
@@ -46,7 +46,7 @@ class SINDyTool(BaseTool):
         data = self.context["data"]
         y = y or self.context["target"]
         y = y.strip().strip('"').strip("'")
-        x = x or [var for var in data if var != y]
+        x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []
 
         poly_degree = max(1, min(poly_degree, 5))
@@ -55,6 +55,8 @@ class SINDyTool(BaseTool):
         try:
             eq_y = nd.parse(y.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
             data_y = eq_y.eval(data).flatten()
+            if not is_numeric_array(data_y):
+                raise ValueError(f"Target '{y}' did not produce numeric values.")
         except Exception as e:
             raise ValueError(
                 f"Failed to compute target '{y}': {str(e)}" +
@@ -62,25 +64,26 @@ class SINDyTool(BaseTool):
             )
         y_vec = data_y
 
-        eq_x_list = []
-        data_x_list = []
-        x_names = []
+        features = {'exprs': [], 'arrays': [], 'internal_names': [], 'original_exprs': []}
         for idx, xi in enumerate(x, 1):
             try:
                 eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
                 data_x = eq_x.eval(data).flatten()
-                eq_x_list.append(eq_x)
-                data_x_list.append(data_x)
-                x_names.append(f"x{idx}")
+                if not is_numeric_array(data_x):
+                    raise ValueError(f"Feature '{xi}' did not produce numeric values.")
+                features['exprs'].append(eq_x)
+                features['arrays'].append(data_x)
+                features['internal_names'].append(f"x{idx}")
+                features['original_exprs'].append(xi)
                 assert data_x.shape == data_y.shape, f"Feature '{xi}' shape {data_x.shape} does not match target shape {data_y.shape}."
             except Exception as e:
                 exceptions.append(f"Failed to compute feature '{xi}': {str(e)}")
-        if len(eq_x_list) == 0:
+        if len(features['exprs']) == 0:
             raise ValueError(
                 "No valid input variables available for fitting.\n" +
                 "Other exceptions: " + "; ".join(exceptions)
             )
-        X_matrix = np.column_stack(data_x_list)
+        X_matrix = np.column_stack(features['arrays'])
 
         if len(y_vec) > max_samples:
             rng = np.random.default_rng(42)
@@ -93,16 +96,16 @@ class SINDyTool(BaseTool):
 
         try:
             formula_str = self._run_sindy(
-                X_fit, y_fit, x_names, poly_degree, include_trig, threshold
+                X_fit, y_fit, features['internal_names'], poly_degree, include_trig, threshold
             )
         except Exception as e:
             formula_str = "0"
             exceptions.append(f"SINDy fitting failed: {type(e).__name__}: {e}")
 
         if formula_str and formula_str != "0":
-            formula_str = self._restore_feature_names(formula_str, x_names, x)
+            formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
             metrics = self.evaluate(eq=formula_str)
-            is_candidate = (y == self.context['target']) and (y not in x)
+            is_candidate = (y == self.context['target']) and (y not in features['original_exprs'])
         else:
             metrics = {"mse": float("inf")}
             is_candidate = False

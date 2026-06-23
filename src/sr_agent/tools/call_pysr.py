@@ -9,7 +9,7 @@ import logging
 import numpy as np
 import nd2py as nd
 from typing import Dict, Any, List
-from .base_tool import BaseTool, ToolMetadata
+from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
 
@@ -53,7 +53,7 @@ class PySRTool(BaseTool):
         data = self.context["data"]
         y = y or self.context["target"]
         y = y.strip().strip('"').strip("'")
-        x = x or [var for var in data if var != y]
+        x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []
 
         # Clamp timeout
@@ -62,6 +62,8 @@ class PySRTool(BaseTool):
         try:
             eq_y = nd.parse(y.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
             data_y = eq_y.eval(data).flatten()
+            if not is_numeric_array(data_y):
+                raise ValueError(f"Target '{y}' did not produce numeric values.")
         except Exception as e:
             raise ValueError(
                 f"Failed to compute target '{y}': {str(e)}" +
@@ -69,25 +71,26 @@ class PySRTool(BaseTool):
             )
         y_vec = data_y
 
-        eq_x_list = []
-        data_x_list = []
-        x_names = []
+        features = {'exprs': [], 'arrays': [], 'internal_names': [], 'original_exprs': []}
         for idx, xi in enumerate(x, 1):
             try:
                 eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
                 data_x = eq_x.eval(data).flatten()
-                eq_x_list.append(eq_x)
-                data_x_list.append(data_x)
-                x_names.append(f"x{idx}")
+                if not is_numeric_array(data_x):
+                    raise ValueError(f"Feature '{xi}' did not produce numeric values.")
+                features['exprs'].append(eq_x)
+                features['arrays'].append(data_x)
+                features['internal_names'].append(f"x{idx}")
+                features['original_exprs'].append(xi)
                 assert data_x.shape == data_y.shape, f"Feature '{xi}' shape {data_x.shape} does not match target shape {data_y.shape}."
             except Exception as e:
                 exceptions.append(f"Failed to compute feature '{xi}': {str(e)}")
-        if len(eq_x_list) == 0:
+        if len(features['exprs']) == 0:
             raise ValueError(
                 "No valid input variables available for fitting.\n" +
                 "Other exceptions: " + "; ".join(exceptions)
             )
-        X_matrix = np.column_stack(data_x_list)
+        X_matrix = np.column_stack(features['arrays'])
 
         # Subsample if too many points
         if len(y_vec) > max_samples:
@@ -106,7 +109,7 @@ class PySRTool(BaseTool):
 
         try:
             formula_str, pareto_front, complexity = self._run_pysr(
-                X_fit, y_fit, x_names, binary_operators, unary_operators,
+                X_fit, y_fit, features['internal_names'], binary_operators, unary_operators,
                 timeout, maxsize
             )
             method = "PySR"
@@ -115,7 +118,7 @@ class PySRTool(BaseTool):
             _logger.warning(f"PySR failed, trying gplearn fallback: {e}")
             try:
                 formula_str = self._run_gplearn_fallback(
-                    X_fit, y_fit, x_names, binary_operators, unary_operators
+                    X_fit, y_fit, features['internal_names'], binary_operators, unary_operators
                 )
                 method = "gplearn"
             except Exception as e2:
@@ -123,13 +126,13 @@ class PySRTool(BaseTool):
                 method = "failed"
 
         if formula_str and formula_str != "0":
-            formula_str = self._restore_feature_names(formula_str, x_names, x)
+            formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
             pareto_front = [
-                item | {"formula": self._restore_feature_names(item["formula"], x_names, x)}
+                item | {"formula": self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])}
                 for item in pareto_front
             ]
             metrics = self.evaluate(eq=formula_str)
-            is_candidate = (y == self.context['target']) and (y not in x)
+            is_candidate = (y == self.context['target']) and (y not in features['original_exprs'])
         else:
             metrics = {"mse": float("inf")}
             is_candidate = False

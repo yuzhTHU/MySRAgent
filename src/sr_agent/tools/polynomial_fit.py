@@ -6,7 +6,7 @@ import nd2py as nd
 from itertools import combinations, product
 from functools import reduce
 from typing import Dict, Any, List, Optional, Tuple, Set
-from .base_tool import BaseTool, ToolMetadata
+from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 
 @BaseTool.register('polynomial_fit')
@@ -42,7 +42,7 @@ class PolynomialFitTool(BaseTool):
         data = self.context["data"]
         y = y or self.context["target"]
         y = y.strip().strip('"').strip("'")
-        x = x or [var for var in data if var != y]
+        x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []
 
         try:
@@ -59,6 +59,9 @@ class PolynomialFitTool(BaseTool):
             try:
                 eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
                 data_x = eq_x.eval(data).flatten()
+                if not is_numeric_array(data_x):
+                    exceptions.append(f"Feature '{xi}' did not produce numeric values.")
+                    continue
                 eq_x_list.append(eq_x)
                 assert data_x.shape == data_y.shape, f"Feature '{xi}' shape {data_x.shape} does not match target shape {data_y.shape}."
             except Exception as e:

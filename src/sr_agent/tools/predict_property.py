@@ -18,7 +18,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Literal
 from ..utils import download_model, get_default, tag2ansi
-from .base_tool import BaseTool, ToolMetadata, ToolRunAbort
+from .base_tool import BaseTool, ToolMetadata, ToolRunAbort, is_numeric_array
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -167,12 +167,14 @@ class PropertyPredictorTool(BaseTool):
         model, float_emb, data_emb, saved_args = _load_model(ckpt_path, self.DEVICE)
         max_var_num = saved_args.max_var_num
 
-        input_vars = [v for v in data if v != target_name]
+        input_vars = [v for v in data if v != target_name and is_numeric_array(data[v])]
         if len(input_vars) > max_var_num:
             input_vars = input_vars[:max_var_num]
             exceptions.append(f"Too many variables ({len(data) - 1}), only the first {max_var_num} are analyzed: {input_vars}")
 
         n_vars = len(input_vars)
+        if not is_numeric_array(data[target_name]):
+            raise ValueError(f"Target variable '{target_name}' did not produce numeric values.")
         y_arr = np.asarray(data[target_name], dtype=np.float32).flatten()
         n_samples = len(y_arr)
 

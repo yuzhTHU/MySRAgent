@@ -3,7 +3,7 @@
 import numpy as np
 import nd2py as nd
 from typing import Dict, Any, List
-from .base_tool import BaseTool, ToolMetadata
+from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 
 @BaseTool.register('statistics_analysis')
@@ -20,7 +20,7 @@ class StatisticsTool(BaseTool):
         """
         data = self.context['data'] # {str: np.ndarray}, 包括 input variables & target variable
         if variables is None:
-            variables = list(data.keys())
+            variables = [key for key in data if is_numeric_array(data[key])]
         statistics = {}
         exceptions = []
         for item in variables:
@@ -33,6 +33,9 @@ class StatisticsTool(BaseTool):
                 except Exception as e:
                     exceptions.append(f"Failed to compute '{item}': {str(e)}")
                     continue
+            if not is_numeric_array(x):
+                exceptions.append(f"Feature '{item}' did not produce numeric values.")
+                continue
             statistics[item] = self.get_stats(x)
         return {
             'statistics': statistics,
