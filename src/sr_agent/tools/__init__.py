@@ -4,7 +4,7 @@
 所有工具都应继承自 BaseTool，并实现 execute 方法，详见本目录下的 README.md
 """
 
-from .base_tool import BaseTool, ToolMetadata, ToolCallResult
+from .base_tool import BaseTool, ToolMetadata, ToolCallResult, ToolRunAbort
 from .statistics_analysis import StatisticsTool
 from .evaluate_formula import EvaluateTool, SubmitFormulaTool
 from .call_llm import LLMTool
@@ -23,6 +23,7 @@ __all__ = [
     "BaseTool",
     "ToolMetadata",
     "ToolCallResult",
+    "ToolRunAbort",
     "StatisticsTool",
     "EvaluateTool",
     "SubmitFormulaTool",

@@ -6,9 +6,9 @@
 为符号回归搜索提供先验知识指导。
 
 可通过下述指令将模型上传到 Github Release（需要设置 GITHUB_TOKEN 环境变量）
-    python -m sr_agent.cli.upload_models --checkpoint path/to/model.pth --name property-scratch
+    python -m sr_agent.cli.upload_models --checkpoint path/to/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 可通过下述指令从 Github Release 下载模型到本地（或者在首次调用时自动下载）
-    python -m sr_agent.cli.download_models --checkpoint path/to/save/model.pth --name property-scratch
+    python -m sr_agent.cli.download_models --checkpoint path/to/save/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import os
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Literal
-from ..utils import download_model
-from .base_tool import BaseTool, ToolMetadata
+from ..utils import download_model, get_default, tag2ansi
+from .base_tool import BaseTool, ToolMetadata, ToolRunAbort
 
 _logger = logging.getLogger(f"sr_agent.{__name__}")
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -114,7 +114,9 @@ class PropertyPredictorTool(BaseTool):
     MODEL_TYPE: Literal[
         "property-scratch",
         "property-finetune",
-    ] = "property-scratch"
+        "property-scratch-v5",
+    ] = "property-scratch-v5"
+    MODEL_RELEASE_TAG: str = "sr-agent-models-v5"
     DEVICE: str = "cpu"
     AUTO_DOWNLOAD: bool = True
 
@@ -138,9 +140,20 @@ class PropertyPredictorTool(BaseTool):
         default_ckpt_path = _MODEL_CACHE_DIR / f"{self.MODEL_TYPE}.pth"
         ckpt_path = Path(os.getenv("SR_AGENT_PROPERTY_MODEL_CHECKPOINT") or default_ckpt_path).expanduser()
         if not ckpt_path.exists() and self.AUTO_DOWNLOAD:
-            download_model(name=self.MODEL_TYPE, checkpoint=ckpt_path)
+            download_model(name=self.MODEL_TYPE, checkpoint=ckpt_path, release_tag=self.MODEL_RELEASE_TAG)
         if not ckpt_path.exists():
-            raise FileNotFoundError(f"Model checkpoint not found: {ckpt_path}. ")
+            repo = get_default("repo")
+            release_url = f"https://github.com/{repo}/releases/tag/{self.MODEL_RELEASE_TAG}"
+            raise ToolRunAbort(tag2ansi(
+                f"Model checkpoint not found: {ckpt_path}.\n"
+                f"Automatic download was not available. To use predict_property, please visit the GitHub Release page\n"
+                f"  [blue bold]{release_url}[reset]\n"
+                f"and download the asset named\n"
+                f"  [blue bold]{self.MODEL_TYPE!r}[reset]\n"
+                f"Then save it as\n"
+                f"  [blue bold]{ckpt_path}[reset]\n"
+                "Alternatively, you can ban this predict_property tool to avoid this error."
+            ))
 
         model, float_emb, data_emb, saved_args = _load_model(ckpt_path, self.DEVICE)
         max_var_num = saved_args.max_var_num

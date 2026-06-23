@@ -3,11 +3,14 @@
 from __future__ import annotations
 import os
 import shutil
+import logging
 import requests
 from pathlib import Path
 from typing import Literal, Optional
+from .log_exception import log_exception
 
 
+_logger = logging.getLogger(f"sr_agent.{__name__}")
 __all__ = ["get_default", "download_model", "upload_model"]
 DEFAULT_GITHUB_REPO = "yuzhTHU/MySRAgent"
 DEFAULT_GITHUB_RELEASE_TAG = "sr-agent-models"
@@ -52,7 +55,8 @@ def download_model(name: str, checkpoint: str, repo: str = None, release_tag: st
                     if chunk: f.write(chunk)
         shutil.move(str(tmp_path), checkpoint_path)
     except Exception as e:
-        raise ModelStoreError(f"Failed to download model {name} from {repo}@{release_tag}: {e}") from e
+        _logger.error(f"Failed to download model {name} from {repo}@{release_tag}: {log_exception(e, with_traceback=False)}")
+        checkpoint_path = None
     finally:
         tmp_path.unlink(missing_ok=True)
     return checkpoint_path

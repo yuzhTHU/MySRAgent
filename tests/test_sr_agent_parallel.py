@@ -19,9 +19,9 @@ def make_agent(tmp_path):
         llm_provider="unused",
         llm_model="unused",
         tools=["unit_parallel_tool"],
+        save_path=str(tmp_path),
     )
     agent.tools = [UnitParallelTool(offset=10)]
-    agent.save_path = str(tmp_path)
     return agent
 
 

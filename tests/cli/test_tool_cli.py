@@ -5,7 +5,11 @@ import json
 import numpy as np
 import pytest
 
-from sr_agent.cli.tool import load_context, load_params, main
+from sr_agent.cli.tool import build_argparser, load_context, load_params, main
+
+
+def run_cli(argv: list[str]) -> None:
+    main(build_argparser().parse_args(argv))
 
 
 def test_load_context_from_explicit_data_field(tmp_path):
@@ -54,7 +58,7 @@ def test_call_outputs_formatted_result_only(tmp_path, capsys):
         target="y",
     )
 
-    main(
+    run_cli(
         [
             "call",
             "statistics_analysis",
@@ -81,7 +85,7 @@ def test_call_returns_nonzero_on_tool_error(tmp_path, capsys):
     )
 
     with pytest.raises(SystemExit) as exc:
-        main(
+        run_cli(
             [
                 "call",
                 "evaluate_formula",

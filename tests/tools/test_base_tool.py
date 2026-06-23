@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import pytest
 
-from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
+from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolRunAbort, ToolMetadata
 
 
 @BaseTool.register("unit_sample_tool")
@@ -72,6 +72,15 @@ class UnitErrorTool(BaseTool):
     def execute(self) -> Dict[str, Any]:
         """Raise a controlled error."""
         raise RuntimeError("boom")
+
+
+@BaseTool.register("unit_abort_tool")
+class UnitAbortTool(BaseTool):
+    metadata = ToolMetadata(name="unit_abort_tool")
+
+    def execute(self) -> Dict[str, Any]:
+        """Raise an abort error."""
+        raise ToolRunAbort("stop now")
 
 
 class TestToolMetadata:
@@ -242,3 +251,7 @@ class TestBaseToolExportAndCall:
         assert "RuntimeError" in result.result_str
         assert "boom" in result.result_str
         assert result.meta_data["tool"] == "unit_error_tool"
+
+    def test_call_does_not_catch_tool_run_abort(self):
+        with pytest.raises(ToolRunAbort, match="stop now"):
+            UnitAbortTool()()

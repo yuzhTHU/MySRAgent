@@ -7,8 +7,8 @@ import argparse
 import numpy as np
 import sr_agent.tools
 from pathlib import Path
-from typing import Any, Callable
-from sr_agent.tools import BaseTool, ToolCallResult
+from typing import Any
+from sr_agent.tools import BaseTool
 
 
 def load_json_text(text: str) -> dict[str, Any]:
@@ -99,11 +99,17 @@ def tool_class(name: str) -> type[BaseTool]:
     return BaseTool.create(name, create_instance=False)
 
 
-def main(args) -> None:
+def main(argv: list[str] | argparse.Namespace | None = None) -> None:
+    parser = build_argparser()
+    args = argv if isinstance(argv, argparse.Namespace) else parser.parse_args(argv)
+
     if args.command == "list":
-        for idx, (name, tool_cls) in enumerate(BaseTool.REGISTRY_DICT.items()):
-            description = (tool_cls.metadata.description or "").strip()
-            print(f"[{idx:02d}] {name}: {description}")
+        if args.json:
+            print(json.dumps(list(BaseTool.REGISTRY_DICT), indent=2, ensure_ascii=False))
+        else:
+            for idx, (name, tool_cls) in enumerate(BaseTool.REGISTRY_DICT.items()):
+                description = (tool_cls.metadata.description or "").strip()
+                print(f"[{idx:02d}] {name}: {description}")
     elif args.command == "schema":
         schema = tool_class(args.tool).to_dict() if args.tool else BaseTool.to_tool_list()
         print(json.dumps(schema, indent=2, ensure_ascii=False))
@@ -120,6 +126,4 @@ def main(args) -> None:
 
 
 if __name__ == "__main__":
-    parser = build_argparser()
-    args = parser.parse_args()
-    main(args)
+    main()

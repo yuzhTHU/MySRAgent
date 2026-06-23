@@ -102,7 +102,6 @@ class TestReadSkillTool:
         tool = ReadSkill(skills_dir=tmp_path / "skills")
         result = tool.execute(name="readable-skill")
 
-        assert result["name"] == "readable-skill"
         assert result["content"].startswith('<skill_content name="readable-skill">')
         assert "# Readable Skill" in result["content"]
         assert "Read me." in result["content"]
@@ -119,7 +118,7 @@ class TestReadSkillTool:
         result = ReadSkill(skills_dir=tmp_path / "skills")(name="callable-skill")
 
         assert result.ok is True
-        assert result.result["name"] == "callable-skill"
+        assert set(result.result) == {"content"}
         assert result.get("metrics") is None
         assert result.result_str.startswith('<skill_content name="callable-skill">')
         assert "# Callable Skill" in result.result_str

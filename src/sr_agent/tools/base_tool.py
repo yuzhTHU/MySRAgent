@@ -62,6 +62,10 @@ class ToolCallResult:
         return self.result[key]
 
 
+class ToolRunAbort(RuntimeError):
+    """Raise from a tool to bypass BaseTool.__call__ error handling."""
+
+
 class BaseTool(ABC, FactoryMixin):
     """工具基类。所有工具都应继承此类，并设置 / 实现以下字段和方法：
     - metadata: ToolMetadata 实例，提供工具的名称、描述和参数 schema（若不提供则尝试自动推断）
@@ -124,6 +128,8 @@ class BaseTool(ABC, FactoryMixin):
                 "tool": self.metadata.name
             }
             return ToolCallResult(ok=True, result=result, result_str=result_str, meta_data=meta_data)
+        except ToolRunAbort:
+            raise
         except Exception as e:
             error_msg = f"Error executing {self.metadata.name}: [{type(e).__name__}] {e}\n{traceback.format_exc()}"
             meta_data = {
