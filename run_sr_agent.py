@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import re
 import os
 import sys
 import json
@@ -19,7 +18,7 @@ from datetime import datetime
 from socket import gethostname
 from sr_agent import SRAgent
 from sr_agent.tools import BaseTool
-from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, seed_all, log_exception, tag2ansi
+from sr_agent.utils import add_minus_flags, add_negation_flags, log_exception, sanitize_filename, save_args, seed_all, setup_logging, tag2ansi
 
 
 SCRIPT_NAME = Path(__file__).stem  # run_sr_agent
@@ -59,22 +58,6 @@ def build_argparser() -> argparse.ArgumentParser:
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
     return parser
-
-
-def sanitize_filename(value: str) -> str:
-    value = re.compile(r'[ <>:"/\\|?*\x00-\x1f]').sub("_", value.strip())
-    return (value or "unnamed")[:255]
-
-
-def save_args(args, args_path: Path):
-    if args_path.exists():
-        i = 1
-        while args_path.with_suffix(f".json.{i}").exists():
-            i += 1
-        args_path.rename(args_path.with_suffix(f".json.{i}"))
-        _logger.warning(f"args.json already exists, backup to args.json.{i}")
-    with open(args_path, "w", encoding="utf-8") as f:
-        json.dump(vars(args), f, indent=4, ensure_ascii=False)
 
 
 def make_dataset(args):
