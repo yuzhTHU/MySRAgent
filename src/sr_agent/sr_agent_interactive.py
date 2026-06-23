@@ -28,9 +28,6 @@ class SRAgentInteractive(SRAgent):
     支持工作区文件操作和人类实时反馈。
     """
 
-    # 排除还没有实现好的 workspace_code_executor 工具
-    DEFAULT_EXCLUDED_TOOLS = set()
-
     def __init__(
         self,
         llm_provider: str,
@@ -68,14 +65,11 @@ class SRAgentInteractive(SRAgent):
             workspace_files: 初始化到工作区的文件/目录路径列表。
             human_input_callback: 人类输入回调函数。默认 None 时使用 input()。
         """
-        if not use_workspace:
-            self.DEFAULT_EXCLUDED_TOOLS.add("workspace_code_executor")
-            self.DEFAULT_EXCLUDED_TOOLS.add("workspace_shell")
-            # self.DEFAULT_EXCLUDED_TOOLS.remove("code_executor")
+        if use_workspace:
+            excluded_tools = {"code_executor"}
         else:
-            self.DEFAULT_EXCLUDED_TOOLS.add("code_executor")
-            # self.DEFAULT_EXCLUDED_TOOLS.remove("workspace_code_executor")
-            # self.DEFAULT_EXCLUDED_TOOLS.remove("workspace_shell")
+            excluded_tools = {"workspace_code_executor", "workspace_shell"}
+        self.excluded_tools = excluded_tools
 
         super().__init__(
             llm_provider=llm_provider,
@@ -129,6 +123,7 @@ class SRAgentInteractive(SRAgent):
                 "data": X | y,
                 "target": next(iter(y)),
                 "workspace": workspace if self.use_workspace else None,
+                "workspace_dir": str(workspace.path) if self.use_workspace else None,
                 "human_input_callback": self.human_input_callback,
             }
             self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]

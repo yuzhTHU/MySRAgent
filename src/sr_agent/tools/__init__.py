@@ -10,6 +10,7 @@ from .evaluate_formula import EvaluateTool, SubmitFormulaTool
 from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
 from .code_executor import CodeExecutorTool
+from .workspace_code_executor import WorkspaceCodeExecutorTool
 from .read_skill import ReadSkill
 from .create_skill import CreateSkill
 from .edit_skill import EditSkill
@@ -30,6 +31,7 @@ __all__ = [
     "LLMTool",
     "PolynomialFitTool",
     "CodeExecutorTool",
+    "WorkspaceCodeExecutorTool",
     "ReadSkill",
     "CreateSkill",
     "EditSkill",

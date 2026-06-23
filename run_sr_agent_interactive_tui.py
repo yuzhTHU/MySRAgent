@@ -10,6 +10,7 @@ import asyncio
 import argparse
 from pathlib import Path
 from textual import work
+from inspect import signature
 from datetime import datetime
 from socket import gethostname
 from sr_agent import SRAgentInteractive
@@ -192,6 +193,7 @@ class SRAgentTUI(App):
             tool_parser=args.tool_parser,
             save_path=args.save_path,
             workspace_files=args.workspace_files,
+            use_workspace=args.use_workspace,
             max_workers=args.max_workers,
             human_input_callback=self._human_input_callback,
         )
