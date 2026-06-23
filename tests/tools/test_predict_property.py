@@ -145,17 +145,16 @@ class TestPropertyPredictorExecution:
         with pytest.raises(ToolRunAbort) as exc_info:
             tool.execute()
         message = str(exc_info.value)
-        assert "manually download" in message
-        assert "property-scratch-v5" in message
+        assert "GitHub Release page" in message
+        assert "download the asset named" in message
         assert str(missing_path) in message
-        assert "releases/tag/sr-agent-models-v5" in message
 
     def test_call_wrapper_does_not_catch_missing_checkpoint_abort(self, simple_data, tmp_path, monkeypatch):
         missing_path = tmp_path / "missing.pth"
         monkeypatch.setenv("SR_AGENT_PROPERTY_MODEL_CHECKPOINT", str(missing_path))
         monkeypatch.setattr(PropertyPredictorTool, "AUTO_DOWNLOAD", False)
         tool = PropertyPredictorTool(data=simple_data, target="y")
-        with pytest.raises(ToolRunAbort, match="manually download"):
+        with pytest.raises(ToolRunAbort, match="GitHub Release page"):
             tool()
 
     def test_single_variable(self, simple_data, fake_checkpoint, fake_model):
