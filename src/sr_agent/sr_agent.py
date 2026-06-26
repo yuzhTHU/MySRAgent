@@ -61,6 +61,7 @@ class SRAgent(FactoryMixin):
         global_width: int = 1,
         max_restart_loop: int = 1,
         restart_top_k: int = 1,
+        llm_max_tokens: int = 4096,
         max_workers: int = 0,
     ):
         """初始化 Agent。
@@ -77,6 +78,7 @@ class SRAgent(FactoryMixin):
             global_width: 每个 restart turn 中独立对话分支数量。
             max_restart_loop: best-solution restarts 次数
             restart_top_k: 下一轮 restart prompt 中保留的历史最佳结果数量。
+            llm_max_tokens: 每次 LLM 响应的最大 token 数。
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
@@ -103,6 +105,7 @@ class SRAgent(FactoryMixin):
         self.global_width = global_width
         self.max_restart_loop = max_restart_loop
         self.restart_top_k = restart_top_k
+        self.llm_max_tokens = llm_max_tokens
         self.max_workers = max_workers
 
         # 关键组件
@@ -339,7 +342,7 @@ class SRAgent(FactoryMixin):
     def request_llm(self, prompt: List[Dict[str, Any]], R: int, L: int, C: int):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
-        llm_result = self.llm_api(prompt, n=self.local_sample_size)
+        llm_result = self.llm_api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
         for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()

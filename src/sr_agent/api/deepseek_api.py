@@ -21,7 +21,7 @@ class DeepSeekAPI(LLMAPI):
     def __init__(self, model='deepseek-chat', **kwargs):
         super().__init__(model=model, **kwargs)
 
-    def _request(self, messages: List[Dict[str, str]], n=1, max_tokens=1024, temperature=1) -> Generator[str, None, Dict]:
+    def _request(self, messages: List[Dict[str, str]], n=1, max_tokens=4096, temperature=1) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         yield from []
         api_key = os.environ.get("DEEPSEEK_API_KEY", None)
@@ -40,6 +40,10 @@ class DeepSeekAPI(LLMAPI):
         else:
             payload["tools"] = self.tool_description_json
             payload["tool_choice"] = "auto"
+        for idx, message in enumerate(payload["messages"]):
+            if 'tool_calls' in message and message['tool_calls'] == []:
+                payload["messages"][idx] = {**payload["messages"][idx]}
+                payload["messages"][idx].pop('tool_calls')
 
         details = []
         for idx in range(1, n + 1):
@@ -61,14 +65,14 @@ class DeepSeekAPI(LLMAPI):
             if 'other' in token_usage:
                 price_usage['other']  = 0.42 / 1e6 * token_usage['other']
 
-            message = response.choices[0].message
-            content = message.content or ""
+            message = response.choices[0].message.to_dict()
+            content = message.get("content") or ""
             if not self.tool_list:
                 tool_call = []
             elif self.tool_parser:
                 tool_call = self.tool_parser.parse_response(content)
             else:
-                tool_call = self.normalize_openai_tool_calls(message.tool_calls)
+                tool_call = self.normalize_openai_tool_calls(message.get("tool_calls"))
 
             token_usage = {"prompt": prompt_tokens, "answer": answer_tokens}
             details.append({

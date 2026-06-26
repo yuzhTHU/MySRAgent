@@ -27,6 +27,7 @@ import time
 import json
 import h5py
 import shlex
+import dotenv
 import logging
 import argparse
 import datasets
@@ -37,6 +38,7 @@ from datetime import datetime
 from socket import gethostname
 from typing import Any, Callable, Dict, List, Optional
 from scipy.stats import kendalltau
+from scipy.optimize import least_squares
 from sklearn.metrics import mean_absolute_percentage_error
 from sr_agent.utils import setup_logging, log_exception, tag2ansi, seed_all, add_minus_flags, add_negation_flags, get_symbolic_acc
 from run_sr_agent import build_argparser as build_sragent_argparser, sanitize_filename, save_args
@@ -51,6 +53,7 @@ DATASET_SPLITS = {
     "phys_osc": "lsr_synth_phys_osc",
 }
 
+dotenv.load_dotenv()  # Load environment variables from .env file if present
 SCRIPT_NAME = Path(__file__).stem  # bench_sr_agent
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
 
@@ -130,18 +133,68 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
                     expression = re.sub(rf"\b{re.escape(symbol)}\b\(t\)", symbol, expression)
                 except Exception as e:
                     _logger.warning(f"Failed to replace {symbol}(t) -> {symbol} in {entry['expression']!r}")
+
+            # expression 中有一些 pi, e 这样的常数, 需要将它替换成数值
+            for key, var in {'pi': np.pi, 'e': np.e}.items():
+                if key not in entry['symbols']:
+                    try:
+                        expression = re.sub(rf"\b{key}\b", str(var), expression)
+                    except Exception as e:
+                        _logger.warning(f"Failed to replace {key} -> {var} in {entry['expression']!r}")
             
-            # expression 中有一些 pi, e 这样的常数, 确保除此之外没有别的常数
-            try:
+            expression = expression.replace("^", "**")
+
+            # Chemical Reaction 数据集中存在一些错误设置的数值常数，替换为 __C0, __C1, ... 以便后续重新确定数值常数
+            if dataset_name == 'chem_react':
+                # 0.18997742423620262_z, 0.547523655303147_s, .5_alpha, 1e-3_k -> __C0, __C1, __C2, __C3
+                expression = re.sub(
+                    r"(?<![A-Za-z_])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?_[A-Za-z_]\w*",
+                    lambda m, c=iter(range(100)): f"__C{next(c)}",
+                    expression,
+                )
+
+            # Physical Oscillation / Chemical Reaction 数据集中公式的常数未被正确设置，需要拟合后替换成数值
+            if dataset_name in {'phys_osc', 'chem_react'}:
                 formula = nd.parse(expression)
-                for var in formula.iter_preorder():
-                    if not isinstance(var, nd.Variable): pass
-                    elif var.name in entry['symbols']: pass
-                    elif var.name.lower() in ['pi', 'e']: pass
-                    else: raise ValueError(f"Unknown variable {var.name!r}.")
-            except Exception as e:
-                _logger.warning(f"Error parsing expression {expression!r} for {name} in {dataset_name}: {log_exception(e)}.")
+                if unknowns := sorted({var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable) and var.name not in entry['symbols']}):
+                    train, y = samples["train"], samples["train"][:, 0]
+                    base = {sym: train[:, i] for i, sym in enumerate(entry["symbols"])}
+                    def residual(c):
+                        data = base | {k: np.full(len(y), v) for k, v in zip(unknowns, c)}
+                        return formula.eval(data).flatten() - y
+                    starts = [np.full(len(unknowns), x) for x in (0.1, 0.5, 1.0, 2.0)]
+                    starts += [np.where(np.arange(len(unknowns)) == i, 0.01, 0.5) for i in range(len(unknowns))]
+                    rng = np.random.default_rng(0)
+                    starts += [np.exp(rng.uniform(np.log(0.01), np.log(2.0), len(unknowns))) for _ in range(4)]
+                    fits = [least_squares(residual, x0, bounds=(0, np.inf), max_nfev=5000).x for x0 in starts]
+                    values = min(fits, key=lambda c: np.mean(residual(c) ** 2))
+                    for key, val in zip(unknowns, values): 
+                        expression = re.sub(rf"\b{re.escape(key)}\b", repr(float(val)), expression)
+
+            gt_expression = nd.parse(expression)
+
+            # 确保没有未知变量
+            variables = {var.name for var in gt_expression.iter_preorder() if isinstance(var, nd.Variable)}
+            if missing := set(variables) - set(entry['symbols']):
+                _logger.warning(f"[{dataset_name}] {name} has unknown variables in expression: {missing}. This problem is SKIPPED.")
                 continue
+
+            # 确保 gt_expression 足够准确
+            data = {sym: samples["train"][:, i] for i, sym in enumerate(entry["symbols"])}
+            y_pred = gt_expression.eval(data)
+            y_true = data[entry["symbols"][0]]
+            metrics = {
+                'mae': float(np.mean(np.abs(y_true - y_pred))),
+                'mape': float(mean_absolute_percentage_error(y_true, y_pred)),
+                'rmse': float(np.sqrt(np.mean((y_true - y_pred) ** 2))),
+                'r2': float(1 - np.mean((y_true - y_pred) ** 2) / np.var(y_true)) if np.var(y_true) > 0 else float("nan"),
+            }
+            if not (metrics['r2'] > 0.99):
+                _logger.warning(
+                    f"[{dataset_name}] {name} has low R^2 ({metrics['r2']:.4f}) between gt_expression and train samples "
+                    f"(MAE={metrics['mae']:.4e}, MAPE={metrics['mape']:.4e}, RMSE={metrics['rmse']:.4e}). "
+                    f"This problem is NOT skipped, but the results may be unreliable."
+                )
 
             problems.append(Problem(
                 dataset_identifier=dataset_name,
@@ -149,7 +202,8 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
                 symbols=entry["symbols"],
                 symbol_descs=entry["symbol_descs"],
                 symbol_properties=entry["symbol_properties"],
-                expression=expression,
+                raw_expression=entry["expression"],
+                gt_expression=gt_expression,
                 samples=samples,
             ))
     return problems
@@ -165,21 +219,17 @@ def anonymize_problem(problem: Problem) -> Problem:
     anonymized_symbols = [feature_mapping[sym] for sym in problem.symbols]
     anonymized_symbol_descs = ["target variable", *[f"input variable {i}" for i in range(1, len(features) + 1)]]
 
-    anonymized_expression = nd.parse(problem.expression.replace("^", "**").replace("np.", ""))
+    anonymized_expression = problem.gt_expression.copy()
     for var in anonymized_expression.iter_preorder():
-        if not isinstance(var, nd.Variable):
-            pass
-        elif var.name not in feature_mapping:
-            pass # 可能是 pi, e 之类的常数
-        else:
+        if isinstance(var, nd.Variable):
             var.name = feature_mapping[var.name]
-    anonymized_expression = anonymized_expression.to_str()
+    anonymized_expression_str = anonymized_expression.to_str()
     _logger.debug(
         f"[{problem.equation_idx} @ {problem.dataset_identifier}]"
         f"Anonymization enabled. "
         f"Variable mapping: {feature_mapping}\n"
-        f"Original formula: {target} = {problem.expression}\n"
-        f"Anonymized formula: {anonymized_symbols[0]} = {anonymized_expression}\n"
+        f"Original formula: {target} = {problem.gt_expression}\n"
+        f"Anonymized formula: {anonymized_symbols[0]} = {anonymized_expression_str}\n"
     )
 
     anonymized_problem = Problem(
@@ -188,7 +238,8 @@ def anonymize_problem(problem: Problem) -> Problem:
         symbols=anonymized_symbols,
         symbol_descs=anonymized_symbol_descs,
         symbol_properties=problem.symbol_properties,
-        expression=anonymized_expression,
+        gt_expression=anonymized_expression,
+        raw_expression="<None>",
         samples=problem.samples,
     )
     return anonymized_problem
@@ -240,15 +291,15 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
     # Symbolic Accurate
     try:
         data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
-        f_true = nd.parse(problem.expression.replace("^", "**").replace("np.", ""))
+        f_true = problem.gt_expression
         f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", ""))
         symbolic_acc = get_symbolic_acc(
             f_true,
             f_pred,
             data,
             return_details=True,
-            llm_provider='openrouter',
-            llm_model='deepseek/deepseek-v4-flash',
+            llm_provider=args.llm_provider,
+            llm_model=args.llm_model,
         )
         foo = lambda x: tag2ansi(('[green bold]EQUIVALENT[reset]' if x is True else '[red bold]NOT EQUIVALENT[reset]' if x is False else f'[gray bold]{x!r}[reset]'))
         _logger.note(tag2ansi(
@@ -267,7 +318,7 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
     return {
         "equation_id": problem.equation_idx,
         "dataset_identifier": problem.dataset_identifier,
-        "gt_expression": problem.expression,
+        "gt_expression": problem.gt_expression.to_str(),
         "discovered_expression": result.expression,
         "num_train": len(problem.train_samples),
         "num_test": len(problem.test_samples),
@@ -433,7 +484,7 @@ def main(args: argparse.Namespace) -> dict:
     # 逐个问题运行 SR 并评估
     results = []
     for i, problem in enumerate(problems):
-        _logger.note(f"[{i+1}/{len(problems)}] {problem.equation_idx}: {problem.expression}")
+        _logger.note(f"[{i+1}/{len(problems)}] {problem.equation_idx}: {problem.gt_expression.to_str()}")
         exp_path = Path(args.save_path) / "results" / f"{problem.dataset_identifier}_{problem.equation_idx}.jsonl"
         exp_path.parent.mkdir(parents=True, exist_ok=True)
         if exp_path.exists():
@@ -470,7 +521,8 @@ def main(args: argparse.Namespace) -> dict:
             _logger.error(f"  ERROR: {log_exception(e)}")
             result = {
                 "equation_id": problem.equation_idx,
-                "gt_expression": problem.expression,
+                "dataset_identifier": problem.dataset_identifier,
+                "gt_expression": problem.gt_expression.to_str(),
                 "discovered_expression": None,
                 "num_train": len(problem.train_samples),
                 "num_test": len(problem.test_samples),
