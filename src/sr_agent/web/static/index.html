@@ -43,6 +43,119 @@
       border-bottom: 1px solid var(--line);
       background: var(--panel);
     }
+    .control-bar {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .control-bar input[type="range"] {
+      width: 112px;
+      accent-color: var(--accent);
+    }
+    .range-pair {
+      position: relative;
+      width: 136px;
+      height: 22px;
+      --low: 0%;
+      --high: 100%;
+    }
+    .range-pair::before,
+    .range-pair::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 9px;
+      height: 5px;
+      border-radius: 999px;
+    }
+    .range-pair::before {
+      background: #d8dee8;
+    }
+    .range-pair::after {
+      left: var(--low);
+      right: calc(100% - var(--high));
+      background: linear-gradient(90deg, #8b0000 0%, #f5c500 50%, #006837 100%);
+    }
+    .range-pair input[type="range"] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 136px;
+      height: 22px;
+      margin: 0;
+      background: transparent;
+      pointer-events: none;
+      appearance: none;
+      -webkit-appearance: none;
+      z-index: 2;
+    }
+    .range-pair input[type="range"]::-webkit-slider-runnable-track {
+      height: 5px;
+      background: transparent;
+      border: 0;
+    }
+    .range-pair input[type="range"]::-moz-range-track {
+      height: 5px;
+      background: transparent;
+      border: 0;
+    }
+    .range-pair input[type="range"]::-webkit-slider-thumb {
+      pointer-events: auto;
+      width: 14px;
+      height: 14px;
+      margin-top: -5px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(20, 30, 40, 0.28);
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .range-pair input[type="range"]::-moz-range-thumb {
+      pointer-events: auto;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(20, 30, 40, 0.28);
+    }
+    .range-pair input[type="range"]:first-child::-webkit-slider-thumb {
+      background: #8b0000;
+    }
+    .range-pair input[type="range"]:first-child::-moz-range-thumb {
+      background: #8b0000;
+    }
+    .range-pair input[type="range"]:last-child::-webkit-slider-thumb {
+      background: #006837;
+    }
+    .range-pair input[type="range"]:last-child::-moz-range-thumb {
+      background: #006837;
+    }
+    .range-input {
+      width: 58px;
+      height: 26px;
+      padding: 0 6px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--ink);
+      font: 12px/1.2 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    .control-value {
+      width: 34px;
+      color: var(--ink);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
     h1 {
       margin: 0;
       font-size: 17px;
@@ -60,13 +173,21 @@
     }
     button { cursor: pointer; }
     main {
+      --run-width: 280px;
+      --side-width: 410px;
       height: calc(100vh - 56px);
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr) 410px;
+      grid-template-columns: var(--run-width) 8px minmax(0, 1fr) 8px var(--side-width);
       min-height: 0;
     }
-    main.run-collapsed {
-      grid-template-columns: 58px minmax(0, 1fr) 410px;
+    main.run-hidden {
+      grid-template-columns: 0 30px minmax(0, 1fr) 8px var(--side-width);
+    }
+    main.side-hidden {
+      grid-template-columns: var(--run-width) 8px minmax(0, 1fr) 30px 0;
+    }
+    main.run-hidden.side-hidden {
+      grid-template-columns: 0 30px minmax(0, 1fr) 30px 0;
     }
     .run-panel {
       min-width: 0;
@@ -75,41 +196,106 @@
       background: var(--panel);
       padding: 12px;
     }
+    main.run-hidden .run-panel {
+      visibility: hidden;
+      overflow: hidden;
+      padding: 0;
+      border: 0;
+    }
     .run-panel-header {
       display: flex;
       align-items: center;
       gap: 6px;
       margin-bottom: 10px;
       font-weight: 650;
-      cursor: pointer;
       user-select: none;
     }
-    .run-panel.collapsed {
-      width: 42px;
-      padding: 12px 8px;
-    }
-    .run-panel.collapsed .run-tree {
+    .run-toggle {
       display: none;
     }
-    .run-panel.collapsed .run-panel-title {
-      writing-mode: vertical-rl;
-      transform: rotate(180deg);
+    .run-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 10px;
     }
-    .run-toggle {
-      display: inline-block;
-      width: 0;
-      height: 0;
-      border-left: 5px solid transparent;
-      border-right: 5px solid transparent;
-      border-top: 7px solid #334155;
-      transition: transform 120ms ease;
+    .run-tab {
+      height: 30px;
+      padding: 0 8px;
+      font-size: 13px;
     }
-    .run-panel.collapsed .run-toggle {
-      transform: rotate(-90deg);
+    .run-tab.active {
+      border-color: #9ccbc4;
+      background: #dfeeea;
+      color: #0f5f56;
+      font-weight: 650;
+    }
+    .run-tab-panel.hidden {
+      display: none;
     }
     .run-tree {
       font-size: 13px;
       line-height: 1.4;
+    }
+    .display-controls {
+      display: grid;
+      gap: 10px;
+    }
+    .display-controls .control-bar {
+      width: 100%;
+      height: auto;
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) 34px;
+      justify-content: initial;
+      flex-wrap: nowrap;
+    }
+    .display-controls .control-bar > span:first-child {
+      min-width: 0;
+    }
+    .display-controls .control-bar input[type="range"] {
+      width: 100%;
+    }
+    .display-controls .control-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
+    .display-controls .export-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+    .color-control {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .color-control-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .color-control-row:first-child {
+      justify-content: space-between;
+    }
+    .color-control-row:first-child span {
+      color: var(--muted);
+    }
+    .color-control-row .range-pair {
+      width: 100%;
+    }
+    .color-control-row .range-pair input[type="range"] {
+      width: 100%;
+    }
+    .color-input-row {
+      justify-content: end;
     }
     .tree-node {
       margin: 2px 0;
@@ -271,8 +457,89 @@
     aside {
       min-width: 0;
       overflow: auto;
-      border-left: 1px solid var(--line);
       background: var(--panel);
+    }
+    main.side-hidden aside {
+      display: none;
+    }
+    .run-resizer,
+    .side-resizer {
+      position: relative;
+      min-width: 0;
+      cursor: col-resize;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+    }
+    .run-resizer::before,
+    .side-resizer::before {
+      content: "";
+      position: absolute;
+      inset: 0 2px;
+      border-radius: 999px;
+      background: transparent;
+    }
+    .run-resizer:hover::before,
+    .run-resizer.dragging::before,
+    .side-resizer:hover::before,
+    .side-resizer.dragging::before {
+      background: rgba(21, 122, 110, 0.18);
+    }
+    .run-resizer::after,
+    .side-resizer::after {
+      content: "";
+    }
+    main.run-hidden .run-resizer,
+    main.side-hidden .side-resizer {
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      color: #445166;
+      font-size: 12px;
+      font-weight: 650;
+      writing-mode: vertical-rl;
+      user-select: none;
+    }
+    main.run-hidden .run-resizer::before,
+    main.side-hidden .side-resizer::before {
+      display: none;
+    }
+    main.side-hidden .side-resizer::after {
+      content: "Details";
+    }
+    .run-resizer-tabs {
+      display: none;
+    }
+    main.run-hidden .run-resizer::after {
+      content: "";
+    }
+    main.run-hidden .run-resizer {
+      padding: 4px 0;
+    }
+    main.run-hidden .run-resizer .run-resizer-tabs {
+      display: grid;
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      width: 100%;
+      height: 100%;
+    }
+    .run-resizer-tab {
+      width: 100%;
+      min-width: 0;
+      height: auto;
+      padding: 4px 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #445166;
+      font-size: 12px;
+      font-weight: 650;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+    }
+    .run-resizer-tab.active {
+      color: #0f5f56;
+      background: #dfeeea;
     }
     .side-section {
       padding: 16px;
@@ -307,8 +574,60 @@
       overflow: auto;
       padding: 10px;
       border: 1px solid var(--line);
-      border-radius: 6px;
+      border-radius: 6px 6px 0 0;
       background: #fbfcfd;
+    }
+    .formula-editor-toggle {
+      width: 100%;
+      min-height: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-top: 0;
+      border-radius: 0 0 6px 6px;
+      background: #f2f5f8;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1;
+    }
+    .formula-editor-toggle:hover {
+      background: #e8eef5;
+    }
+    .formula-editor {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .formula-editor.hidden {
+      display: none;
+    }
+    .formula-editor-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .formula-editor-actions button {
+      height: 28px;
+      font-size: 12px;
+    }
+    .formula-editor textarea {
+      width: 100%;
+      min-height: 110px;
+      resize: vertical;
+      overflow: auto;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    .formula-editor textarea:disabled {
+      background: #f3f5f8;
+      color: var(--muted);
+      cursor: not-allowed;
     }
     .formula-code {
       margin-top: 8px;
@@ -316,16 +635,97 @@
       overflow: auto;
       color: var(--muted);
     }
-    .preview-box {
+    .preview-chat {
+      display: grid;
+      gap: 10px;
       min-height: 90px;
       max-height: 55vh;
-      height: 180px;
-      resize: vertical;
       overflow: auto;
       padding: 10px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #fbfcfd;
+      background: #f8fafc;
+    }
+    .history-toggle {
+      width: 100%;
+      height: auto;
+      min-height: 30px;
+      padding: 6px 8px;
+      border: 1px solid #cdd6e2;
+      background: #fff;
+      color: #445166;
+      font-size: 12px;
+      text-align: left;
+    }
+    .chat-history {
+      display: grid;
+      gap: 10px;
+    }
+    .chat-history.hidden {
+      display: none;
+    }
+    .chat-bubble {
+      width: 100%;
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .chat-bubble.agent {
+      justify-items: end;
+    }
+    .chat-bubble.user {
+      justify-items: start;
+    }
+    .chat-bubble.system,
+    .chat-bubble.tool {
+      justify-items: stretch;
+    }
+    .chat-label {
+      padding: 0 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+    .chat-bubble-box {
+      width: 100%;
+      position: relative;
+      border: 1px solid #d5dde8;
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .chat-bubble.agent .chat-bubble-box {
+      border-color: #b7d6d1;
+      background: #eef8f6;
+    }
+    .chat-bubble.user .chat-bubble-box {
+      border-color: #d7deea;
+      background: #ffffff;
+    }
+    .chat-bubble.system .chat-bubble-box {
+      background: #f3f5f8;
+    }
+    .chat-bubble.tool .chat-bubble-box {
+      background: #fff8ed;
+      border-color: #ead8b8;
+    }
+    .bubble-resize {
+      height: 7px;
+      cursor: ns-resize;
+      background: transparent;
+    }
+    .bubble-resize:hover {
+      background: rgba(21, 122, 110, 0.12);
+    }
+    .chat-bubble-body {
+      min-height: 54px;
+      max-height: 240px;
+      overflow: auto;
+      padding: 8px 10px;
+    }
+    .chat-bubble-body pre {
+      font-size: 12px;
+      line-height: 1.45;
     }
     .tool-grid {
       display: flex;
@@ -395,6 +795,17 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    .json-viewer.clickable {
+      cursor: pointer;
+      padding: 10px;
+      border: 1px dashed var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+    .json-viewer.clickable:hover {
+      background: #f1f5f9;
+      color: var(--ink);
+    }
     .json-node {
       margin-left: 14px;
     }
@@ -444,11 +855,44 @@
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
     }
     @media (max-width: 900px) {
-      main { grid-template-columns: 1fr; grid-template-rows: auto minmax(430px, 58vh) minmax(320px, 1fr); }
-      .run-panel { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
-      .run-panel.collapsed { width: auto; }
-      .run-panel.collapsed .run-panel-title { writing-mode: horizontal-tb; transform: none; }
+      main,
+      main.run-hidden,
+      main.side-hidden,
+      main.run-hidden.side-hidden {
+        grid-template-columns: 1fr;
+        grid-template-rows: 220px 28px minmax(430px, 58vh) 28px minmax(320px, 1fr);
+      }
+      .run-panel { border-right: 0; border-bottom: 1px solid var(--line); }
       aside { border-left: 0; border-top: 1px solid var(--line); }
+      .run-resizer,
+      .side-resizer {
+        cursor: row-resize;
+        border-left: 0;
+        border-right: 0;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      main.run-hidden {
+        grid-template-rows: 0 30px minmax(430px, 58vh) 28px minmax(320px, 1fr);
+      }
+      main.side-hidden {
+        grid-template-rows: 220px 28px minmax(430px, 58vh) 30px 0;
+      }
+      main.run-hidden.side-hidden {
+        grid-template-rows: 0 30px minmax(430px, 58vh) 30px 0;
+      }
+      main.run-hidden .run-resizer,
+      main.side-hidden .side-resizer {
+        writing-mode: horizontal-tb;
+      }
+      main.run-hidden .run-resizer .run-resizer-tabs {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: 1fr;
+      }
+      main.run-hidden .run-resizer .run-resizer-tab {
+        writing-mode: horizontal-tb;
+        transform: none;
+      }
       header { flex-wrap: wrap; }
       .legend { position: static; width: auto; margin: 10px; }
     }
@@ -458,25 +902,87 @@
   <header>
     <h1>SR Agent Search Viewer</h1>
     <button id="refresh">Refresh</button>
-    <button id="layout">Auto Layout</button>
-    <button id="weak-edges">Hide Weak Edges</button>
-    <button id="labels">Hide Labels</button>
-    <select id="export-format" aria-label="Export format">
-      <option value="png">PNG</option>
-      <option value="svg">SVG</option>
-      <option value="pdf">PDF</option>
-    </select>
-    <button id="export">Export</button>
+    <button id="home">Home</button>
     <span id="status" class="muted"></span>
   </header>
   <main>
     <nav id="run-panel" class="run-panel" aria-label="Runs">
-      <div id="run-panel-header" class="run-panel-header">
-        <span class="run-toggle"></span>
-        <span class="run-panel-title">Runs</span>
+      <div class="run-tabs" role="tablist" aria-label="Left panel">
+        <button id="runs-tab" class="run-tab active" type="button" data-run-tab="runs">Runs</button>
+        <button id="controls-tab" class="run-tab" type="button" data-run-tab="controls">Controls</button>
       </div>
-      <div id="run-tree" class="run-tree"></div>
+      <div id="runs-panel" class="run-tab-panel">
+        <div id="run-panel-header" class="run-panel-header">
+          <span class="run-toggle"></span>
+          <span class="run-panel-title">Runs</span>
+        </div>
+        <div id="run-tree" class="run-tree"></div>
+      </div>
+      <div id="controls-panel" class="run-tab-panel hidden">
+        <div class="display-controls">
+          <div class="control-actions">
+            <button id="layout" type="button">Auto Layout</button>
+            <button id="weak-edges" type="button">Hide Weak Edges</button>
+            <button id="labels" type="button">Hide Labels</button>
+          </div>
+          <label class="control-bar">
+            <span>Node</span>
+            <input id="node-size" type="range" min="5" max="18" step="1" value="9">
+            <span id="node-size-value" class="control-value">9</span>
+          </label>
+          <label class="control-bar">
+            <span>Gap</span>
+            <input id="level-gap" type="range" min="70" max="220" step="4" value="118">
+            <span id="level-gap-value" class="control-value">118</span>
+          </label>
+          <label class="control-bar">
+            <span>Horiz</span>
+            <input id="horizontal-scale" type="range" min="50" max="200" step="5" value="100">
+            <span id="horizontal-scale-value" class="control-value">100</span>
+          </label>
+          <div class="color-control">
+            <label class="color-control-row">
+              <span>Color</span>
+              <select id="color-metric" aria-label="Color metric">
+                <option value="r2">R2</option>
+                <option value="mse">MSE</option>
+                <option value="rmse">RMSE</option>
+                <option value="smape">SMAPE</option>
+                <option value="mape">MAPE</option>
+                <option value="mae">MAE</option>
+                <option value="spearman_r">Spearman r</option>
+                <option value="pearson_r">Pearson r</option>
+              </select>
+            </label>
+            <div class="color-control-row">
+              <span class="range-pair">
+                <input id="r2-color-min" type="range" min="0" max="1" step="0.01" value="0">
+                <input id="r2-color-max" type="range" min="0" max="1" step="0.01" value="1">
+              </span>
+            </div>
+            <div class="color-control-row color-input-row">
+              <input id="r2-color-min-value" class="range-input" type="number" step="0.001" value="0" aria-label="R2 color minimum">
+              <span>~</span>
+              <input id="r2-color-max-value" class="range-input" type="number" step="0.001" value="1" aria-label="R2 color maximum">
+            </div>
+          </div>
+          <div class="export-row">
+            <select id="export-format" aria-label="Export format">
+              <option value="png">PNG</option>
+              <option value="svg">SVG</option>
+              <option value="pdf">PDF</option>
+            </select>
+            <button id="export" type="button">Export</button>
+          </div>
+        </div>
+      </div>
     </nav>
+    <div id="run-resizer" class="run-resizer" title="Drag to resize runs panel">
+      <div class="run-resizer-tabs">
+        <button class="run-resizer-tab active" type="button" data-run-tab="runs">Runs</button>
+        <button class="run-resizer-tab" type="button" data-run-tab="controls">Controls</button>
+      </div>
+    </div>
     <section id="graph-wrap">
       <div id="legend" class="legend">
         <strong id="legend-title"><span class="legend-toggle"></span><span>Legend</span></strong>
@@ -484,11 +990,12 @@
           <div class="legend-row"><span class="sample node-dot"></span><span>Node: one local sample from the agent.</span></div>
           <div class="legend-row"><span class="sample line"></span><span>Solid edge: strong context inheritance.</span></div>
           <div class="legend-row"><span class="sample line weak"></span><span>Dashed edge: weak parent, partial tool-call context.</span></div>
-          <div class="legend-row"><span></span><span>Color: R2 is auto-scaled per graph; min clipped at 0 is red, max is green.</span></div>
+          <div class="legend-row"><span></span><span>Color: selected metric is mapped from red to green; error metrics use lower-is-better.</span></div>
         </div>
       </div>
       <svg id="graph" width="1200" height="760" role="img" aria-label="Search graph"></svg>
     </section>
+    <div id="side-resizer" class="side-resizer" title="Drag to resize details panel"></div>
     <aside>
       <section class="side-section">
         <strong id="node-title">No node selected</strong>
@@ -498,11 +1005,19 @@
       <section class="side-section">
         <strong>Formula</strong>
         <div id="formula-latex" class="formula-box muted">(no candidate formula)</div>
+        <button id="formula-editor-toggle" class="formula-editor-toggle" type="button">LaTeX editor</button>
+        <div id="formula-editor" class="formula-editor hidden">
+          <div class="formula-editor-actions">
+            <span id="formula-editor-status" class="muted"></span>
+            <button id="copy-latex" type="button">Copy</button>
+          </div>
+          <textarea id="latex-source" spellcheck="false" aria-label="LaTeX source"></textarea>
+        </div>
         <pre id="formula-code" class="formula-code"></pre>
       </section>
       <section class="side-section">
         <strong>Preview</strong>
-        <pre id="preview" class="preview-box muted"></pre>
+        <div id="preview" class="preview-chat muted"></div>
       </section>
       <section class="side-section">
         <strong>Tool Call</strong>
@@ -516,24 +1031,49 @@
   </main>
   <script>
     const ROOT_PREFIX = "__root__:";
-    const LEVEL_GAP = 118;
+    const DEFAULT_LEVEL_GAP = 118;
+    const DEFAULT_NODE_RADIUS = 9;
     const SIBLING_GAP = 64;
     const refreshButton = document.getElementById("refresh");
+    const homeButton = document.getElementById("home");
     const layoutButton = document.getElementById("layout");
     const weakEdgesButton = document.getElementById("weak-edges");
     const labelsButton = document.getElementById("labels");
+    const nodeSizeInput = document.getElementById("node-size");
+    const nodeSizeValue = document.getElementById("node-size-value");
+    const levelGapInput = document.getElementById("level-gap");
+    const levelGapValue = document.getElementById("level-gap-value");
+    const horizontalScaleInput = document.getElementById("horizontal-scale");
+    const horizontalScaleValue = document.getElementById("horizontal-scale-value");
+    const colorMetricSelect = document.getElementById("color-metric");
+    const r2ColorMinInput = document.getElementById("r2-color-min");
+    const r2ColorMaxInput = document.getElementById("r2-color-max");
+    const r2ColorMinValue = document.getElementById("r2-color-min-value");
+    const r2ColorMaxValue = document.getElementById("r2-color-max-value");
     const exportFormat = document.getElementById("export-format");
     const exportButton = document.getElementById("export");
     const legend = document.getElementById("legend");
     const legendTitle = document.getElementById("legend-title");
     const main = document.querySelector("main");
     const runPanel = document.getElementById("run-panel");
-    const runPanelHeader = document.getElementById("run-panel-header");
     const runTree = document.getElementById("run-tree");
+    const runResizer = document.getElementById("run-resizer");
+    const runTabButtons = [...document.querySelectorAll("[data-run-tab]")];
+    const runsPanel = document.getElementById("runs-panel");
+    const controlsPanel = document.getElementById("controls-panel");
+    const sideResizer = document.getElementById("side-resizer");
+    const formulaLatex = document.getElementById("formula-latex");
+    const formulaEditorToggle = document.getElementById("formula-editor-toggle");
+    const formulaEditor = document.getElementById("formula-editor");
+    const latexSource = document.getElementById("latex-source");
+    const copyLatexButton = document.getElementById("copy-latex");
+    const formulaEditorStatus = document.getElementById("formula-editor-status");
+    const detailEl = document.getElementById("detail");
     const statusEl = document.getElementById("status");
     const svg = document.getElementById("graph");
     const state = {
       runId: null,
+      selectedNodeId: null,
       records: new Map(),
       lastSeq: 0,
       source: null,
@@ -544,6 +1084,24 @@
       view: { x: 0, y: 0, scale: 1 },
       showWeakEdges: true,
       showLabels: true,
+      nodeRadius: DEFAULT_NODE_RADIUS,
+      levelGap: DEFAULT_LEVEL_GAP,
+      horizontalScale: 100,
+      colorMetric: "r2",
+      r2ColorDomain: { min: 0, max: 1 },
+      r2ColorManual: false,
+      runWidth: 280,
+      runHeight: 220,
+      runHidden: false,
+      runDragging: null,
+      runTab: "runs",
+      sideWidth: 410,
+      sideHeight: 360,
+      sideHidden: false,
+      sideDragging: null,
+      nodeDragMoved: false,
+      latexSource: "",
+      latexRenderToken: 0,
       runs: [],
       collapsedRunNodes: new Set()
     };
@@ -556,8 +1114,10 @@
     });
 
     refreshButton.addEventListener("click", loadRuns);
+    homeButton.addEventListener("click", centerRoot);
     layoutButton.addEventListener("click", () => {
       state.userMoved.clear();
+      resetHorizontalScaleControl();
       state.positions = computeLayout(buildGraphNodes(), true);
       renderGraph();
     });
@@ -571,11 +1131,72 @@
       labelsButton.textContent = state.showLabels ? "Hide Labels" : "Show Labels";
       renderGraph();
     });
+    nodeSizeInput.addEventListener("input", () => {
+      state.nodeRadius = Number(nodeSizeInput.value);
+      nodeSizeValue.textContent = String(state.nodeRadius);
+      renderGraph();
+    });
+    levelGapInput.addEventListener("input", () => {
+      state.levelGap = Number(levelGapInput.value);
+      levelGapValue.textContent = String(state.levelGap);
+      state.userMoved.clear();
+      resetHorizontalScaleControl();
+      state.positions = computeLayout(buildGraphNodes(), true);
+      renderGraph();
+    });
+    horizontalScaleInput.addEventListener("input", () => {
+      const nextScale = Number(horizontalScaleInput.value);
+      horizontalScaleValue.textContent = String(nextScale);
+      applyHorizontalScale(nextScale / state.horizontalScale);
+      state.horizontalScale = nextScale;
+      renderGraph();
+    });
+    colorMetricSelect.addEventListener("change", () => {
+      state.colorMetric = colorMetricSelect.value;
+      state.r2ColorManual = false;
+      syncR2ColorControls();
+      renderGraph();
+    });
+    r2ColorMinInput.addEventListener("input", () => updateR2ColorRange("min"));
+    r2ColorMaxInput.addEventListener("input", () => updateR2ColorRange("max"));
+    r2ColorMinValue.addEventListener("change", () => updateR2ColorRangeFromInput("min"));
+    r2ColorMaxValue.addEventListener("change", () => updateR2ColorRangeFromInput("max"));
+    r2ColorMinValue.addEventListener("keydown", event => {
+      if (event.key === "Enter") updateR2ColorRangeFromInput("min");
+    });
+    r2ColorMaxValue.addEventListener("keydown", event => {
+      if (event.key === "Enter") updateR2ColorRangeFromInput("max");
+    });
     exportButton.addEventListener("click", () => exportScene(exportFormat.value));
     legendTitle.addEventListener("click", () => legend.classList.toggle("collapsed"));
-    runPanelHeader.addEventListener("click", () => {
-      runPanel.classList.toggle("collapsed");
-      main.classList.toggle("run-collapsed", runPanel.classList.contains("collapsed"));
+    runTabButtons.forEach(button => {
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        setRunTab(button.dataset.runTab);
+        if (state.runHidden) setRunHidden(false);
+      });
+    });
+    runResizer.addEventListener("pointerdown", onRunResizeStart);
+    runResizer.addEventListener("click", onRunResizerClick);
+    sideResizer.addEventListener("pointerdown", onSideResizeStart);
+    sideResizer.addEventListener("click", onSideResizerClick);
+    formulaEditorToggle.addEventListener("click", () => {
+      formulaEditor.classList.toggle("hidden");
+      formulaEditorToggle.textContent = formulaEditor.classList.contains("hidden") ? "LaTeX editor" : "Hide LaTeX editor";
+      if (!formulaEditor.classList.contains("hidden")) latexSource.focus();
+    });
+    latexSource.addEventListener("input", () => {
+      state.latexSource = latexSource.value;
+      renderLatexDisplay(state.latexSource, true);
+    });
+    copyLatexButton.addEventListener("click", copyLatexSource);
+    detailEl.addEventListener("click", () => {
+      if (detailEl.classList.contains("clickable") && state.selectedNodeId) {
+        loadDetail(state.selectedNodeId);
+      }
+    });
+    window.addEventListener("resize", () => {
+      applyPanelLayout();
     });
     svg.addEventListener("pointermove", onPointerMove);
     svg.addEventListener("pointerup", onPointerUp);
@@ -691,6 +1312,7 @@
       if (!runId) return;
       if (state.source) state.source.close();
       state.runId = runId;
+      state.selectedNodeId = null;
       renderRunTree(state.runs);
       state.records.clear();
       state.positions.clear();
@@ -725,6 +1347,7 @@
       }
       enrichToolSummaries();
       state.positions = computeLayout(buildGraphNodes(), false);
+      syncR2ColorControls();
       statusEl.textContent = `${state.records.size} nodes`;
     }
 
@@ -864,7 +1487,7 @@
             }
             positions.set(node.node_id, {
               x: start + index * SIBLING_GAP,
-              y: 70 + level * LEVEL_GAP
+              y: 70 + level * state.levelGap
             });
           }
         }
@@ -909,7 +1532,7 @@
         const point = state.positions.get(node.node_id);
         if (!point) continue;
         const circle = svgEl("circle");
-        const radius = node.virtual_root ? 14 : 9;
+        const radius = nodeRadius(node);
         circle.setAttribute("cx", point.x);
         circle.setAttribute("cy", point.y);
         circle.setAttribute("r", radius);
@@ -917,9 +1540,9 @@
         circle.setAttribute("fill", node.virtual_root ? "var(--root)" : colorFor(node));
         circle.dataset.nodeId = node.node_id;
         circle.addEventListener("pointerdown", onPointerDown);
-        circle.addEventListener("mouseenter", () => showCore(node));
         circle.addEventListener("click", () => {
-          if (!node.virtual_root) loadDetail(node.node_id);
+          if (state.nodeDragMoved) return;
+          showCore(node);
         });
         nodeGroup.appendChild(circle);
 
@@ -940,7 +1563,15 @@
       event.stopPropagation();
       const point = clientToSvg(event);
       const current = state.positions.get(nodeId);
-      state.dragging = { nodeId, dx: current.x - point.x, dy: current.y - point.y };
+      const subtreeIds = collectSubtreeIds(nodeId);
+      const startPositions = new Map(
+        subtreeIds
+          .map(id => [id, state.positions.get(id)])
+          .filter(([, position]) => Boolean(position))
+          .map(([id, position]) => [id, { x: position.x, y: position.y }])
+      );
+      state.dragging = { nodeId, startPointerX: point.x, startPositions };
+      state.nodeDragMoved = false;
       event.target.setPointerCapture(event.pointerId);
     }
 
@@ -954,12 +1585,17 @@
     function onPointerMove(event) {
       if (state.dragging) {
         const point = clientToSvg(event);
-        const y = state.positions.get(state.dragging.nodeId).y;
-        state.positions.set(state.dragging.nodeId, {
-          x: Math.max(40, point.x + state.dragging.dx),
-          y
-        });
-        state.userMoved.add(state.dragging.nodeId);
+        const rootStart = state.dragging.startPositions.get(state.dragging.nodeId);
+        if (!rootStart) return;
+        const deltaX = point.x - state.dragging.startPointerX;
+        for (const [nodeId, position] of state.dragging.startPositions) {
+          state.positions.set(nodeId, {
+            x: position.x + deltaX,
+            y: position.y
+          });
+          state.userMoved.add(nodeId);
+        }
+        state.nodeDragMoved = true;
         renderGraph();
       } else if (state.panning) {
         const point = clientPoint(event);
@@ -972,18 +1608,250 @@
     function onPointerUp() {
       state.dragging = null;
       state.panning = null;
+      setTimeout(() => {
+        state.nodeDragMoved = false;
+      }, 0);
+    }
+
+    function collectSubtreeIds(rootNodeId) {
+      const nodes = buildGraphNodes();
+      const byId = new Map(nodes.map(node => [node.node_id, node]));
+      const children = new Map(nodes.map(node => [node.node_id, []]));
+      for (const node of nodes) {
+        for (const parent of node.parents || []) {
+          if (children.has(parent.node_id)) children.get(parent.node_id).push(node.node_id);
+        }
+      }
+      const result = [];
+      const seen = new Set();
+      const queue = [rootNodeId];
+      while (queue.length) {
+        const nodeId = queue.shift();
+        if (!nodeId || seen.has(nodeId) || !byId.has(nodeId)) continue;
+        seen.add(nodeId);
+        result.push(nodeId);
+        for (const childId of children.get(nodeId) || []) queue.push(childId);
+      }
+      return result;
     }
 
     function onWheel(event) {
       event.preventDefault();
+      const anchor = clientPoint(event);
       const before = clientToSvg(event);
       const factor = Math.exp(-event.deltaY * 0.001);
       const nextScale = Math.max(0.25, Math.min(3.5, state.view.scale * factor));
       if (nextScale === state.view.scale) return;
       state.view.scale = nextScale;
-      state.view.x = event.clientX - before.x * state.view.scale;
-      state.view.y = event.clientY - before.y * state.view.scale;
+      state.view.x = anchor.x - before.x * state.view.scale;
+      state.view.y = anchor.y - before.y * state.view.scale;
       renderGraph();
+    }
+
+    function centerRoot() {
+      const nodes = buildGraphNodes();
+      if (!state.positions.size) state.positions = computeLayout(nodes, false);
+      const selectedRecord = state.selectedNodeId ? state.records.get(state.selectedNodeId) : null;
+      const selectedTreeId = selectedRecord && treeIdFor(selectedRecord);
+      const root = nodes.find(node => node.virtual_root && selectedTreeId && node.tree_id === selectedTreeId)
+        || nodes.find(node => node.virtual_root);
+      if (!root) return;
+      const rootPoint = state.positions.get(root.node_id);
+      if (!rootPoint) return;
+      const wrap = document.getElementById("graph-wrap");
+      const rect = wrap.getBoundingClientRect();
+      const center = screenToSvgViewport(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      state.view.x = center.x - rootPoint.x * state.view.scale;
+      state.view.y = center.y - rootPoint.y * state.view.scale;
+      renderGraph();
+    }
+
+    function onRunResizeStart(event) {
+      if (state.runHidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const mobile = isNarrowLayout();
+      state.runDragging = {
+        mobile,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: state.runWidth,
+        startHeight: state.runHeight,
+        moved: false
+      };
+      runResizer.classList.add("dragging");
+      runResizer.setPointerCapture(event.pointerId);
+      runResizer.addEventListener("pointermove", onRunResizeMove);
+      runResizer.addEventListener("pointerup", onRunResizeEnd);
+      runResizer.addEventListener("pointercancel", onRunResizeEnd);
+    }
+
+    function onRunResizeMove(event) {
+      if (!state.runDragging) return;
+      const drag = state.runDragging;
+      const delta = drag.mobile ? event.clientY - drag.startY : event.clientX - drag.startX;
+      if (Math.abs(delta) > 2) drag.moved = true;
+      if (drag.mobile) {
+        const nextHeight = drag.startHeight + delta;
+        if (nextHeight < 120) {
+          setRunHidden(true);
+          return;
+        }
+        state.runHeight = Math.max(150, Math.min(window.innerHeight * 0.55, nextHeight));
+      } else {
+        const nextWidth = drag.startWidth + delta;
+        if (nextWidth < 140) {
+          setRunHidden(true);
+          return;
+        }
+        state.runWidth = Math.max(180, Math.min(window.innerWidth * 0.45, nextWidth));
+      }
+      applyPanelLayout();
+    }
+
+    function onRunResizeEnd(event) {
+      if (runResizer.hasPointerCapture(event.pointerId)) {
+        runResizer.releasePointerCapture(event.pointerId);
+      }
+      runResizer.classList.remove("dragging");
+      runResizer.removeEventListener("pointermove", onRunResizeMove);
+      runResizer.removeEventListener("pointerup", onRunResizeEnd);
+      runResizer.removeEventListener("pointercancel", onRunResizeEnd);
+      setTimeout(() => {
+        state.runDragging = null;
+      }, 0);
+    }
+
+    function onRunResizerClick() {
+      if (state.runDragging && state.runDragging.moved) return;
+      if (state.runHidden) setRunHidden(false);
+    }
+
+    function setRunTab(tab) {
+      state.runTab = tab === "controls" ? "controls" : "runs";
+      runsPanel.classList.toggle("hidden", state.runTab !== "runs");
+      controlsPanel.classList.toggle("hidden", state.runTab !== "controls");
+      runTabButtons.forEach(button => {
+        button.classList.toggle("active", button.dataset.runTab === state.runTab);
+      });
+    }
+
+    function setRunHidden(hidden) {
+      state.runHidden = hidden;
+      main.classList.toggle("run-hidden", hidden);
+      runResizer.title = hidden ? "Click to show runs panel" : "Drag to resize runs panel";
+      applyPanelLayout();
+    }
+
+    function applyHorizontalScale(factor) {
+      if (!Number.isFinite(factor) || factor <= 0) return;
+      const nodes = buildGraphNodes();
+      if (!state.positions.size) state.positions = computeLayout(nodes, false);
+      const positioned = nodes
+        .map(node => [node.node_id, state.positions.get(node.node_id)])
+        .filter(([, position]) => Boolean(position));
+      if (!positioned.length) return;
+      const xs = positioned.map(([, position]) => position.x);
+      const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+      for (const [nodeId, position] of positioned) {
+        state.positions.set(nodeId, {
+          x: centerX + (position.x - centerX) * factor,
+          y: position.y
+        });
+        state.userMoved.add(nodeId);
+      }
+    }
+
+    function resetHorizontalScaleControl() {
+      state.horizontalScale = 100;
+      horizontalScaleInput.value = "100";
+      horizontalScaleValue.textContent = "100";
+    }
+
+    function onSideResizeStart(event) {
+      if (state.sideHidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const mobile = isNarrowLayout();
+      state.sideDragging = {
+        mobile,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: state.sideWidth,
+        startHeight: state.sideHeight,
+        moved: false
+      };
+      sideResizer.classList.add("dragging");
+      sideResizer.setPointerCapture(event.pointerId);
+      sideResizer.addEventListener("pointermove", onSideResizeMove);
+      sideResizer.addEventListener("pointerup", onSideResizeEnd);
+      sideResizer.addEventListener("pointercancel", onSideResizeEnd);
+    }
+
+    function onSideResizeMove(event) {
+      if (!state.sideDragging) return;
+      const drag = state.sideDragging;
+      const delta = drag.mobile ? event.clientY - drag.startY : drag.startX - event.clientX;
+      if (Math.abs(delta) > 2) drag.moved = true;
+      if (drag.mobile) {
+        const nextHeight = drag.startHeight - delta;
+        if (nextHeight < 180) {
+          setSideHidden(true);
+          return;
+        }
+        state.sideHeight = Math.max(220, Math.min(window.innerHeight * 0.7, nextHeight));
+      } else {
+        const nextWidth = drag.startWidth + delta;
+        if (nextWidth < 240) {
+          setSideHidden(true);
+          return;
+        }
+        state.sideWidth = Math.max(260, Math.min(window.innerWidth * 0.72, nextWidth));
+      }
+      applyPanelLayout();
+    }
+
+    function onSideResizeEnd(event) {
+      if (sideResizer.hasPointerCapture(event.pointerId)) {
+        sideResizer.releasePointerCapture(event.pointerId);
+      }
+      sideResizer.classList.remove("dragging");
+      sideResizer.removeEventListener("pointermove", onSideResizeMove);
+      sideResizer.removeEventListener("pointerup", onSideResizeEnd);
+      sideResizer.removeEventListener("pointercancel", onSideResizeEnd);
+      setTimeout(() => {
+        state.sideDragging = null;
+      }, 0);
+    }
+
+    function onSideResizerClick() {
+      if (state.sideDragging && state.sideDragging.moved) return;
+      if (state.sideHidden) setSideHidden(false);
+    }
+
+    function setSideHidden(hidden) {
+      state.sideHidden = hidden;
+      main.classList.toggle("side-hidden", hidden);
+      sideResizer.title = hidden ? "Click to show details panel" : "Drag to resize details panel";
+      applyPanelLayout();
+    }
+
+    function applyPanelLayout() {
+      main.style.setProperty("--run-width", `${Math.round(state.runWidth)}px`);
+      main.style.setProperty("--side-width", `${Math.round(state.sideWidth)}px`);
+      if (isNarrowLayout()) {
+        const runRow = state.runHidden ? "0" : `${Math.round(state.runHeight)}px`;
+        const runHandle = state.runHidden ? "30px" : "28px";
+        const sideHandle = state.sideHidden ? "30px" : "28px";
+        const sideRow = state.sideHidden ? "0" : `${Math.round(state.sideHeight)}px`;
+        main.style.gridTemplateRows = `${runRow} ${runHandle} minmax(430px, 58vh) ${sideHandle} ${sideRow}`;
+      } else {
+        main.style.gridTemplateRows = "";
+      }
+    }
+
+    function isNarrowLayout() {
+      return window.matchMedia("(max-width: 900px)").matches;
     }
 
     function clientToSvg(event) {
@@ -995,9 +1863,13 @@
     }
 
     function clientPoint(event) {
+      return screenToSvgViewport(event.clientX, event.clientY);
+    }
+
+    function screenToSvgViewport(clientX, clientY) {
       const pt = svg.createSVGPoint();
-      pt.x = event.clientX;
-      pt.y = event.clientY;
+      pt.x = clientX;
+      pt.y = clientY;
       return pt.matrixTransform(svg.getScreenCTM().inverse());
     }
 
@@ -1006,13 +1878,13 @@
     }
 
     function colorFor(record) {
-      const score = record.core && record.core.score;
-      const r2 = score && Number(score.r2);
-      if (!Number.isFinite(r2)) return "#718096";
+      const valueRaw = metricValueFor(record, state.colorMetric);
+      if (!Number.isFinite(valueRaw)) return "#718096";
       const domain = r2ColorDomain();
       if (domain.max <= domain.min) return "#8b0000";
-      const value = Math.max(domain.min, Math.min(domain.max, Math.max(0, r2)));
-      const scaled = (value - domain.min) / (domain.max - domain.min);
+      const value = Math.max(domain.min, Math.min(domain.max, valueRaw));
+      let scaled = (value - domain.min) / (domain.max - domain.min);
+      if (metricLowerIsBetter(state.colorMetric)) scaled = 1 - scaled;
       if (scaled <= 0.5) {
         const t = scaled / 0.5;
         return rgbHex(139 + (245 - 139) * t, 0 + (197 - 0) * t, 0);
@@ -1022,12 +1894,144 @@
     }
 
     function r2ColorDomain() {
-      const values = [...state.records.values()]
-        .map(record => record.core && record.core.score && Number(record.core.score.r2))
-        .filter(Number.isFinite)
-        .map(value => Math.max(0, value));
-      if (values.length <= 1) return { min: 0, max: 0 };
-      return { min: Math.min(...values), max: Math.max(...values) };
+      return state.r2ColorDomain;
+    }
+
+    function dataR2Domain() {
+      const values = metricValues(state.colorMetric);
+      if (!values.length) return { min: 0, max: 1 };
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      if (min === max) return { min: Math.min(0, min), max: Math.max(1, max) };
+      return { min, max };
+    }
+
+    function metricValues(metric) {
+      return [...state.records.values()]
+        .map(record => metricValueFor(record, metric))
+        .filter(Number.isFinite);
+    }
+
+    function metricValueFor(record, metric) {
+      const score = record.core && record.core.score;
+      if (!score || typeof score !== "object") return NaN;
+      for (const key of metricKeys(metric)) {
+        const value = Number(score[key]);
+        if (Number.isFinite(value)) return value;
+      }
+      return NaN;
+    }
+
+    function metricKeys(metric) {
+      const aliases = {
+        r2: ["r2", "r_2", "R2"],
+        mse: ["mse", "MSE"],
+        rmse: ["rmse", "RMSE"],
+        smape: ["smape", "s_mape", "SMAPE"],
+        mape: ["mape", "MAPE"],
+        mae: ["mae", "MAE"],
+        spearman_r: ["spearman_r", "spearman", "spearmanr", "spearman_rho", "spearman rho", "Spearman r"],
+        pearson_r: ["pearson_r", "pearson", "pearsonr", "pearson r", "Pearson r"]
+      };
+      return aliases[metric] || [metric];
+    }
+
+    function metricLowerIsBetter(metric) {
+      return new Set(["mse", "rmse", "mae", "mape", "smape"]).has(metric);
+    }
+
+    function syncR2ColorControls() {
+      const dataDomain = dataR2Domain();
+      const controlDomain = r2ControlDomain(dataDomain);
+      const step = r2Step(controlDomain);
+      for (const input of [r2ColorMinInput, r2ColorMaxInput]) {
+        input.min = String(controlDomain.min);
+        input.max = String(controlDomain.max);
+        input.step = String(step);
+      }
+      for (const input of [r2ColorMinValue, r2ColorMaxValue]) {
+        input.step = String(step);
+      }
+      if (!state.r2ColorManual) {
+        state.r2ColorDomain = dataDomain;
+      } else if (state.r2ColorDomain.min >= state.r2ColorDomain.max) {
+        state.r2ColorDomain = dataDomain;
+      }
+      r2ColorMinInput.value = String(state.r2ColorDomain.min);
+      r2ColorMaxInput.value = String(state.r2ColorDomain.max);
+      syncR2ColorInputsAndTrack();
+    }
+
+    function updateR2ColorRange(changed) {
+      const controlDomain = r2ControlDomain(dataR2Domain());
+      const minGap = r2Step(controlDomain);
+      let minValue = Number(r2ColorMinInput.value);
+      let maxValue = Number(r2ColorMaxInput.value);
+      if (changed === "min" && minValue >= maxValue) {
+        minValue = maxValue - minGap;
+        r2ColorMinInput.value = String(minValue);
+      }
+      if (changed === "max" && maxValue <= minValue) {
+        maxValue = minValue + minGap;
+        r2ColorMaxInput.value = String(maxValue);
+      }
+      state.r2ColorManual = true;
+      state.r2ColorDomain = { min: minValue, max: maxValue };
+      syncR2ColorInputsAndTrack();
+      renderGraph();
+    }
+
+    function updateR2ColorRangeFromInput(changed) {
+      const referenceDomain = r2ControlDomain(dataR2Domain());
+      const minGap = r2Step(referenceDomain);
+      let minValue = Number(r2ColorMinValue.value);
+      let maxValue = Number(r2ColorMaxValue.value);
+      if (!Number.isFinite(minValue)) minValue = state.r2ColorDomain.min;
+      if (!Number.isFinite(maxValue)) maxValue = state.r2ColorDomain.max;
+      if (changed === "min" && minValue >= maxValue) minValue = maxValue - minGap;
+      if (changed === "max" && maxValue <= minValue) maxValue = minValue + minGap;
+      state.r2ColorManual = true;
+      state.r2ColorDomain = { min: minValue, max: maxValue };
+      const controlDomain = r2ControlDomain(dataR2Domain());
+      for (const input of [r2ColorMinInput, r2ColorMaxInput]) {
+        input.min = String(controlDomain.min);
+        input.max = String(controlDomain.max);
+        input.step = String(r2Step(controlDomain));
+      }
+      syncR2ColorInputsAndTrack();
+      renderGraph();
+    }
+
+    function syncR2ColorInputsAndTrack() {
+      const domain = state.r2ColorDomain;
+      r2ColorMinValue.value = formatR2(domain.min);
+      r2ColorMaxValue.value = formatR2(domain.max);
+      const controlDomain = r2ControlDomain(dataR2Domain());
+      r2ColorMinInput.value = String(domain.min);
+      r2ColorMaxInput.value = String(domain.max);
+      const span = controlDomain.max - controlDomain.min || 1;
+      const low = 100 * (domain.min - controlDomain.min) / span;
+      const high = 100 * (domain.max - controlDomain.min) / span;
+      const rangePair = r2ColorMinInput.closest(".range-pair");
+      rangePair.style.setProperty("--low", `${Math.max(0, Math.min(100, low))}%`);
+      rangePair.style.setProperty("--high", `${Math.max(0, Math.min(100, high))}%`);
+    }
+
+    function r2ControlDomain(dataDomain) {
+      if (!state.r2ColorManual) return dataDomain;
+      const min = Math.min(dataDomain.min, state.r2ColorDomain.min);
+      const max = Math.max(dataDomain.max, state.r2ColorDomain.max);
+      if (min === max) return { min: min - 0.5, max: max + 0.5 };
+      return { min, max };
+    }
+
+    function r2Step(domain) {
+      const span = Math.abs(domain.max - domain.min);
+      return span > 0 ? Math.max(span / 100, 0.0001) : 0.01;
+    }
+
+    function formatR2(value) {
+      return Number(value).toFixed(3).replace(/\.?0+$/, "");
     }
 
     function rgbHex(r, g, b) {
@@ -1035,23 +2039,29 @@
       return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
     }
 
+    function nodeRadius(node) {
+      return node.virtual_root ? state.nodeRadius + 5 : state.nodeRadius;
+    }
+
     function showCore(record) {
       if (record.virtual_root) {
+        state.selectedNodeId = null;
         document.getElementById("node-title").textContent = "Virtual root";
         document.getElementById("node-subtitle").textContent = `Tree ${record.tree_id}`;
         document.getElementById("metrics").innerHTML = "";
         setFormula(null, null);
-        document.getElementById("preview").textContent = "";
+        renderPreview(null);
         document.getElementById("tool-call").innerHTML = "";
-        setDetailText("Drag nodes horizontally to adjust layout. Auto Layout resets manual positions.");
+        setDetailText("Drag nodes horizontally to adjust layout. Auto Layout resets manual positions.", false);
         return;
       }
+      state.selectedNodeId = record.node_id;
       document.getElementById("node-title").textContent = record.node_label || record.node_id;
       document.getElementById("node-subtitle").textContent = `${(record.core.tool_names || []).join(", ") || "no tools"}`;
       setFormula(record.core.formula, record.core.formula_latex);
-      document.getElementById("preview").textContent = record.core.content_preview || "";
+      renderPreview(record, false);
       renderToolCall(record.core.tool_summary || fallbackToolSummary(record));
-      setDetailText("Click node to load detail.");
+      setDetailText("Click this Detail area to load detail.", true);
       const metrics = document.getElementById("metrics");
       metrics.innerHTML = "";
       const score = record.core.score || {};
@@ -1064,18 +2074,68 @@
     }
 
     function setFormula(formula, latex) {
-      const latexBox = document.getElementById("formula-latex");
       const codeBox = document.getElementById("formula-code");
       if (!formula) {
-        latexBox.textContent = "(no candidate formula)";
+        state.latexSource = "";
+        latexSource.value = "";
+        latexSource.disabled = true;
+        copyLatexButton.disabled = true;
+        formulaEditorStatus.textContent = "";
+        renderLatexDisplay("", true);
         codeBox.textContent = "";
         return;
       }
-      latexBox.textContent = latex ? `$$${latex}$$` : formula;
+      state.latexSource = latex || formula;
+      latexSource.value = state.latexSource;
+      latexSource.disabled = false;
+      copyLatexButton.disabled = false;
+      formulaEditorStatus.textContent = "";
+      renderLatexDisplay(state.latexSource, Boolean(latex));
       codeBox.textContent = formula;
-      if (latex) {
-        mathJaxReady.then(() => MathJax.typesetPromise([latexBox])).catch(() => {});
+    }
+
+    function renderLatexDisplay(source, parseAsLatex) {
+      state.latexRenderToken += 1;
+      const token = state.latexRenderToken;
+      if (!source) {
+        formulaLatex.textContent = "(no candidate formula)";
+        formulaLatex.classList.add("muted");
+        return;
       }
+      formulaLatex.classList.remove("muted");
+      formulaLatex.textContent = latexDisplaySource(source, parseAsLatex);
+      mathJaxReady
+        .then(() => {
+          if (token !== state.latexRenderToken) return null;
+          return MathJax.typesetPromise([formulaLatex]);
+        })
+        .catch(error => {
+          formulaEditorStatus.textContent = `Render failed: ${error.message || error}`;
+        });
+    }
+
+    function latexDisplaySource(source, parseAsLatex) {
+      const text = String(source || "").trim();
+      if (!text) return "(no candidate formula)";
+      if (text.startsWith("$$") || text.startsWith("\\[") || text.startsWith("$") || text.startsWith("\\(")) return text;
+      return parseAsLatex || /[\\_^{}]/.test(text) ? `$$${text}$$` : text;
+    }
+
+    async function copyLatexSource() {
+      const text = latexSource.value;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        formulaEditorStatus.textContent = "Copied";
+      } catch {
+        latexSource.focus();
+        latexSource.select();
+        document.execCommand("copy");
+        formulaEditorStatus.textContent = "Copied";
+      }
+      setTimeout(() => {
+        if (formulaEditorStatus.textContent === "Copied") formulaEditorStatus.textContent = "";
+      }, 1200);
     }
 
     function renderToolCall(summary) {
@@ -1177,19 +2237,180 @@
     async function loadDetail(nodeId) {
       const record = await fetchJson(`/api/runs/${encodeURIComponent(state.runId)}/records/${encodeURIComponent(nodeId)}`);
       showCore(record);
+      renderPreview(record, true);
       renderToolCall(record.core.tool_summary || detailToolSummary(record));
       renderJsonDetail(record.detail || {});
     }
 
-    function setDetailText(text) {
-      const detail = document.getElementById("detail");
-      detail.textContent = text;
+    function renderPreview(record, includeHistory = false) {
+      const preview = document.getElementById("preview");
+      preview.innerHTML = "";
+      if (!record) {
+        const empty = document.createElement("span");
+        empty.className = "muted";
+        empty.textContent = "No preview.";
+        preview.appendChild(empty);
+        return;
+      }
+
+      const historyMessages = includeHistory ? historyChatMessages(record.detail && record.detail.prompt) : [];
+      if (historyMessages.length) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "history-toggle";
+        toggle.textContent = `Show history (${historyMessages.length} messages)`;
+        const history = document.createElement("div");
+        history.className = "chat-history hidden";
+        historyMessages.forEach(message => history.appendChild(chatBubble(message)));
+        toggle.addEventListener("click", () => {
+          const hidden = history.classList.toggle("hidden");
+          toggle.textContent = `${hidden ? "Show" : "Hide"} history (${historyMessages.length} messages)`;
+        });
+        preview.append(toggle, history);
+      }
+
+      preview.appendChild(chatBubble({
+        role: "agent",
+        label: "Agent output",
+        text: includeHistory ? formatAgentOutput(record) : (record.core.content_preview || "No agent output.")
+      }));
+    }
+
+    function historyChatMessages(prompt) {
+      if (!Array.isArray(prompt)) return [];
+      return prompt.map((message, index) => {
+        const role = message && message.role ? String(message.role) : "message";
+        const name = message && message.name ? ` · ${message.name}` : "";
+        const textParts = [];
+        const content = stringifyContent(message && message.content);
+        if (content) textParts.push(content);
+        const toolCalls = formatToolCalls(message && message.tool_calls);
+        if (toolCalls) textParts.push(`Tool Calls:\n${toolCalls}`);
+        return {
+          role: chatRole(role),
+          label: `${displayRole(role)}${name} #${index + 1}`,
+          text: textParts.join("\n\n") || "(empty message)"
+        };
+      });
+    }
+
+    function chatBubble(message) {
+      const wrap = document.createElement("div");
+      wrap.className = `chat-bubble ${message.role}`;
+      const label = document.createElement("div");
+      label.className = "chat-label";
+      label.textContent = message.label;
+      const box = document.createElement("div");
+      box.className = "chat-bubble-box";
+      const topResize = document.createElement("div");
+      topResize.className = "bubble-resize";
+      topResize.title = "Drag to resize";
+      const body = document.createElement("div");
+      body.className = "chat-bubble-body";
+      const pre = document.createElement("pre");
+      pre.textContent = message.text || "";
+      body.appendChild(pre);
+      const bottomResize = document.createElement("div");
+      bottomResize.className = "bubble-resize";
+      bottomResize.title = "Drag to resize";
+      attachBubbleResize(topResize, body, "top");
+      attachBubbleResize(bottomResize, body, "bottom");
+      box.append(topResize, body, bottomResize);
+      wrap.append(label, box);
+      return wrap;
+    }
+
+    function attachBubbleResize(handle, body, edge) {
+      handle.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const startY = event.clientY;
+        const startHeight = body.getBoundingClientRect().height;
+        const minHeight = 54;
+        const maxHeight = Math.max(120, window.innerHeight * 0.55);
+        handle.setPointerCapture(event.pointerId);
+        const move = moveEvent => {
+          const delta = moveEvent.clientY - startY;
+          const signedDelta = edge === "top" ? -delta : delta;
+          const nextHeight = Math.max(minHeight, Math.min(maxHeight, startHeight + signedDelta));
+          body.style.height = `${nextHeight}px`;
+          body.style.maxHeight = "none";
+        };
+        const stop = upEvent => {
+          handle.releasePointerCapture(upEvent.pointerId);
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", stop);
+          handle.removeEventListener("pointercancel", stop);
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", stop);
+        handle.addEventListener("pointercancel", stop);
+      });
+    }
+
+    function formatAgentOutput(record) {
+      const detail = record.detail || {};
+      const parts = [];
+      const reason = reasoningText(detail.message);
+      if (reason) parts.push(`Reason:\n${reason}`);
+      const content = stringifyContent(detail.content);
+      if (content) parts.push(`Content:\n${content}`);
+      const toolCalls = formatToolCalls(detail.tool_calls);
+      if (toolCalls) parts.push(`Tool Calls:\n${toolCalls}`);
+      return parts.join("\n\n") || record.core.content_preview || "No agent output.";
+    }
+
+    function reasoningText(message) {
+      if (!message || typeof message !== "object") return "";
+      if (message.reasoning) return String(message.reasoning).trim();
+      if (!Array.isArray(message.reasoning_details)) return "";
+      return message.reasoning_details
+        .map(item => item && typeof item === "object" ? item.text : "")
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    }
+
+    function stringifyContent(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "string") return value.trim();
+      return JSON.stringify(value, null, 2);
+    }
+
+    function formatToolCalls(toolCalls) {
+      if (!Array.isArray(toolCalls) || !toolCalls.length) return "";
+      return toolCalls.map((call, index) => {
+        const name = call && (call.name || (call.function && call.function.name)) || "tool";
+        const params = call && (call.params || call.arguments || (call.function && call.function.arguments)) || {};
+        const renderedParams = typeof params === "string" ? params : JSON.stringify(params, null, 2);
+        return `${String(index + 1).padStart(2, "0")}. ${name}(${renderedParams})`;
+      }).join("\n");
+    }
+
+    function chatRole(role) {
+      if (role === "assistant") return "agent";
+      if (role === "user") return "user";
+      if (role === "tool") return "tool";
+      return "system";
+    }
+
+    function displayRole(role) {
+      if (role === "assistant") return "Assistant";
+      if (role === "user") return "User";
+      if (role === "tool") return "Tool";
+      if (role === "system") return "System";
+      return displayToolName(role);
+    }
+
+    function setDetailText(text, clickable = false) {
+      detailEl.textContent = text;
+      detailEl.classList.toggle("clickable", clickable);
     }
 
     function renderJsonDetail(value) {
-      const detail = document.getElementById("detail");
-      detail.innerHTML = "";
-      detail.appendChild(jsonNode(value, null, true));
+      detailEl.classList.remove("clickable");
+      detailEl.innerHTML = "";
+      detailEl.appendChild(jsonNode(value, null, true));
     }
 
     function jsonNode(value, key, isRoot = false) {
@@ -1387,7 +2608,7 @@
       const drawable = nodes.filter(node => state.positions.has(node.node_id));
       if (!drawable.length) return new Blob([], { type: "application/pdf" });
       const padding = 36;
-      const radii = new Map(drawable.map(node => [node.node_id, node.virtual_root ? 14 : 9]));
+      const radii = new Map(drawable.map(node => [node.node_id, nodeRadius(node)]));
       const xs = drawable.map(node => state.positions.get(node.node_id).x);
       const ys = drawable.map(node => state.positions.get(node.node_id).y);
       const minX = Math.min(...xs) - 80;
@@ -1543,6 +2764,9 @@
       return String(treeId || "legacy").slice(0, 8);
     }
 
+    syncR2ColorControls();
+    setRunTab(state.runTab);
+    applyPanelLayout();
     loadRuns().catch(error => {
       statusEl.textContent = error.message;
     });
