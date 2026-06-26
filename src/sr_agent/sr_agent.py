@@ -275,9 +275,15 @@ class SRAgent(FactoryMixin):
         initial_prompt.append({
             "role": "system",
             "content": (
-                "You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
-                "that explain the relationship between feature variables and the target variable. "
-                "DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+                f"You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
+                f"that explain the relationship between feature variables and the target variable. "
+                f"DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+                f"You have at most {self.max_refinement_depth} refinement rounds in each conversation branch. "
+                f"Plan tool use within this budget: use early rounds for targeted exploration, keep concrete "
+                f"candidate formulas as the budget shrinks, and avoid open-ended searches near the end. "
+                f"At the final refinement round (L = {self.max_refinement_depth}), stop exploration and submit the best available "
+                f"target formula using the most appropriate final-answer mechanism available; do not wait "
+                f"for another reminder after the final round. "
                 f"{mse_goal}"
             )
         })
@@ -317,7 +323,30 @@ class SRAgent(FactoryMixin):
 
     def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
-        prompt = buffer
+        prompt = deepcopy(buffer)
+        remaining_rounds = self.max_refinement_depth - L
+        progress_line = (
+            f"Current progress: refinement round L={L}/{self.max_refinement_depth}. "
+            f"After this response, {remaining_rounds} refinement round(s) remain in this branch."
+        )
+        if remaining_rounds > 1:
+            policy = (
+                "Plan tool use within the remaining refinement budget. "
+                "Prefer targeted actions that can lead to a simpler and lower-MSE formula."
+            )
+        elif remaining_rounds == 1:
+            policy = (
+                "Only one refinement round remains after this response. Use at most a tightly targeted "
+                "tool call now, and preserve a concrete formula candidate so the next round can submit it."
+            )
+        else:
+            policy = (
+                "This is the final refinement round for this branch. Do not spend this response on "
+                "new data exploration, broad searches, or diagnostic-only evaluations. Submit or state "
+                "your best available target formula now using the final-answer mechanism available in "
+                "this environment, with a brief justification if text is required."
+            )
+        prompt.append({"role": "user", "content": f"[Iteration status]\n{progress_line} {policy}"})
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
         for msg in prompt:

@@ -21,10 +21,14 @@ _logger = getLogger(f'sr_agent.{__name__}')
 
 def update_parser(parser):
     """更新 parser，添加多项式拟合相关参数"""
+    default_tools = sorted(set(BaseTool.all_registered_names) - {
+        'evaluate_code', 'workspace_code_executor', 'ask_human', 
+        'call_llm', 'workspace_shell', 'create_skill', 'edit_skill'
+    })
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("--ban_tools", default=['evaluate_code', 'workspace_code_executor', 'ask_human', 'call_llm', 'workspace_shell'], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
+    parser.add_argument("--tools", default=default_tools, type=str, nargs='+', choices=BaseTool.all_registered_names, help="Optional list of tools to use.")
+    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
     parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
     parser.add_argument("-L", "--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
     parser.add_argument("-C", "--global_width", type=int, default=1, help="Number of independent branches per restart loop.")

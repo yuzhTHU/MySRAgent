@@ -22,8 +22,14 @@ class CreateSkill(BaseTool):
         readonly: bool = False,
     ) -> Dict[str, Any]:
         """Create a new skill.
-        Use this after a reusable lesson, strategy, or best practice has been identified 
-        and should be saved for future tasks. The tool refuses to overwrite existing skills
+        Use this only after a reusable lesson, strategy, or best practice has been
+        identified and supported by concrete results from the current or recent work.
+        You do not need to find a perfect formula or reach MSE = 0.0 before creating
+        a skill; create one when an attempt reveals a useful reusable tactic.
+        Do not create a skill for a one-off dataset detail, a final formula, or an
+        unverified guess. Good skill content explains when to use the lesson, what
+        evidence supports it, concrete steps to follow, and pitfalls to avoid. The
+        tool refuses to overwrite existing skills.
 
         Args:
             name: Skill name. Must use lowercase letters, digits, and hyphens.

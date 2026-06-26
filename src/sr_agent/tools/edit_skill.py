@@ -15,6 +15,13 @@ class EditSkill(BaseTool):
 
     def execute(self, name: str, patch: str) -> Dict[str, Any]:
         """Edit an existing skill with exact search/replace blocks.
+        Use this when an existing skill is clearly relevant but should be corrected,
+        refined, or extended based on concrete results from the current or recent work.
+        You do not need to find a perfect formula or reach MSE = 0.0 before editing
+        a skill; edit it when an attempt reveals a useful reusable tactic.
+        Prefer small, evidence-backed edits. Do not overwrite broad guidance with a
+        one-off dataset detail, a final formula, or an unverified guess. If no existing
+        skill matches the reusable lesson, create a new skill instead.
 
         Args:
             name: The exact skill name to edit.
