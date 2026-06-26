@@ -141,7 +141,7 @@ class EvaluateCodeTool(BaseTool):
         y_pred = np.asarray(result["y_pred"])
         return {
             "formula": result["model_str"],
-            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true),
+            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true, complexity=len(model_code) + len(predict_code)),
             "is_candidate": result["is_candidate"] and (y == self.context['target']),
         }
 

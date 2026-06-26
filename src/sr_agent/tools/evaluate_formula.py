@@ -52,7 +52,7 @@ class EvaluateTool(BaseTool):
 
         return {
             "formula": eq_f.to_str(),
-            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true),
+            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true, complexity=len(f)),
             "is_candidate": is_candidate,
         }
 

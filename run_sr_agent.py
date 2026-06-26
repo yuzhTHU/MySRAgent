@@ -18,7 +18,7 @@ from datetime import datetime
 from socket import gethostname
 from sr_agent import SRAgent
 from sr_agent.tools import BaseTool
-from sr_agent.utils import add_minus_flags, add_negation_flags, log_exception, sanitize_filename, save_args, seed_all, setup_logging, tag2ansi
+from sr_agent.utils import add_minus_flags, add_negation_flags, format_pareto_front, log_exception, sanitize_filename, save_args, seed_all, setup_logging, tag2ansi
 
 
 SCRIPT_NAME = Path(__file__).stem  # run_sr_agent
@@ -176,11 +176,13 @@ def main(args: argparse.Namespace) -> dict:
         result["money_usage"] = agent.money_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
         result["tools_usage"] = agent.tools_counter.to_str(mode='count', mode_of_detail='count', mode_of_percent='by_count')
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items()])
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k != 'pareto_front'])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
             f"{log}\n"
+            f"\n[red bold]Pareto Front[reset]\n"
+            f"{format_pareto_front(result.get('pareto_front'))}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
         # 保存文件

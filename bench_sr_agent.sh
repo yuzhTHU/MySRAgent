@@ -1,5 +1,39 @@
 # conda activate ./venv
 
+# 测试 Deepseek-v4-pro 在 LLMSR-Benchmark 的 5 个 split 上的表现
+python bench_sr_agent.py \
+    --exp_name bench3_my_sr_agent_deepseek-v4-pro \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-pro"
+
+# 测试 Deepseek-v4-flash 在 LLMSR-Benchmark 的 5 个 split 上的表现
+python bench_sr_agent.py \
+    --exp_name bench3_my_sr_agent_deepseek-v4-flash \
+    -R 2 -C 2 -L 5 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash"
+
+
+# 测试 Deepseek-v4-pro 在 LLMSR-Benchmark 的 5 个 split 上的表现 (Anonymize 避免记忆)
+python bench_sr_agent.py \
+    --exp_name bench3_anonymize_my_sr_agent_deepseek-v4-pro \
+    -R 2 -C 2 -L 20 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-pro" \
+    --anonymize
+
+# 测试 Deepseek-v4-flash 在 LLMSR-Benchmark 的 5 个 split 上的表现 (Anonymize 避免记忆)
+python bench_sr_agent.py \
+    --exp_name bench3_anonymize_my_sr_agent_deepseek-v4-flash \
+    -R 2 -C 2 -L 20 -K 2 \
+    --llm_provider openrouter \
+    --llm_model "deepseek/deepseek-v4-flash" \
+    --anonymize
+
+
+
+
 python bench_sr_agent.py \
     --problem_names MatSci2 MatSci19 CRK28 BPG1 PO6 \
     --exp_name guanren_tests \

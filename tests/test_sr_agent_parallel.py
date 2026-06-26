@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from sr_agent.api.core import ToolCall
 from sr_agent.sr_agent import SRAgent
-from sr_agent.tools.base_tool import BaseTool, ToolMetadata
+from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
 
 
 @BaseTool.register("unit_parallel_tool")
@@ -93,3 +95,39 @@ def test_build_prompt_final_round_tells_agent_to_submit(tmp_path):
     assert "final refinement round" in final_status
     assert "Submit or state your best available target formula now" in final_status
     assert "Do not spend this response on new data exploration" in final_status
+
+
+def test_update_topk_records_pareto_front(tmp_path):
+    agent = make_agent(tmp_path)
+    response_list = [
+        ("", [
+            ToolCall(name="evaluate_formula", params={"eq": "x"}),
+            ToolCall(name="evaluate_formula", params={"eq": "x + y"}),
+            ToolCall(name="evaluate_formula", params={"eq": "x + y + z"}),
+        ], {}),
+    ]
+    results_list = [[
+        ToolCallResult(True, {
+            "formula": "x",
+            "metrics": {"mse": 0.2, "complexity": 2},
+            "is_candidate": True,
+        }, "", {}),
+        ToolCallResult(True, {
+            "formula": "x + y",
+            "metrics": {"mse": 0.1, "complexity": 3},
+            "is_candidate": True,
+        }, "", {}),
+        ToolCallResult(True, {
+            "formula": "x + y + z",
+            "metrics": {"mse": 0.3, "complexity": 5},
+            "is_candidate": True,
+        }, "", {}),
+    ]]
+
+    topk_records = agent.update_topk([], response_list, results_list, R=1, L=1, C=1)
+    agent.record_search(topk_records, R=1, L=1, C=1)
+
+    lines = (tmp_path / "search_record.jsonl").read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[-1])
+    assert record["coord"] == {"R": 1, "C": 1, "L": 1}
+    assert [item["formula"] for item in record["pareto_front"]] == ["x + y", "x"]

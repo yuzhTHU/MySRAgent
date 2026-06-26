@@ -342,7 +342,7 @@ class BaseTool(ABC, FactoryMixin):
             return "object"
         return ""
 
-    def evaluate(self, eq: str = None, y_pred: np.ndarray = None, y_true: np.ndarray = None) -> Dict[str, float]:
+    def evaluate(self, eq: str = None, y_pred: np.ndarray = None, y_true: np.ndarray = None, complexity: int = None) -> Dict[str, float]:
         """Evaluate predictions or a formula against the target in context.
 
         When ``eq`` is provided, the formula is evaluated with variables from
@@ -354,8 +354,9 @@ class BaseTool(ABC, FactoryMixin):
             f = nd.parse(eq.replace("^", "**"))
             y_pred = f.eval(data)
             y_true = data[target]
-        elif y_pred is None or y_true is None:
-            raise ValueError("Either eq or both y_pred and y_true must be provided.")
+            complexity = len(f)
+        elif y_pred is None or y_true is None or complexity is None:
+            raise ValueError("Either eq or both y_pred, y_true, and complexity must be provided.")
 
         y_pred = y_pred + 0 * y_true # broadcast to target shape if needed
 
@@ -391,6 +392,7 @@ class BaseTool(ABC, FactoryMixin):
             "r2": r2,
             "pearson_r": pearson_r,
             "spearman_r": spearman_r,
+            'complexity': complexity,
         }
 
 

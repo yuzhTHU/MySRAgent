@@ -175,7 +175,7 @@ class PolynomialFitTool(BaseTool):
 
         results = {
             "formula": polynomial.to_str(),
-            "metrics": self.evaluate(y_pred=y_pred, y_true=data_y) | {
+            "metrics": self.evaluate(y_pred=y_pred, y_true=data_y, complexity=len(polynomial)) | {
                 "adjusted_r2": adjusted_r2, "aic": aic, "bic": bic,
             },
             # "terms": terms_result,

@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from sr_agent import SRAgent
 from sr_agent.tools import BaseTool
-from sr_agent.utils import log_exception, tag2ansi
+from sr_agent.utils import format_pareto_front, log_exception, tag2ansi
 from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
 
 _logger = getLogger(f'sr_agent.{__name__}')
@@ -125,11 +125,13 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         result["money_usage"] = agent.money_counter.count
         result["tools_usage"] = agent.tools_counter.named_count
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items()])
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k != 'pareto_front'])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
             f"{log}\n"
+            f"\n[red bold]Pareto Front[reset]\n"
+            f"{format_pareto_front(result.get('pareto_front'))}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
         # 保存文件
