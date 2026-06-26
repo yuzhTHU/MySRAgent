@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from types import NoneType, UnionType
 from inspect import Parameter, signature
 from typing import Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
-from ..utils import FactoryMixin
+from ..utils import FactoryMixin, log_exception
 
 _logger = getLogger(f'sr_agent.{__name__}')
 
@@ -131,7 +131,7 @@ class BaseTool(ABC, FactoryMixin):
         except ToolRunAbort:
             raise
         except Exception as e:
-            error_msg = f"Error executing {self.metadata.name}: [{type(e).__name__}] {e}\n{traceback.format_exc()}"
+            error_msg = f"Error executing {self.metadata.name}: {log_exception(e)}"
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
