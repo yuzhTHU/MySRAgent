@@ -24,6 +24,7 @@ from .format_pareto_front import format_pareto_front
 
 # 引入可选依赖的子模块
 if TYPE_CHECKING:
+    from . import plot
     from .auto_gpu import AutoGPU
     from . import nn
     from .load_model_state import load_model_state
