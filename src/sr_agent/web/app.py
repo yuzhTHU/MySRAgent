@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +85,7 @@ def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
                         batch.append(_strip_detail(_with_core_derivatives(record, records_by_id)))
                         next_seq = max(next_seq, seq)
                 if batch:
-                    yield f"data: {json.dumps({'records': batch}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(_sanitize_json_value({'records': batch}), ensure_ascii=False, allow_nan=False)}\n\n"
                 await asyncio.sleep(1.0)
 
         return StreamingResponse(event_source(), media_type="text/event-stream")
@@ -127,7 +128,7 @@ def _run_key(log_dir: Path, run_dir: Path) -> str:
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            return _sanitize_json_value(json.load(f, parse_constant=lambda _: None))
     except FileNotFoundError:
         return None
 
@@ -140,11 +141,24 @@ def _read_records(path: Path):
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    yield _sanitize_json_value(json.loads(line, parse_constant=lambda _: None))
                 except json.JSONDecodeError:
                     continue
     except FileNotFoundError:
         return
+
+
+def _sanitize_json_value(value: Any) -> Any:
+    """Return a standards-compliant JSON value by replacing non-finite floats."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _sanitize_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_json_value(item) for item in value]
+    return value
 
 
 def _record_stats(path: Path) -> tuple[int, int]:
