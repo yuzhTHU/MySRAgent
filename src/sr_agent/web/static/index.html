@@ -1563,14 +1563,15 @@
       event.stopPropagation();
       const point = clientToSvg(event);
       const current = state.positions.get(nodeId);
-      const subtreeIds = collectSubtreeIds(nodeId);
+      if (!current) return;
+      const dragFactors = collectDragPositionFactors(nodeId);
       const startPositions = new Map(
-        subtreeIds
+        [...dragFactors.keys()]
           .map(id => [id, state.positions.get(id)])
           .filter(([, position]) => Boolean(position))
           .map(([id, position]) => [id, { x: position.x, y: position.y }])
       );
-      state.dragging = { nodeId, startPointerX: point.x, startPositions };
+      state.dragging = { nodeId, startPointerX: point.x, startPositions, dragFactors };
       state.nodeDragMoved = false;
       event.target.setPointerCapture(event.pointerId);
     }
@@ -1589,8 +1590,9 @@
         if (!rootStart) return;
         const deltaX = point.x - state.dragging.startPointerX;
         for (const [nodeId, position] of state.dragging.startPositions) {
+          const factor = state.dragging.dragFactors.get(nodeId) || 0;
           state.positions.set(nodeId, {
-            x: position.x + deltaX,
+            x: position.x + deltaX * factor,
             y: position.y
           });
           state.userMoved.add(nodeId);
@@ -1613,26 +1615,51 @@
       }, 0);
     }
 
-    function collectSubtreeIds(rootNodeId) {
+    function collectDragPositionFactors(rootNodeId) {
       const nodes = buildGraphNodes();
       const byId = new Map(nodes.map(node => [node.node_id, node]));
       const children = new Map(nodes.map(node => [node.node_id, []]));
+      const parents = new Map(nodes.map(node => [node.node_id, []]));
       for (const node of nodes) {
         for (const parent of node.parents || []) {
-          if (children.has(parent.node_id)) children.get(parent.node_id).push(node.node_id);
+          if (!byId.has(parent.node_id)) continue;
+          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          children.get(parent.node_id).push(node.node_id);
+          parents.get(node.node_id).push(parent.node_id);
         }
       }
-      const result = [];
-      const seen = new Set();
+
+      const reachable = new Set();
       const queue = [rootNodeId];
       while (queue.length) {
         const nodeId = queue.shift();
-        if (!nodeId || seen.has(nodeId) || !byId.has(nodeId)) continue;
-        seen.add(nodeId);
-        result.push(nodeId);
+        if (!nodeId || reachable.has(nodeId) || !byId.has(nodeId)) continue;
+        reachable.add(nodeId);
         for (const childId of children.get(nodeId) || []) queue.push(childId);
       }
-      return result;
+
+      const factors = new Map([[rootNodeId, 1]]);
+      const orderedReachable = [...reachable].sort((a, b) => {
+        const nodeA = byId.get(a);
+        const nodeB = byId.get(b);
+        return fallbackLevel(nodeA) - fallbackLevel(nodeB) || (nodeA.seq || 0) - (nodeB.seq || 0);
+      });
+      for (let pass = 0; pass < orderedReachable.length; pass++) {
+        let changed = false;
+        for (const nodeId of orderedReachable) {
+          if (nodeId === rootNodeId) continue;
+          const parentIds = parents.get(nodeId) || [];
+          if (!parentIds.length) continue;
+          const factor = parentIds.reduce((sum, parentId) => sum + (factors.get(parentId) || 0), 0) / parentIds.length;
+          if (factor <= 0) continue;
+          if (Math.abs((factors.get(nodeId) || 0) - factor) > 1e-6) {
+            factors.set(nodeId, factor);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+      return factors;
     }
 
     function onWheel(event) {

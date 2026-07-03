@@ -21,6 +21,8 @@ class EvaluateTool(BaseTool):
     ) -> Dict[str, Any]:
         """Evaluate formula fit quality to data.
 
+        This tool can return candidate formulas for submission when `y` is the target variable and `f` does not depend on the target variable.
+
         Args:
             f: Formula string, e.g., "x1**2 + sin(x2) + 3.5 * tanh(x3)".
                 Common operators like sin, sinh, sec, sech, and sigmoid are all supported; do not use `numpy` or `np`.
@@ -63,6 +65,7 @@ class SubmitFormulaTool(EvaluateTool):
         description=(
             "Evaluate formula fit quality to data. "
             "If you are satisfied enough with a formula, use this tool to submit it."
-            "You can submit any formula as many times as you want, but only the best formula will be considered."
+            "You can submit any formula as many times as you want, but only the best formula will be considered. "
+            "It returns candidate formulas only when `y` is the default target and the formula does not contain the target itself."
         ),
     )

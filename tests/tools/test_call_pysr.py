@@ -27,7 +27,8 @@ class TestPySRTool:
         result = tool.execute(binary_operators=["+", "*"], unary_operators=[])
 
         assert result["formula"] == "2 * x + 1"
-        assert result["pareto_front"][0]["formula"] == "2 * x + 1"
+        assert result["all_formulas"][0]["formula"] == "2 * x + 1"
+        assert result["all_formulas"][0]["mse"] < 1e-12
         assert result["metrics"]["mse"] < 1e-12
         assert result["metrics"]["r2"] == 1.0
         assert result["is_candidate"] is True

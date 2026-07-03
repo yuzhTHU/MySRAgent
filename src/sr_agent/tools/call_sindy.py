@@ -33,6 +33,8 @@ class SINDyTool(BaseTool):
         a parsimonious combination that explains the target variable.
         Best suited for polynomial, interaction, and trigonometric relationships.
 
+        This tool can return candidate formulas for submission when `y` is the target variable and `x` does not depend on the target variable.
+
         Args:
             x: List of input feature names to use. If not specified, all features except target are used.
                 Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2"].

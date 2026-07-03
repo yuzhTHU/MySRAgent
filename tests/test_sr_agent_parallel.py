@@ -61,7 +61,7 @@ def test_build_initial_prompt_includes_refinement_budget_rule(tmp_path):
     assert "final-answer mechanism" in system_content
 
 
-def test_build_prompt_injects_iteration_status_without_mutating_buffer(tmp_path):
+def test_update_buffer_injects_iteration_status(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_restart_loop = 2
     agent.global_width = 3
@@ -70,26 +70,33 @@ def test_build_prompt_injects_iteration_status_without_mutating_buffer(tmp_path)
         {"role": "system", "content": "Base system."},
         {"role": "user", "content": "Solve the task."},
     ]
+    prompt = list(buffer)
+    response_list = [("", [], {"role": "assistant", "content": ""})]
+    results_list = [[]]
 
-    prompt = agent.build_prompt(buffer, R=1, L=2, C=1)
+    agent.update_buffer(buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=2, C=1)
 
     assert len(prompt) == len(buffer) + 1
     assert prompt[0]["content"] == "Base system."
     assert "refinement round L=2/5" in prompt[-1]["content"]
     assert "After this response, 3 refinement round(s) remain" in prompt[-1]["content"]
+    assert "No Pareto front yet" in prompt[-1]["content"]
     assert buffer[0]["content"] == "Base system."
     assert buffer[-1]["content"] == "Solve the task."
 
 
-def test_build_prompt_final_round_tells_agent_to_submit(tmp_path):
+def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_refinement_depth = 4
     buffer = [
         {"role": "system", "content": "Base system."},
         {"role": "user", "content": "Solve the task."},
     ]
+    prompt = list(buffer)
+    response_list = [("", [], {"role": "assistant", "content": ""})]
+    results_list = [[]]
 
-    prompt = agent.build_prompt(buffer, R=1, L=4, C=1)
+    agent.update_buffer(buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=4, C=1)
     final_status = prompt[-1]["content"]
 
     assert "final refinement round" in final_status

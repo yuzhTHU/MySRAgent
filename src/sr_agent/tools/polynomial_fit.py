@@ -25,6 +25,8 @@ class PolynomialFitTool(BaseTool):
     ) -> Dict[str, Any]:
         """Execute polynomial fit.
 
+        This tool can return candidate formulas for submission when `y` is the target variable and `x` does not depend on the target variable.
+
         Args:
             x: List of input feature names, e.g., ["x1", "x2"]. Use all features other than y by default.
                 Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2"].

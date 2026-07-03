@@ -189,7 +189,7 @@ class SRAgentInteractive(SRAgent):
                             # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
                             buffer, node_parents = self.update_buffer(
                                 buffer, response_list, results_list,
-                                node_parents, prompt, usage, R, L, C,
+                                topk_records, node_parents, prompt, usage, R, L, C,
                             )
                             self.named_timer.add('update_buffer')
 

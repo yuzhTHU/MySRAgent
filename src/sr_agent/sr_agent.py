@@ -218,7 +218,7 @@ class SRAgent(FactoryMixin):
                         # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
                         buffer, node_parents = self.update_buffer(
                             buffer, response_list, results_list,
-                            node_parents, prompt, usage, R, L, C,
+                            topk_records, node_parents, prompt, usage, R, L, C,
                         )
                         self.named_timer.add('update_buffer')
 
@@ -329,29 +329,6 @@ class SRAgent(FactoryMixin):
     def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
         prompt = deepcopy(buffer)
-        remaining_rounds = self.max_refinement_depth - L
-        progress_line = (
-            f"Current progress: refinement round L={L}/{self.max_refinement_depth}. "
-            f"After this response, {remaining_rounds} refinement round(s) remain in this branch."
-        )
-        if remaining_rounds > 1:
-            policy = (
-                "Plan tool use within the remaining refinement budget. "
-                "Prefer targeted actions that can lead to a simpler and lower-MSE formula."
-            )
-        elif remaining_rounds == 1:
-            policy = (
-                "Only one refinement round remains after this response. Use at most a tightly targeted "
-                "tool call now, and preserve a concrete formula candidate so the next round can submit it."
-            )
-        else:
-            policy = (
-                "This is the final refinement round for this branch. Do not spend this response on "
-                "new data exploration, broad searches, or diagnostic-only evaluations. Submit or state "
-                "your best available target formula now using the final-answer mechanism available in "
-                "this environment, with a brief justification if text is required."
-            )
-        prompt.append({"role": "user", "content": f"[Iteration status]\n{progress_line} {policy}"})
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
         for msg in prompt:
@@ -431,6 +408,7 @@ class SRAgent(FactoryMixin):
         buffer: List[Dict[str, Any]],
         response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
         results_list: List[List[ToolCallResult]],
+        topk_records: List[Tuple[float, int, Dict[str, Any]]],
         node_parents: Dict[str, str],
         prompt: List[Dict[str, Any]],
         usage: Dict[str, Any],
@@ -483,6 +461,54 @@ class SRAgent(FactoryMixin):
             buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
         else:
             _logger.warning("Skipping empty LLM response (no content nor tool calls).")
+        # 将当前搜索进度加入 buffer
+        remaining_rounds = self.max_refinement_depth - L
+        progress_line = (
+            f"Current progress: refinement round L={L}/{self.max_refinement_depth}. "
+            f"After this response, {remaining_rounds} refinement round(s) remain in this branch."
+        )
+        if remaining_rounds > 1:
+            policy = (
+                "Plan tool use within the remaining refinement budget. "
+                "Prefer targeted actions that can lead to a simpler and lower-MSE formula."
+            )
+        elif remaining_rounds == 1:
+            policy = (
+                "Only one refinement round remains after this response. Use at most a tightly targeted "
+                "tool call now, and preserve a concrete formula candidate so the next round can submit it."
+            )
+        else:
+            policy = (
+                "This is the final refinement round for this branch. Do not spend this response on "
+                "new data exploration, broad searches, or diagnostic-only evaluations. Submit or state "
+                "your best available target formula now using the final-answer mechanism available in "
+                "this environment, with a brief justification if text is required."
+            )
+        pareto_front = self.get_pareto_front(topk_records)
+        pareto_front_str = []
+        for idx, item in enumerate(pareto_front, 1):
+            if len(str(item['formula'])) <= 160:
+                formula = item['formula']
+            else:
+                formula = str(item['formula'])[:160-len('...')] + '...'
+            pareto_front_str.append(
+                f"{idx}. "
+                f"MSE={item['mse']:.6g}, "
+                f"complexity={item['complexity']}, "
+                f"formula={formula}"
+            )
+        if pareto_front_str:
+            pareto_front_str = '\n'.join(pareto_front_str)
+        else:
+            pareto_front_str = "(No Pareto front yet, call tools that can return candidate formulas to populate it.)"
+        prompt.append({
+            "role": "user", "content": (
+                f"[Iteration status]\n"
+                f"{progress_line} {policy}\n\n"
+                f"[Current Pareto Front]\n"
+                f"{pareto_front_str}"
+            )
+        })
         return buffer, node_parents
 
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
@@ -493,13 +519,19 @@ class SRAgent(FactoryMixin):
                     assert 'mse' in res.result['metrics'], "Tool result must contain 'mse' in metrics for candidate formulas."
                     assert 'complexity' in res.result['metrics'], "Tool result must contain 'complexity' in metrics for candidate formulas."
                     record = {
-                        "formula": res.result.get('formula') or act.params.get('eq'),
+                        "formula": res.result['formula'],
                         **res.result['metrics'],
                         "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
                     priority = res.result['metrics']['mse'] # 按照 mse 排序 (越小越重要)
                     sequence = len(topk_records) # 相同 priority 时按照 sequence 排序 (越小越重要)
                     heapq.heappush(topk_records, (priority, sequence, record))
+                    # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
+                    for formula_dict in res.result.get('all_formulas', []):
+                        record = {**formula_dict, "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K)}
+                        priority = formula_dict['mse']
+                        sequence = len(topk_records)
+                        heapq.heappush(topk_records, (priority, sequence, record))
         return topk_records
     
     def log_info(self, response_list, topk_records, R: int, L: int, C: int):

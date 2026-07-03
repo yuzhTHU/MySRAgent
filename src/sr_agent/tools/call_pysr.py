@@ -36,6 +36,8 @@ class PySRTool(BaseTool):
         It is powerful for discovering complex nonlinear relationships including trigonometric, exponential, sqrt, and nested functions.
         However, it is also computationally intensive and requires careful tuning of operators and variables to find good formulas within reasonable time.
         You MUST specify the binary and unary operators based on your hypothesis about the data.
+        
+        This tool can return candidate formulas for submission when `y` is the target variable and `x` does not depend on the target variable.
 
         Args:
             binary_operators: List of binary operators for PySR to use. Choose from: "+", "-", "*", "/", "^".
@@ -127,15 +129,19 @@ class PySRTool(BaseTool):
 
         if formula_str and formula_str != "0":
             formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
-            pareto_front = [
-                item | {"formula": self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])}
-                for item in pareto_front
-            ]
             metrics = self.evaluate(eq=formula_str)
             is_candidate = (y == self.context['target']) and (y not in features['original_exprs'])
+            all_formulas = []
+            for item in pareto_front:
+                formula = self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])
+                try:
+                    all_formulas.append({"formula": formula, **self.evaluate(eq=formula)})
+                except Exception as e:
+                    exceptions.append(f"Failed to evaluate formula {formula!r}: {type(e).__name__}: {e}")
         else:
             metrics = {"mse": float("inf")}
             is_candidate = False
+            all_formulas = []
 
         # Generate retry hint if result is poor and timeout can be increased
         retry_hint = None
@@ -153,7 +159,7 @@ class PySRTool(BaseTool):
             "is_candidate": is_candidate,
             "method": method,
             "complexity": complexity,
-            "pareto_front": pareto_front[:5] if pareto_front else [],
+            "all_formulas": all_formulas,
             "config": {
                 "timeout": timeout,
                 "maxsize": maxsize,
@@ -298,10 +304,10 @@ class PySRTool(BaseTool):
             parts.append(f"  R²: {result['metrics']['r2']:.6g}")
         if result.get('is_candidate'):
             parts.append("  [This formula is a valid candidate for submission]")
-        if result.get('pareto_front'):
+        if result.get('all_formulas'):
             parts.append("  Pareto front (top candidates by accuracy):")
-            for eq in result['pareto_front'][:5]:
-                parts.append(f"    - {eq['formula']} (loss={eq['loss']:.6g}, complexity={eq['complexity']})")
+            for eq in result['all_formulas'][:5]:
+                parts.append(f"    - {eq['formula']} (MSE={eq['mse']:.6g}, complexity={eq['complexity']})")
         if result.get('retry_hint'):
             parts.append(f"  ** Retry suggestion: {result['retry_hint']}")
         if result.get('exceptions'):

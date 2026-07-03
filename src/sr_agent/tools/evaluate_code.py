@@ -48,6 +48,8 @@ class EvaluateCodeTool(BaseTool):
         The code runs in a restricted sandbox, then the tool computes metrics against the target
         and returns the formatted model under the `formula` key.
 
+        This tool can return candidate formulas for submission when `y` is the target variable and `predict_code` does not depend on the target variable.
+
         Args:
             model_code: Code containing exactly one function with signature `def func(data)` plus optional top-level imports. 
                 `data` is a dictionary mapping variable names to numeric arrays, including the target variable.
