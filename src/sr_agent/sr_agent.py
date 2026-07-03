@@ -484,24 +484,23 @@ class SRAgent(FactoryMixin):
                 "your best available target formula now using the final-answer mechanism available in "
                 "this environment, with a brief justification if text is required."
             )
-        pareto_front = self.get_pareto_front(topk_records)
         pareto_front_str = []
-        for idx, item in enumerate(pareto_front, 1):
+        for idx, item in enumerate(pareto_front := self.get_pareto_front(topk_records), 1):
             if len(str(item['formula'])) <= 160:
-                formula = item['formula']
+                item_formula = item['formula']
             else:
-                formula = str(item['formula'])[:160-len('...')] + '...'
+                item_formula = str(item['formula'])[:160-len('...')] + '...'
             pareto_front_str.append(
                 f"{idx}. "
                 f"MSE={item['mse']:.6g}, "
                 f"complexity={item['complexity']}, "
-                f"formula={formula}"
+                f"formula={item_formula}"
             )
         if pareto_front_str:
             pareto_front_str = '\n'.join(pareto_front_str)
         else:
             pareto_front_str = "(No Pareto front yet, call tools that can return candidate formulas to populate it.)"
-        prompt.append({
+        buffer.append({
             "role": "user", "content": (
                 f"[Iteration status]\n"
                 f"{progress_line} {policy}\n\n"
