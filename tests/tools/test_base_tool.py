@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+import nd2py as nd
+import numpy as np
 import pytest
 
 from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolRunAbort, ToolMetadata
@@ -255,3 +257,112 @@ class TestBaseToolExportAndCall:
     def test_call_does_not_catch_tool_run_abort(self):
         with pytest.raises(ToolRunAbort, match="stop now"):
             UnitAbortTool()()
+
+    def test_result_string_is_truncated_without_mutating_raw_result(self, monkeypatch):
+        monkeypatch.setattr(UnitSampleTool, "MAX_RESULT_STR_LENGTH", 80)
+        payload = "x" * 200
+
+        result = UnitSampleTool()(required_text=payload)
+
+        assert result.result["required_text"] == payload
+        assert len(result.result_str) <= 80
+        assert "characters ignored" in result.result_str
+
+    def test_formula_normalization_rejects_oversized_input(self):
+        with pytest.raises(ValueError, match="Formula is too long"):
+            BaseTool.normalize_formula("x" * (BaseTool.MAX_FORMULA_LENGTH + 1))
+
+
+class TestBaseToolEvaluate:
+    def test_evaluates_required_symbols_and_computes_formula_complexity(self):
+        tool = UnitSampleTool(
+            data={"x": np.arange(1.0, 5.0), "y": 2 * np.arange(1.0, 5.0)},
+            target="y",
+        )
+        f = nd.parse("2*x")
+        y = nd.parse("y")
+
+        result = tool.evaluate(f=f, y=y)
+        metrics = result["metrics"]
+
+        assert metrics["rmse"] == 0.0
+        assert metrics["complexity"] == len(f)
+        assert metrics["aic"] == float("-inf")
+        assert metrics["bic"] == float("-inf")
+        assert result["formula"] == f.to_str()
+        assert result["is_candidate"] is True
+        assert result["diagnostics"]
+
+    def test_cached_arrays_avoid_symbol_evaluation(self):
+        tool = UnitSampleTool(data={}, target="missing_target")
+        f = nd.parse("missing_prediction")
+        y = nd.parse("missing_target")
+
+        result = tool.evaluate(
+            f=f,
+            y=y,
+            y_pred=np.array([1.0, 2.0]),
+            y_true=np.array([1.0, 2.0]),
+            show_diagnostics=False,
+        )
+
+        metrics = result["metrics"]
+        assert metrics["mse"] == 0.0
+        assert metrics["complexity"] == len(f)
+        assert "diagnostics" not in result
+
+    def test_cached_prediction_and_target_are_broadcast_symmetrically(self):
+        tool = UnitSampleTool(data={}, target="target")
+        f = nd.parse("prediction")
+        y = nd.parse("target")
+
+        prediction_scalar = tool.evaluate(
+            f=f, y=y, y_pred=np.array(2.0), y_true=np.array([2.0, 2.0]),
+            show_diagnostics=False,
+        )
+        target_scalar = tool.evaluate(
+            f=f, y=y, y_pred=np.array([2.0, 2.0]), y_true=np.array(2.0),
+            show_diagnostics=False,
+        )
+
+        assert prediction_scalar["metrics"]["mse"] == 0.0
+        assert target_scalar["metrics"]["mse"] == 0.0
+
+    def test_incompatible_cached_shapes_raise_clear_error(self):
+        tool = UnitSampleTool(data={})
+        with pytest.raises(ValueError, match="cannot be broadcast"):
+            tool.evaluate(
+                f=nd.parse("prediction"),
+                y=nd.parse("target"),
+                y_pred=np.ones(2),
+                y_true=np.ones(3),
+                show_diagnostics=False,
+            )
+
+    def test_aic_and_bic_use_number_of_fitted_constants(self):
+        x = np.arange(1.0, 21.0)
+        y_values = 2 * x + np.linspace(-0.2, 0.2, len(x))
+        tool = UnitSampleTool(data={"x": x, "y": y_values}, target="y")
+        f = nd.parse("2*x")
+        y = nd.parse("y")
+
+        metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["metrics"]
+        residuals = f.eval(tool.context["data"]) - y_values
+        ss_res = float(np.sum(residuals**2))
+        expected_log_likelihood = -len(x) / 2 * (
+            np.log(2 * np.pi) + np.log(ss_res / len(x)) + 1
+        )
+
+        n_parameters = 1
+        assert metrics["aic"] == pytest.approx(2 * n_parameters - 2 * expected_log_likelihood)
+        assert metrics["bic"] == pytest.approx(n_parameters * np.log(len(x)) - 2 * expected_log_likelihood)
+
+    def test_requires_nd2py_symbols(self):
+        tool = UnitSampleTool(data={})
+        with pytest.raises(TypeError, match="nd2py.Symbol"):
+            tool.evaluate(
+                f="x",
+                y=nd.parse("y"),
+                y_pred=np.array([1.0]),
+                y_true=np.array([1.0]),
+            )

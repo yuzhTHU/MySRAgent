@@ -27,6 +27,7 @@ class SINDyTool(BaseTool):
         include_trig: bool = False,
         threshold: float = 0.1,
         max_samples: int = 5000,
+        show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Run SINDy (Sparse Identification of Nonlinear Dynamics) to discover symbolic expressions from data.
         SINDy builds a library of candidate nonlinear functions and uses sparse regression (STLSQ) to find
@@ -44,6 +45,7 @@ class SINDyTool(BaseTool):
             include_trig: Whether to include sin/cos terms in the feature library. Enable this if you suspect trigonometric relationships.
             threshold: Sparsity threshold for STLSQ optimizer (0.01-1.0). Larger values produce sparser (simpler) formulas.
             max_samples: Maximum number of data samples to use for fitting (for speed). Data is subsampled if larger.
+            show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context["data"]
         y = y or self.context["target"]
@@ -55,7 +57,7 @@ class SINDyTool(BaseTool):
         threshold = max(0.01, min(threshold, 1.0))
 
         try:
-            eq_y = nd.parse(y.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+            eq_y = self.parse_formula(y)
             data_y = eq_y.eval(data).flatten()
             if not is_numeric_array(data_y):
                 raise ValueError(f"Target '{y}' did not produce numeric values.")
@@ -69,7 +71,7 @@ class SINDyTool(BaseTool):
         features = {'exprs': [], 'arrays': [], 'internal_names': [], 'original_exprs': []}
         for idx, xi in enumerate(x, 1):
             try:
-                eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+                eq_x = self.parse_formula(xi)
                 data_x = eq_x.eval(data).flatten()
                 if not is_numeric_array(data_x):
                     raise ValueError(f"Feature '{xi}' did not produce numeric values.")
@@ -100,24 +102,19 @@ class SINDyTool(BaseTool):
             formula_str = self._run_sindy(
                 X_fit, y_fit, features['internal_names'], poly_degree, include_trig, threshold
             )
+            if not formula_str:
+                raise ValueError("SINDy returned an empty formula.")
+            formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
+            eq_f = self.parse_formula(formula_str)
+            evaluation = self.evaluate(f=eq_f, y=eq_y, show_diagnostics=show_diagnostics)
         except Exception as e:
-            formula_str = "0"
+            evaluation = self.failed_evaluation(show_diagnostics=show_diagnostics)
             exceptions.append(f"SINDy fitting failed: {type(e).__name__}: {e}")
 
-        if formula_str and formula_str != "0":
-            formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
-            metrics = self.evaluate(eq=formula_str)
-            is_candidate = (y == self.context['target']) and (y not in features['original_exprs'])
-        else:
-            metrics = {"mse": float("inf")}
-            is_candidate = False
-
         return {
-            "formula": formula_str,
-            "metrics": metrics,
-            "is_candidate": is_candidate,
-            "method": "SINDy",
+            **evaluation,
             "config": {
+                "method": "SINDy",
                 "poly_degree": poly_degree,
                 "include_trig": include_trig,
                 "threshold": threshold,
@@ -224,7 +221,7 @@ class SINDyTool(BaseTool):
             expr = expr.replace("^", "**").replace("np.", "")
             restored = restored.replace(placeholders[name], f"({expr})")
         try:
-            restored = nd.parse(restored).to_str()
+            restored = self.parse_formula(restored).to_str()
         except:
             _logger.warning(f"Failed to parse restored formula {restored!r}, returning unparsed version.")
         return restored
@@ -252,7 +249,7 @@ class SINDyTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        parts = [f"SINDy result (method={result['method']}, config={result['config']}):"]
+        parts = [f"SINDy result (config={result['config']}):"]
         parts.append(f"  Formula: {result['formula']}")
         if result['metrics'].get('mse') is not None:
             parts.append(f"  MSE: {result['metrics']['mse']:.6g}")

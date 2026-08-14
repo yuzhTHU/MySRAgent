@@ -70,7 +70,7 @@ def test_call_outputs_formatted_result_only(tmp_path, capsys):
     )
 
     captured = capsys.readouterr()
-    assert captured.out.startswith("Variable 'x1':")
+    assert captured.out.startswith("Variable or expression: 'x1'")
     assert "ToolCallResult" not in captured.out
     assert captured.err == ""
 

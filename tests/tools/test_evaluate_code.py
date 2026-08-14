@@ -18,14 +18,13 @@ class TestEvaluateCodeTool:
         y = np.array([3.0, 5.0, 7.0])
 
         result = self.make_tool(X, y).execute(
-            model_code="def build_model(data):\n    return {'a': 2.0, 'b': 1.0}",
+            model_code=(
+                "def build_model(data):\n"
+                "    return {'a': 2.0, 'b': 1.0, 'description': '2.0 * x1 + 1.0'}"
+            ),
             predict_code=(
                 "def predict(data, model):\n"
                 "    return model['a'] * data['x1'] + model['b']"
-            ),
-            format_code=(
-                "def format_model(model):\n"
-                "    return f\"{model['a']} * x1 + {model['b']}\""
             ),
         )
 
@@ -39,13 +38,15 @@ class TestEvaluateCodeTool:
         y = np.array([1.0, 4.0, 9.0])
 
         result = self.make_tool(X, y).execute(
-            model_code="def build_model(data):\n    return {'power': 2}",
+            model_code=(
+                "def build_model(data):\n"
+                "    return {'power': 2, 'description': 'x1**2'}"
+            ),
             predict_code=(
                 "import numpy as np\n\n"
                 "def predict(data, model):\n"
                 "    return np.power(data['x1'], model['power'])"
             ),
-            format_code="def format_model(model):\n    return 'x1**2'",
         )
 
         assert result["formula"] == "x1**2"
@@ -60,7 +61,8 @@ class TestEvaluateCodeTool:
             predict_code="def predict(data, model):\n    return model[1] * data['x1']",
         )
 
-        assert result["formula"] == "('scale', 2.0)"
+        assert result["formula"].startswith("('scale', 2.0)")
+        assert "fallback to `str(model)`" in result["formula"]
         assert result["metrics"]["mse"] == 0.0
 
     def test_target_leakage_is_not_candidate(self):
@@ -100,9 +102,11 @@ class TestEvaluateCodeTool:
         y = np.array([0.0, 1.0])
 
         result = self.make_tool(X, y).execute(
-            model_code="def build_model(data):\n    return np.sin",
-            predict_code="def predict(data, model):\n    return model(data['x1'])",
-            format_code="def format_model(model):\n    return 'sin(x1)'",
+            model_code=(
+                "def build_model(data):\n"
+                "    return {'description': 'sin(x1)'}"
+            ),
+            predict_code="def predict(data, model):\n    return np.sin(data['x1'])",
         )
 
         assert result["metrics"]["mse"] < 1e-12

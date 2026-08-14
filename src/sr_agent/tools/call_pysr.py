@@ -30,6 +30,7 @@ class PySRTool(BaseTool):
         timeout: int = 30,
         maxsize: int = 25,
         max_samples: int = 500,
+        show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Run PySR (genetic programming symbolic regression) to evolve mathematical expressions that fit the data.
         PySR perform evolutionary search for symbolic formulas.
@@ -51,6 +52,7 @@ class PySRTool(BaseTool):
                 If PySR did not find a good formula in a previous run, increase timeout (e.g., 60 or 90) to give it more search time.
             maxsize: Maximum expression complexity in number of nodes (10-40). Larger allows more complex formulas.
             max_samples: Maximum number of data samples to use for fitting (for speed). Data is subsampled if larger.
+            show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context["data"]
         y = y or self.context["target"]
@@ -62,7 +64,7 @@ class PySRTool(BaseTool):
         timeout = max(10, min(timeout, MAX_TIMEOUT))
 
         try:
-            eq_y = nd.parse(y.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+            eq_y = self.parse_formula(y)
             data_y = eq_y.eval(data).flatten()
             if not is_numeric_array(data_y):
                 raise ValueError(f"Target '{y}' did not produce numeric values.")
@@ -76,7 +78,7 @@ class PySRTool(BaseTool):
         features = {'exprs': [], 'arrays': [], 'internal_names': [], 'original_exprs': []}
         for idx, xi in enumerate(x, 1):
             try:
-                eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+                eq_x = self.parse_formula(xi)
                 data_x = eq_x.eval(data).flatten()
                 if not is_numeric_array(data_x):
                     raise ValueError(f"Feature '{xi}' did not produce numeric values.")
@@ -104,7 +106,7 @@ class PySRTool(BaseTool):
             X_fit = X_matrix
             y_fit = y_vec
 
-        formula_str = "0"
+        formula_str = None
         pareto_front = []
         complexity = 0
         method = None
@@ -127,26 +129,27 @@ class PySRTool(BaseTool):
                 exceptions.append(f"gplearn fallback also failed: {type(e2).__name__}: {e2}")
                 method = "failed"
 
-        if formula_str and formula_str != "0":
+        if formula_str is not None:
             formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
-            metrics = self.evaluate(eq=formula_str)
-            is_candidate = (y == self.context['target']) and (y not in features['original_exprs'])
+            eq_f = self.parse_formula(formula_str)
+            evaluation = self.evaluate(f=eq_f, y=eq_y, show_diagnostics=show_diagnostics)
             all_formulas = []
             for item in pareto_front:
                 formula = self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])
                 try:
-                    all_formulas.append({"formula": formula, **self.evaluate(eq=formula)})
+                    eq_f_pareto = self.parse_formula(formula)
+                    detail = self.evaluate(f=eq_f_pareto, y=eq_y, show_diagnostics=False)
+                    all_formulas.append(detail)
                 except Exception as e:
                     exceptions.append(f"Failed to evaluate formula {formula!r}: {type(e).__name__}: {e}")
         else:
-            metrics = {"mse": float("inf")}
-            is_candidate = False
+            evaluation = self.failed_evaluation(show_diagnostics=show_diagnostics)
             all_formulas = []
 
         # Generate retry hint if result is poor and timeout can be increased
         retry_hint = None
-        mse = metrics.get("mse", float("inf"))
-        if (mse > 1e-3 or formula_str == "0") and timeout < MAX_TIMEOUT:
+        mse = evaluation["metrics"].get("mse", float("inf"))
+        if (mse > 1e-3 or formula_str is None) and timeout < MAX_TIMEOUT:
             suggested_timeout = min(timeout * 2, MAX_TIMEOUT)
             retry_hint = (
                 f"PySR did not find a good formula within {timeout}s. "
@@ -154,9 +157,7 @@ class PySRTool(BaseTool):
             )
 
         return {
-            "formula": formula_str,
-            "metrics": metrics,
-            "is_candidate": is_candidate,
+            **evaluation,
             "method": method,
             "complexity": complexity,
             "all_formulas": all_formulas,
@@ -282,7 +283,7 @@ class PySRTool(BaseTool):
             expr = expr.replace("^", "**").replace("np.", "")
             restored = restored.replace(placeholders[name], f"({expr})")
         try:
-            restored = nd.parse(restored).to_str()
+            restored = self.parse_formula(restored).to_str()
         except:
             _logger.warning(f"Failed to parse restored formula {restored!r}, returning unparsed version.")
         return restored
@@ -307,7 +308,12 @@ class PySRTool(BaseTool):
         if result.get('all_formulas'):
             parts.append("  Pareto front (top candidates by accuracy):")
             for eq in result['all_formulas'][:5]:
-                parts.append(f"    - {eq['formula']} (MSE={eq['mse']:.6g}, complexity={eq['complexity']})")
+                metrics = eq["metrics"]
+                parts.append(
+                    f"    - {eq['formula']} "
+                    f"(MSE={metrics['mse']:.6g}, "
+                    f"complexity={metrics['complexity']})"
+                )
         if result.get('retry_hint'):
             parts.append(f"  ** Retry suggestion: {result['retry_hint']}")
         if result.get('exceptions'):

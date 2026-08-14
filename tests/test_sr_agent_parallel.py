@@ -74,15 +74,17 @@ def test_update_buffer_injects_iteration_status(tmp_path):
     response_list = [("", [], {"role": "assistant", "content": ""})]
     results_list = [[]]
 
-    agent.update_buffer(buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=2, C=1)
+    updated, _ = agent.update_buffer(
+        buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=2, C=1
+    )
 
-    assert len(prompt) == len(buffer) + 1
-    assert prompt[0]["content"] == "Base system."
-    assert "refinement round L=2/5" in prompt[-1]["content"]
-    assert "After this response, 3 refinement round(s) remain" in prompt[-1]["content"]
-    assert "No Pareto front yet" in prompt[-1]["content"]
+    assert updated is buffer
+    assert len(buffer) == len(prompt) + 1
     assert buffer[0]["content"] == "Base system."
-    assert buffer[-1]["content"] == "Solve the task."
+    assert "refinement round L=2/5" in buffer[-1]["content"]
+    assert "After this response, 3 refinement round(s) remain" in buffer[-1]["content"]
+    assert "No Pareto front yet" in buffer[-1]["content"]
+    assert prompt[-1]["content"] == "Solve the task."
 
 
 def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
@@ -97,7 +99,7 @@ def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
     results_list = [[]]
 
     agent.update_buffer(buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=4, C=1)
-    final_status = prompt[-1]["content"]
+    final_status = buffer[-1]["content"]
 
     assert "final refinement round" in final_status
     assert "Submit or state your best available target formula now" in final_status

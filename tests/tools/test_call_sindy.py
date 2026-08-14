@@ -140,10 +140,21 @@ class TestSINDyTool:
 
         result = tool.execute()
 
-        assert result["formula"] == "0"
+        assert result["formula"] == "(None)"
         assert result["metrics"]["mse"] == float("inf")
         assert result["is_candidate"] is False
         assert any("SINDy fitting failed" in item for item in result["exceptions"])
+
+    def test_format_result_uses_method_from_config(self):
+        rendered = SINDyTool.format_result_dict({
+            "formula": "x",
+            "metrics": {"mse": 0.0, "r2": 1.0},
+            "is_candidate": True,
+            "config": {"method": "SINDy"},
+            "exceptions": [],
+        })
+
+        assert "config={'method': 'SINDy'}" in rendered
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
         x = np.arange(5.0)
@@ -174,6 +185,22 @@ class TestSINDyTool:
         result = tool.execute(y='"omega"')
         assert result["metrics"]["mse"] < 1e-12
         assert result["is_candidate"] is True
+
+    def test_transformed_target_is_used_for_final_evaluation(self, monkeypatch):
+        x = np.linspace(1.0, 3.0, 20)
+        tool = make_tool({"x": x}, np.exp(x))
+
+        def fake_run_sindy(self, X, y_fit, x_names, poly_degree, include_trig, threshold):
+            np.testing.assert_allclose(y_fit, x)
+            return "x1"
+
+        monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
+        result = tool.execute(x=["x"], y="log(y)")
+
+        assert result["metrics"]["mse"] < 1e-12
+        assert result["metrics"]["complexity"] == 1
+        assert result["diagnostics"]
+        assert result["is_candidate"] is False
 
     def test_metadata_exists(self):
         x = np.array([1.0])

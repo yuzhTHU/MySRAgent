@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 import traceback
+import warnings
 import numpy as np
 import nd2py as nd
 from logging import getLogger
@@ -73,6 +74,8 @@ class BaseTool(ABC, FactoryMixin):
     - format_result_dict(): 可选的类方法，用于将 execute 的结果字典格式化为字符串，供 LLM 阅读。默认实现是直接转换为字符串，不同工具可以根据需要重写此方法以提供更友好的结果展示。
     """
     metadata: ToolMetadata = None
+    MAX_FORMULA_LENGTH = 10000
+    MAX_RESULT_STR_LENGTH = 64 * 1024
 
     def __init_subclass__(cls, **kwargs):
         """在子类定义时自动设置元数据"""
@@ -122,6 +125,7 @@ class BaseTool(ABC, FactoryMixin):
             if not isinstance(result, dict):
                 _logger.critical(f"Tool {self.metadata.name} execute() should return a dict, but got {type(result)}, please check the implementation.")
             result_str = self.format_result_dict(result)
+            result_str = self.truncate_result_str(result_str)
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
@@ -132,6 +136,7 @@ class BaseTool(ABC, FactoryMixin):
             raise
         except Exception as e:
             error_msg = f"Error executing {self.metadata.name}: {log_exception(e)}"
+            error_msg = self.truncate_result_str(error_msg)
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
@@ -139,6 +144,46 @@ class BaseTool(ABC, FactoryMixin):
             }
             _logger.error(error_msg)
             return ToolCallResult(ok=False, result={'error': error_msg}, result_str=error_msg, meta_data=meta_data)
+
+    @classmethod
+    def normalize_formula(cls, eq: str, *, strip_modules: bool = True) -> str:
+        """Validate and normalize an agent-provided formula before parsing it."""
+        if not isinstance(eq, str):
+            raise TypeError(f"Formula must be a string, got {type(eq).__name__}.")
+        eq = eq.strip()
+        if len(eq) > cls.MAX_FORMULA_LENGTH:
+            raise ValueError(
+                f"Formula is too long: {len(eq)} characters; "
+                f"maximum allowed is {cls.MAX_FORMULA_LENGTH}."
+            )
+        eq = eq.replace("^", "**")
+        if strip_modules:
+            eq = eq.replace("np.", "").replace("numpy.", "").replace("math.", "")
+        return eq
+
+    @classmethod
+    def parse_formula(cls, eq: str) -> nd.Symbol:
+        """Normalize and parse a formula with the constants supported by all tools."""
+        return nd.parse(
+            cls.normalize_formula(eq),
+            variables={"pi": np.pi, "e": np.e},
+        )
+
+    @classmethod
+    def truncate_result_str(cls, text: str) -> str:
+        """Bound text sent back to the LLM while preserving the full raw result."""
+        text = str(text)
+        limit = cls.MAX_RESULT_STR_LENGTH
+        if len(text) <= limit:
+            return text
+        suffix = "... (characters ignored)"
+        keep = max(0, limit - len(suffix) - 32)
+        ignored = len(text) - keep
+        suffix = f"... ({ignored} characters ignored)"
+        keep = max(0, limit - len(suffix))
+        ignored = len(text) - keep
+        suffix = f"... ({ignored} characters ignored)"
+        return text[: max(0, limit - len(suffix))] + suffix
 
     @classmethod
     def to_tool_list(cls, tools_used: list[str] | None = None) -> list[dict]:
@@ -342,23 +387,41 @@ class BaseTool(ABC, FactoryMixin):
             return "object"
         return ""
 
-    def evaluate(self, eq: str = None, y_pred: np.ndarray = None, y_true: np.ndarray = None, complexity: int = None) -> Dict[str, float]:
-        """Evaluate predictions or a formula against the target in context.
+    def evaluate(
+        self,
+        f: nd.Symbol,
+        y: nd.Symbol,
+        y_pred: np.ndarray = None,
+        y_true: np.ndarray = None,
+        show_diagnostics: bool = True,
+    ) -> Dict[str, Any]:
+        """Evaluate a symbolic prediction against a symbolic target.
 
-        When ``eq`` is provided, the formula is evaluated with variables from
-        ``self.context["data"]`` and target name ``self.context["target"]``.
-        Legacy contexts using ``x`` and ``y`` are also supported.
+        ``f`` and ``y`` are always required and define the prediction and target.
+        Supplying ``y_pred`` and/or ``y_true`` only caches their already-computed
+        values; missing arrays are evaluated from the corresponding symbols.
+        Formula complexity is always computed as ``len(f)``.
+
+        Set ``show_diagnostics`` to include a compact residual error profile,
+        the worst samples, and the strongest residual-variable correlations.
         """
-        if eq is not None:
-            data, target = self.context['data'], self.context['target']
-            f = nd.parse(eq.replace("^", "**"))
+        if not isinstance(f, nd.Symbol) or not isinstance(y, nd.Symbol):
+            raise TypeError("f and y must both be nd2py.Symbol instances.")
+        data = self.context["data"]
+        if y_pred is None:
             y_pred = f.eval(data)
-            y_true = data[target]
-            complexity = len(f)
-        elif y_pred is None or y_true is None or complexity is None:
-            raise ValueError("Either eq or both y_pred, y_true, and complexity must be provided.")
+        if y_true is None:
+            y_true = y.eval(data)
 
-        y_pred = y_pred + 0 * y_true # broadcast to target shape if needed
+        try:
+            y_pred, y_true = np.broadcast_arrays(np.asarray(y_pred), np.asarray(y_true))
+        except ValueError as exc:
+            raise ValueError(
+                f"Prediction shape {np.shape(y_pred)} and target shape {np.shape(y_true)} "
+                "cannot be broadcast to a common shape."
+            ) from exc
+        y_pred = y_pred.astype(float, copy=False).flatten()
+        y_true = y_true.astype(float, copy=False).flatten()
 
         residuals = y_pred - y_true
         mse = float(np.mean(residuals ** 2))
@@ -371,30 +434,171 @@ class BaseTool(ABC, FactoryMixin):
         ss_res = float(np.sum(residuals ** 2))
         ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
         r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
-
-        finite = np.isfinite(y_pred) & np.isfinite(y_true)
-        y_pred_finite = y_pred[finite]
-        y_true_finite = y_true[finite]
-        if np.count_nonzero(finite) < 2:
-            pearson_r = float("nan")
-            spearman_r = float("nan")
-        elif np.std(y_pred_finite) == 0 or np.std(y_true_finite) == 0:
-            pearson_r = float("nan")
-            spearman_r = float("nan")
+        n_samples = int(y_true.size)
+        n_parameters = sum(np.size(op.value) for op in f.iter_preorder() if isinstance(op, nd.Number))
+        if np.isfinite(ss_res) and ss_res > 0:
+            log_likelihood = -n_samples / 2 * (
+                np.log(2 * np.pi) + np.log(ss_res / n_samples) + 1
+            )
+            aic = float(2 * n_parameters - 2 * log_likelihood)
+            bic = float(n_parameters * np.log(n_samples) - 2 * log_likelihood)
+        elif ss_res == 0:
+            aic = bic = float("-inf")
         else:
-            pearson_r = float(np.corrcoef(y_true_finite, y_pred_finite)[0, 1])
-            spearman_r = float(stats.spearmanr(y_true_finite, y_pred_finite).statistic)
-        return {
+            aic = bic = float("nan")
+
+        pearson_r, spearman_r = self.correlation_coefficients(y_true, y_pred)
+        metrics = {
             "mse": mse,
             "rmse": rmse,
             "mae": mae,
             "mape": mape,
             "r2": r2,
+            "aic": aic,
+            "bic": bic,
             "pearson_r": pearson_r,
             "spearman_r": spearman_r,
-            'complexity': complexity,
+            "complexity": len(f),
+        }
+        target = self.context["target"]
+        var_names = {var.name for var in f.iter_preorder() if isinstance(var, nd.Variable)}
+        is_candidate = (y.to_str() == target) and (target not in var_names)
+        evaluation = {
+            "formula": f.to_str(),
+            "metrics": metrics,
+            "is_candidate": is_candidate,
+        }
+        if show_diagnostics:
+            evaluation["diagnostics"] = self.residual_diagnostics(
+                y_true=y_true,
+                y_pred=y_pred,
+                data=self.context.get("data", {}),
+                target_expression=y.to_str(),
+            )
+        return evaluation
+
+    @staticmethod
+    def failed_evaluation(formula: str = "(None)", show_diagnostics: bool = True) -> Dict[str, Any]:
+        """Build the common result shape when a formula-producing backend fails."""
+        result = {
+            "formula": formula,
+            "metrics": {
+                "mse": float("inf"),
+                "rmse": float("inf"),
+                "mae": float("inf"),
+                "mape": float("inf"),
+                "r2": -float("inf"),
+                "aic": float("inf"),
+                "bic": float("inf"),
+                "pearson_r": -float("inf"),
+                "spearman_r": -float("inf"),
+                "complexity": float("inf"),
+            },
+            "is_candidate": False,
+        }
+        if show_diagnostics:
+            result["diagnostics"] = {}
+        return result
+
+    @classmethod
+    def residual_diagnostics(
+        cls,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        data: Dict[str, Any] = None,
+        target_expression: str = None,
+        max_samples: int = 3,
+        max_correlations: int = 5,
+    ) -> Dict[str, Any]:
+        """Return compact, high-signal diagnostics for prediction residuals."""
+        y_true = np.asarray(y_true, dtype=float).flatten()
+        y_pred = np.asarray(y_pred, dtype=float).flatten()
+        residual = y_pred - y_true
+        absolute_error = np.abs(residual)
+        finite_error = np.isfinite(residual)
+
+        target_scale = float(np.median(np.abs(y_true[np.isfinite(y_true)]))) if np.any(np.isfinite(y_true)) else 0.0
+        relative_floor = max(np.finfo(float).eps, target_scale * 1e-12)
+        relative_valid = finite_error & np.isfinite(y_true) & (np.abs(y_true) > relative_floor)
+        relative_error = np.full_like(absolute_error, np.nan, dtype=float)
+        relative_error[relative_valid] = absolute_error[relative_valid] / np.abs(y_true[relative_valid])
+
+        finite_absolute = absolute_error[finite_error]
+        finite_relative = relative_error[np.isfinite(relative_error)]
+        error_profile = {
+            "median_signed_residual": float(np.median(residual[finite_error])) if np.any(finite_error) else float("nan"),
+            "p95_absolute_error": float(np.quantile(finite_absolute, 0.95)) if finite_absolute.size else float("nan"),
+            "max_absolute_error": float(np.max(finite_absolute)) if finite_absolute.size else float("nan"),
+            "p95_relative_error": float(np.quantile(finite_relative, 0.95)) if finite_relative.size else float("nan"),
+            "max_relative_error": float(np.max(finite_relative)) if finite_relative.size else float("nan"),
+            "relative_error_defined_ratio": float(np.mean(relative_valid)),
         }
 
+        numeric_data = {}
+        for name, values in (data or {}).items():
+            array = np.asarray(values)
+            if array.size == y_true.size and np.issubdtype(array.dtype, np.number):
+                numeric_data[name] = array.flatten()
+
+        rank_score = np.where(finite_error, absolute_error, -np.inf)
+        sample_limit = max(0, int(max_samples))
+        worst_indices = (
+            np.argsort(rank_score)[-sample_limit:][::-1]
+            if sample_limit else np.array([], dtype=int)
+        )
+        worst_samples = []
+        for index in worst_indices:
+            if not np.isfinite(rank_score[index]):
+                continue
+            worst_samples.append({
+                "index": int(index),
+                "row": {name: float(values[index]) for name, values in numeric_data.items()},
+                "y_true": float(y_true[index]),
+                "y_pred": float(y_pred[index]),
+                "absolute_error": float(absolute_error[index]),
+                "relative_error": float(relative_error[index]),
+            })
+
+        correlation_arrays = dict(numeric_data)
+        if target_expression and target_expression not in correlation_arrays:
+            correlation_arrays[target_expression] = y_true
+        correlations = []
+        for name, values in correlation_arrays.items():
+            pearson, spearman = cls.correlation_coefficients(values, residual)
+            strength = max(abs(pearson), abs(spearman))
+            if np.isfinite(strength):
+                correlations.append({
+                    "variable": name,
+                    "pearson": pearson,
+                    "spearman": spearman,
+                    "strength": strength,
+                })
+        correlations.sort(key=lambda item: item["strength"], reverse=True)
+
+        return {
+            "error_profile": error_profile,
+            "worst_samples": worst_samples,
+            "strongest_residual_correlations": correlations[:max(0, int(max_correlations))],
+        }
+
+    @staticmethod
+    def correlation_coefficients(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+        """Return finite-sample Pearson and Spearman coefficients.
+
+        Undefined correlations, including constant inputs, are returned as NaN.
+        Warnings emitted for those mathematically valid edge cases are suppressed.
+        """
+        x = np.asarray(x, dtype=float).flatten()
+        y = np.asarray(y, dtype=float).flatten()
+        finite = np.isfinite(x) & np.isfinite(y)
+        if np.count_nonzero(finite) < 2:
+            return float("nan"), float("nan")
+        x, y = x[finite], y[finite]
+        with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pearson = float(np.corrcoef(x, y)[0, 1])
+            spearman = float(stats.spearmanr(x, y).statistic)
+        return pearson, spearman
 
 def is_numeric_array(data: List[Any]) -> bool:
     arr = np.asarray(data)

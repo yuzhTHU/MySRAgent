@@ -25,7 +25,17 @@ class TestStatisticsToolMetadata:
                         'Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2", "sin(y+x1)"].'
                     ),
                     "default": None,
-                }
+                },
+                "n_bins": {
+                    "type": "integer",
+                    "description": "Number of equal-width histogram bins used to summarize each distribution (1-100).",
+                    "default": 10,
+                },
+                "near_zero_threshold": {
+                    "type": "number",
+                    "description": "Absolute-value threshold used to count near-zero samples.",
+                    "default": 1e-8,
+                },
             },
             "required": [],
         }
@@ -53,7 +63,7 @@ class TestStatisticsToolExecution:
     def test_execute_analyzes_all_variables_by_default(self):
         result = self.tool.execute()
 
-        assert set(result.keys()) == {"statistics", "exceptions"}
+        assert set(result.keys()) == {"statistics", "config", "exceptions"}
         assert set(result["statistics"].keys()) == {"x1", "x2", "y"}
         assert result["exceptions"] == []
 
@@ -82,7 +92,7 @@ class TestStatisticsToolExecution:
 
         assert result.ok is True
         assert set(result.result["statistics"].keys()) == {"x1"}
-        assert "Variable 'x1'" in result.result_str
+        assert "Variable or expression: 'x1'" in result.result_str
         assert result.meta_data["tool"] == "statistics_analysis"
 
 
@@ -91,7 +101,9 @@ class TestStatisticsToolStats:
         tool = StatisticsTool(data={})
         stats = tool.get_stats(np.array([1.0, 2.0, 3.0, 4.0]))
 
-        assert stats == {
+        assert {key: stats[key] for key in [
+            "n_samples", "min", "max", "mean", "variance", "std", "median", "q1", "q3"
+        ]} == {
             "n_samples": 4,
             "min": 1.0,
             "max": 4.0,
@@ -102,6 +114,24 @@ class TestStatisticsToolStats:
             "q1": 1.75,
             "q3": 3.25,
         }
+        assert stats["negative_ratio"] == 0.0
+        assert stats["positive_ratio"] == 1.0
+        assert stats["near_zero_ratio"] == 0.0
+        assert stats["near_zero_threshold"] == 1e-8
+        assert sum(item["count"] for item in stats["distribution"]["bins"]) == 4
+
+    def test_execute_returns_sign_ratios_and_distribution_without_correlations(self):
+        x = np.array([-1.0, 0.0, 1.0, 2.0])
+        result = StatisticsTool(data={"x": x, "y": 2 * x}).execute(
+            n_bins=2,
+            near_zero_threshold=0.01,
+        )
+
+        assert "correlations" not in result
+        assert result["statistics"]["x"]["negative_ratio"] == 0.25
+        assert result["statistics"]["x"]["zero_ratio"] == 0.25
+        assert result["statistics"]["x"]["near_zero_ratio"] == 0.25
+        assert len(result["statistics"]["x"]["distribution"]["bins"]) == 2
 
     def test_get_stats_flattens_multidimensional_arrays(self):
         tool = StatisticsTool(data={})
@@ -123,59 +153,41 @@ class TestStatisticsToolStats:
 
 class TestStatisticsToolFormatting:
     def test_format_result_dict_formats_each_variable(self):
-        result = {
-            "statistics": {
-                "x1": {
-                    "n_samples": 4,
-                    "min": 1.0,
-                    "max": 4.0,
-                    "mean": 2.5,
-                    "variance": 1.25,
-                    "std": 1.11803398875,
-                    "median": 2.5,
-                    "q1": 1.75,
-                    "q3": 3.25,
-                }
-            },
-            "exceptions": [],
-        }
+        tool = StatisticsTool(data={})
+        stat = tool.get_stats(np.array([-1.0, 0.0, 1.0, 4.0]), n_bins=2, near_zero_threshold=0.01)
+        formatted = StatisticsTool.format_result_dict({"statistics": {"x1": stat}, "exceptions": []})
 
-        assert StatisticsTool.format_result_dict(result) == (
-            "Variable 'x1': n=4, min=1.0000, max=4.0000, "
-            "mean=2.5000, variance=1.2500, std=1.1180, "
-            "median=2.5000, q1=1.7500, q3=3.2500\n"
-        )
+        assert "Variable or expression: 'x1'" in formatted
+        assert "4 finite values out of 4 total samples" in formatted
+        assert "finite value ratio: 100.0%" in formatted
+        assert "minimum=-1" in formatted and "maximum=4" in formatted
+        assert "mean=1" in formatted and "median=0.5" in formatted
+        assert "variance=3.5" in formatted and "standard deviation=1.87083" in formatted
+        assert "first quartile (25%)=-0.25" in formatted
+        assert "third quartile (75%)=1.75" in formatted
+        assert "negative value ratio: 25.0%" in formatted
+        assert "exact-zero value ratio: 25.0%" in formatted
+        assert "positive value ratio: 50.0%" in formatted
+        assert "absolute value <= 0.01" in formatted
+        assert "Equal-width histogram: 2 bins" in formatted
+        assert "sample count=3 (75.0% of finite values)" in formatted
 
     def test_format_result_dict_formats_multiple_variables_in_order(self):
-        result = {
-            "statistics": {
-                "x1": {
-                    "n_samples": 1,
-                    "min": 1.0,
-                    "max": 1.0,
-                    "mean": 1.0,
-                    "variance": 0.0,
-                    "std": 0.0,
-                    "median": 1.0,
-                    "q1": 1.0,
-                    "q3": 1.0,
-                },
-                "y": {
-                    "n_samples": 1,
-                    "min": 2.0,
-                    "max": 2.0,
-                    "mean": 2.0,
-                    "variance": 0.0,
-                    "std": 0.0,
-                    "median": 2.0,
-                    "q1": 2.0,
-                    "q3": 2.0,
-                },
-            },
-            "exceptions": [],
-        }
+        tool = StatisticsTool(data={})
+        result = {"statistics": {
+            "x1": tool.get_stats(np.array([1.0]), n_bins=1),
+            "y": tool.get_stats(np.array([2.0]), n_bins=1),
+        }, "exceptions": []}
 
         formatted = StatisticsTool.format_result_dict(result)
 
-        assert formatted.splitlines()[0].startswith("Variable 'x1':")
-        assert formatted.splitlines()[1].startswith("Variable 'y':")
+        assert formatted.index("Variable or expression: 'x1'") < formatted.index("Variable or expression: 'y'")
+
+    def test_format_result_dict_includes_every_get_stats_field(self):
+        tool = StatisticsTool(data={})
+        stat = tool.get_stats(np.array([1.0, 2.0, np.nan]), n_bins=2)
+        formatted = tool.format_result_dict({"statistics": {"x": stat}, "exceptions": []})
+
+        assert "2 finite values out of 3 total samples" in formatted
+        assert "50.0% of finite values" in formatted
+        assert "Bin 1:" in formatted and "Bin 2:" in formatted

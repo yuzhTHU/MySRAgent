@@ -22,6 +22,7 @@ class PolynomialFitTool(BaseTool):
         interaction_blacklist: List[Tuple[str, str]] = None,
         interaction_whitelist: List[Tuple[str, str]] = None,
         include_bias: bool = True,
+        show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Execute polynomial fit.
 
@@ -40,6 +41,7 @@ class PolynomialFitTool(BaseTool):
                 By default, all pairs are allowed (unless in blacklist).
                 If specified, only interactions in the whitelist are generated.
             include_bias: Whether to include bias/intercept term.
+            show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context["data"]
         y = y or self.context["target"]
@@ -48,7 +50,7 @@ class PolynomialFitTool(BaseTool):
         exceptions = []
 
         try:
-            eq_y = nd.parse(y.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+            eq_y = self.parse_formula(y)
             data_y = eq_y.eval(data).flatten()
         except Exception as e:
             raise ValueError(
@@ -59,7 +61,7 @@ class PolynomialFitTool(BaseTool):
         eq_x_list = []
         for xi in x:
             try:
-                eq_x = nd.parse(xi.replace('^', '**').replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
+                eq_x = self.parse_formula(xi)
                 data_x = eq_x.eval(data).flatten()
                 if not is_numeric_array(data_x):
                     exceptions.append(f"Feature '{xi}' did not produce numeric values.")
@@ -141,50 +143,22 @@ class PolynomialFitTool(BaseTool):
             t_stats = np.full(n_params, np.nan)
             p_values = np.full(n_params, np.nan)
 
-        # 计算拟合质量指标
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((data_y - np.mean(data_y)) ** 2)
-        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        adjusted_r2 = 1 - (1 - r2) * (n - 1) / (n - p) if n > p else np.nan
-
-        # AIC 和 BIC
-        if n > p and ss_res > 0:
-            log_likelihood = -n/2 * (np.log(2 * np.pi) + np.log(ss_res / n) + 1)
-            aic = 2 * p - 2 * log_likelihood
-            bic = p * np.log(n) - 2 * log_likelihood
-        else:
-            aic = np.nan
-            bic = np.nan
-
         # 构建多项式
         polynomial_parts = [float(coef) * term for coef, term in zip(coefficients, terms) if coef != 0]
         polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else nd.parse("0")
 
-        # terms_result = []
-        # for term, coef, std_err, t_stat, p_val in zip(terms, coefficients, std_errors, t_stats, p_values):
-        #     terms_result.append({
-        #         "term": term.to_str(),
-        #         "coefficient": float(coef),
-        #         "std_error": float(std_err) if not np.isnan(std_err) else None,
-        #         "t_statistic": float(t_stat) if not np.isnan(t_stat) else None,
-        #         "p_value": float(p_val) if not np.isnan(p_val) else None,
-        #         "significant_at_0.05": bool(p_val < 0.05) if not np.isnan(p_val) else None,
-        #         "significant_at_0.01": bool(p_val < 0.01) if not np.isnan(p_val) else None,
-        #     })
+        evaluation = self.evaluate(
+            f=polynomial, 
+            y=eq_y, 
+            y_pred=y_pred, 
+            y_true=data_y,
+            show_diagnostics=show_diagnostics,
+        )
 
-        # 检查是否为有效的候选目标公式
-        is_candidate = (y == self.context['target']) and (y not in x)
-
-        results = {
-            "formula": polynomial.to_str(),
-            "metrics": self.evaluate(y_pred=y_pred, y_true=data_y, complexity=len(polynomial)) | {
-                "adjusted_r2": adjusted_r2, "aic": aic, "bic": bic,
-            },
-            # "terms": terms_result,
-            "is_candidate": is_candidate,
-            "exceptions": exceptions,
+        return {
+            **evaluation,
+            "exceptions": exceptions
         }
-        return results
 
     def _get_allowed_interactions(
         self,

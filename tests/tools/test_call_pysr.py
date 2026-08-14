@@ -13,6 +13,25 @@ def make_tool(x: dict[str, np.ndarray], y: np.ndarray) -> PySRTool:
 
 
 class TestPySRTool:
+    def test_format_result_reads_unified_pareto_metrics(self):
+        rendered = PySRTool.format_result_dict({
+            "formula": "x",
+            "metrics": {"mse": 0.0, "r2": 1.0, "complexity": 1},
+            "is_candidate": True,
+            "method": "PySR",
+            "complexity": 1,
+            "all_formulas": [{
+                "formula": "x",
+                "metrics": {"mse": 0.0, "complexity": 1},
+                "is_candidate": True,
+            }],
+            "exceptions": [],
+            "retry_hint": None,
+        })
+
+        assert "MSE=0" in rendered
+        assert "complexity=1" in rendered
+
     def test_execute_restores_feature_names_before_evaluation(self, monkeypatch):
         x = np.linspace(-2.0, 2.0, 20)
         y = 2 * x + 1
@@ -28,7 +47,7 @@ class TestPySRTool:
 
         assert result["formula"] == "2 * x + 1"
         assert result["all_formulas"][0]["formula"] == "2 * x + 1"
-        assert result["all_formulas"][0]["mse"] < 1e-12
+        assert result["all_formulas"][0]["metrics"]["mse"] < 1e-12
         assert result["metrics"]["mse"] < 1e-12
         assert result["metrics"]["r2"] == 1.0
         assert result["is_candidate"] is True
@@ -139,6 +158,24 @@ class TestPySRTool:
         result = tool.execute(binary_operators=["+", "*"], unary_operators=[], y='"omega"')
         assert result["metrics"]["mse"] < 1e-12
         assert result["is_candidate"] is True
+
+    def test_transformed_target_is_used_for_final_evaluation(self, monkeypatch):
+        x = np.linspace(1.0, 3.0, 20)
+        tool = make_tool({"x": x}, np.exp(x))
+
+        def fake_run_pysr(self, X, y_fit, x_names, binary_ops, unary_ops, timeout, maxsize):
+            np.testing.assert_allclose(y_fit, x)
+            return "x1", [], 1
+
+        monkeypatch.setattr(PySRTool, "_run_pysr", fake_run_pysr)
+        result = tool.execute(
+            binary_operators=["+"], unary_operators=[], x=["x"], y="log(y)"
+        )
+
+        assert result["metrics"]["mse"] < 1e-12
+        assert result["metrics"]["complexity"] == 1
+        assert result["diagnostics"]
+        assert result["is_candidate"] is False
 
     def test_metadata_exists(self):
         x = np.array([1.0])

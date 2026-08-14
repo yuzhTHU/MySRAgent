@@ -54,29 +54,39 @@ class MyTool(BaseTool):
 
 ## 公式与指标约定
 
-如果工具会产生公式（例如拟合、评估、变换、搜索），返回的字典中应当包含 `formula` 和 `metrics` 字段，其中：
+如果工具会产生公式（例如拟合、评估、变换、搜索），应直接使用 `self.evaluate()` 返回统一候选字典：
 - `formula` 是一个字符串，表示工具产生的公式。
-- `metrics` 是由 `self.evaluate()` 方法生成的字典，包含该公式的评估指标。
+- `metrics` 包含该公式的评估指标。
+- `is_candidate` 表示是否可参与 best formula 排名。
+- `diagnostics` 包含可选的残差诊断；关闭时为空字典。
 
 示例如下：
 ```python
-return {
-    "formula": formula_str,
-    "metrics": self.evaluate(y_pred=y_pred, y_true=y_true),
-}
+return self.evaluate(
+    f=formula_symbol,
+    y=target_symbol,
+    y_pred=y_pred,
+    y_true=y_true,
+)
 ```
 
-如果工具产生的公式有资格参与 best formula 评比，还应返回 `is_candidate: bool` 字段。
-- 该字段为 `True` 表示此公式的 `metrics` 会被 `update_topk()` 记录并参与排名。
-- 一般而言，当公式的目标变量恰为 `self.context["target"]` 且公式中不包含目标变量本身时，`is_candidate` 应为 `True`：
+`BaseTool.evaluate()` 会在目标恰为 `self.context["target"]` 且公式不包含目标变量时自动设置 `is_candidate=True`。
+特殊工具可在获得结果后覆盖字段，例如公式展示文本不是 `f.to_str()` 时：
 
 ```python
-return {
-    "formula": formula_str,
-    "metrics": self.evaluate(y_pred=y_pred, y_true=y_true),
-    "is_candidate": (y == self.context["target"]) and (y not in x_list),
-}
+result = self.evaluate(
+    f=formula_symbol,
+    y=target_symbol,
+    y_pred=y_pred,
+    y_true=y_true,
+)
+result["formula"] = custom_formula_text
+return result
 ```
+
+`f` 和 `y` 必须是 `nd2py.Symbol`。`y_pred` 与 `y_true` 是可选的求值缓存；未提供时，
+`evaluate()` 会分别调用 `f.eval(data)` 与 `y.eval(data)`。复杂度固定为 `len(f)`，不能由调用方覆盖。
+残差诊断默认开启；内部候选筛选可显式传入 `show_diagnostics=False`，最终入选公式应保留诊断。
 
 ## 错误处理
 
@@ -96,3 +106,35 @@ return {
 - `@BaseTool.register("tool_name")` 会使工具出现在 Agent 可用的工具列表中。
 - 因此，**尚未实现完善或测试不充分的工具不应注册** —— Agent 调用这类工具的成功率太低，不注册即可确保 Agent 无法使用它，避免浪费调用次数和 token。
 - 可以将 `@BaseTool.register(...)` 注释掉来暂时取消注册，待工具成熟后再启用。
+
+## TODO：统一评估数据划分模式
+
+需要评估拟合结果的工具后续应共享一个统一接口，但本轮暂不实现，以避免同时改变所有工具的契约。计划支持：
+
+- `train_equals_test`：在全部可见样本上拟合并评估，保持当前行为和向后兼容。
+- `k_fold`：默认 5 折；每折只用训练折拟合，在测试折评价，最后在全量数据上重拟合用于输出公式。
+- `out_of_domain`：按照指定变量、表达式或预定义 domain 标签切分；训练区间不得包含测试 domain。
+
+建议实现为独立的共享组件，而不是让每个工具重复写切分代码：
+
+```python
+EvaluationConfig(
+    mode="train_equals_test" | "k_fold" | "out_of_domain",
+    n_splits=5,
+    shuffle=True,
+    random_seed=0,
+    domain_expression=None,
+    domain_test_range=None,
+)
+```
+
+实施时应完成以下工作：
+
+1. 在 `BaseTool` 附近增加只负责生成索引的 splitter；它不得接触或泄漏隐藏 benchmark test set。
+2. 为拟合工具定义 `fit(train_indices)` 与 `predict(test_indices)` 的内部协议，并统一聚合每折指标、均值、标准差和最差折。
+3. 明确区分 `selection_metrics`、交叉验证指标和全量重拟合后的 `refit_metrics`，避免用测试折选择常数后再次报告同一测试折。
+4. OOD 模式要求显式提供 domain 变量/表达式及边界；支持低端、高端和区间外测试，并汇报训练、测试范围与有限覆盖率。
+5. 保持 `is_candidate` 只对应最终全量重拟合公式；交叉验证中的临时公式不进入 top-k。
+6. 先迁移 `polynomial_fit`、`power_law_fit`、`rational_fit`、`constant_fit`，再迁移 SINDy/PySR；为旧调用保留默认模式。
+
+注意：这里的 “test” 是从 Agent 可见训练数据内部划分出的验证折，不得读取基准测试集或 OOD 隐藏答案。统一接口落地前，各工具现有的内部 holdout 参数仍保持局部实现。

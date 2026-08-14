@@ -36,11 +36,11 @@ class EvaluateCodeTool(BaseTool):
         self,
         model_code: str,
         predict_code: str,
-        format_code: str = None,
         y: str = None,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
         output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT_BYTES,
+        show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Evaluate a Python-defined candidate model on the current dataset.
 
@@ -53,50 +53,36 @@ class EvaluateCodeTool(BaseTool):
         Args:
             model_code: Code containing exactly one function with signature `def func(data)` plus optional top-level imports. 
                 `data` is a dictionary mapping variable names to numeric arrays, including the target variable.
-                This function should return a model object that will be passed to `predict_code` and `format_code`.
+                This function should return a Python dict as the fitted `model`, which will be passed to `predict_code` and `format_code`.
+                The returned model should contain a `description` field that identifies the model with a concise mathematical formula (e.g., y = aₖx² + bₖx + cₖ, yᵢ = MLP1(xᵢ) + Σ Aᵢⱼ MLP2(xᵢ, xⱼ)).
             predict_code: Code containing exactly one function with signature `def func(data, model)` plus optional top-level imports.
                 The function should return the predicted value for the target `y`, 
                 which must be array-like and compatible with the target shape.
-            format_code: Code containing exactly one function with signature `def func(model)` plus optional top-level imports. 
-                The function should return a concise readable string representation of the model.
-                This argument is optional; omit it unless a custom display string is needed.
-                If omitted, uses `str(model)` or `repr(model)` as a fallback.
             y: Target variable name. Use target variable by default.
                 Expressions are also supported, e.g., "log(y)", "y - x1"
             timeout_seconds: Wall-clock timeout in seconds. The effective value is capped.
             memory_limit_mb: Address-space memory limit in MB. The effective value is capped.
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
+            show_diagnostics: Whether metrics should include compact residual diagnostics.
         """
         data = self.context['data']
         y = y or self.context['target']
         y = y.strip().strip('"').strip("'")
-        eq_y = nd.parse(
-            y.replace("^", "**").replace('np.', '').replace('math.', ''),
-            variables={'pi': np.pi, 'e': np.e},
-        )
+        eq_y = self.parse_formula(y)
         y_true = eq_y.eval(data)
 
-        format_code = format_code or (
-            f"def format_code(model):\n"
-            f"    try:\n"
-            f"        return str(model)\n"
-            f"    except Exception:\n"
-            f"        return repr(model)\n"
-        )
         timeout_seconds = CodeExecutorTool.bounded_int(timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS)
         memory_limit_mb = CodeExecutorTool.bounded_int(memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB)
         output_limit_bytes = CodeExecutorTool.bounded_int(output_limit_bytes, self.DEFAULT_OUTPUT_LIMIT_BYTES, 1024, self.MAX_OUTPUT_LIMIT_BYTES)
 
         prepared_model_code, model_func_name = self.prepare_function_code(model_code, ("data",), "model_code")
         prepared_predict_code, predict_func_name = self.prepare_function_code(predict_code, ("data", "model"), "predict_code")
-        prepared_format_code, format_func_name = self.prepare_function_code(format_code, ("model",), "format_code")
 
         mp_context = mp.get_context("spawn") if os.name == "nt" else mp.get_context("fork")
         result_queue = mp_context.Queue(maxsize=1)
         process = mp_context.Process(target=self.sandbox_worker, args=(
             prepared_model_code, model_func_name,
             prepared_predict_code, predict_func_name,
-            prepared_format_code, format_func_name,
             self.context['data'], self.context['target'],
             timeout_seconds, memory_limit_mb, output_limit_bytes,
             result_queue,
@@ -141,11 +127,20 @@ class EvaluateCodeTool(BaseTool):
             raise Exception(f"Sandbox subprocess did not return result and has exited with code {process.exitcode}.")
 
         y_pred = np.asarray(result["y_pred"])
-        return {
-            "formula": result["model_str"],
-            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true, complexity=len(model_code) + len(predict_code)),
-            "is_candidate": result["is_candidate"] and (y == self.context['target']),
-        }
+        opaque_f = nd.parse("__code_model_prediction__")
+        evaluation = self.evaluate(
+            f=opaque_f, 
+            y=eq_y, 
+            y_pred=y_pred, 
+            y_true=y_true,
+            show_diagnostics=show_diagnostics,
+        )
+        evaluation["formula"] = result["model_str"]
+        evaluation['metrics']['complexity'] = len(model_code) + len(predict_code)
+        evaluation['metrics'].pop('aic')
+        evaluation['metrics'].pop('bic')
+        evaluation["is_candidate"] = evaluation["is_candidate"] and result["is_candidate"]
+        return evaluation
 
     @classmethod
     def prepare_function_code(cls, code: str, expected_params: tuple[str, ...], code_name: str) -> tuple[str, str]:
@@ -183,8 +178,6 @@ class EvaluateCodeTool(BaseTool):
         model_func_name: str,
         predict_code: str,
         predict_func_name: str,
-        format_code: str,
-        format_func_name: str,
         data: Dict[str, Any],
         target: str,
         timeout_seconds: int,
@@ -219,7 +212,7 @@ class EvaluateCodeTool(BaseTool):
 
                 model = cls.call_code_function(model_code, model_func_name, (data,), "<evaluate-code-model>", safe_globals)
                 y_pred = cls.call_code_function(predict_code, predict_func_name, (data, model), "<evaluate-code-predict>", safe_globals)
-                model_str = cls.call_code_function(format_code, format_func_name, (model,), "<evaluate-code-format>", safe_globals)
+                model_str = cls.format_model(model)
 
                 try:
                     candidate_data = dict(data)
@@ -257,3 +250,13 @@ class EvaluateCodeTool(BaseTool):
         if function is before or not callable(function):
             raise ValueError(f"{filename} must define callable function `{function_name}`.")
         return function(*inputs)
+
+    @classmethod
+    def format_model(cls, model) -> str:
+        try:
+            return model['description']
+        except Exception:
+            try:
+                return f"{str(model)} (`description` is not provided in model dict, fallback to `str(model)`)"
+            except Exception:
+                return f"{repr(model)} (`description` is not provided in model dict, fallback to `repr(model)`)"

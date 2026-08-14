@@ -18,6 +18,7 @@ class EvaluateTool(BaseTool):
         f: str,
         y: str = None,
         fit: bool = False,
+        show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Evaluate formula fit quality to data.
 
@@ -29,13 +30,15 @@ class EvaluateTool(BaseTool):
             y: Target variable name. Use target variable by default.
                 Expressions are also supported, e.g., "log(y)", "y - x1"
             fit: Whether to optimize formula parameters using BFGS algorithm.
+            show_diagnostics: Whether metrics should include a compact residual error profile,
+                the worst samples, and the strongest residual-variable correlations.
         """
         data = self.context['data']
         y = y or self.context['target']
         y = y.strip().strip('"').strip("'")
-        eq_y = nd.parse(y.replace("^", "**").replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
-        eq_f = nd.parse(f.replace("^", "**").replace('np.', '').replace('math.', ''), variables={'pi': np.pi, 'e': np.e})
-        y_true = eq_y.eval(data)
+        eq_y = self.parse_formula(y)
+        eq_f = self.parse_formula(f)
+        y_true = np.asarray(eq_y.eval(data)).flatten()
 
         variables = [var for var in eq_f.iter_preorder() if isinstance(var, nd.Variable)]
         for var in variables:
@@ -46,17 +49,12 @@ class EvaluateTool(BaseTool):
         if fit:
             nd.BFGSFit(eq_f).fit(data, y_true)
 
-        y_pred = eq_f.eval(data)
-
-        # 检查是否为有效的候选目标公式
-        variables = set(var.name for var in eq_f.iter_preorder() if isinstance(var, nd.Variable))
-        is_candidate = (y == self.context['target']) and (y not in variables)
-
-        return {
-            "formula": eq_f.to_str(),
-            "metrics": self.evaluate(y_pred=y_pred, y_true=y_true, complexity=len(f)),
-            "is_candidate": is_candidate,
-        }
+        return self.evaluate(
+            f=eq_f,
+            y=eq_y,
+            y_true=y_true,
+            show_diagnostics=show_diagnostics,
+        )
 
 @BaseTool.register('submit_formula')
 class SubmitFormulaTool(EvaluateTool):

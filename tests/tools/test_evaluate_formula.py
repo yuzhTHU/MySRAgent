@@ -71,6 +71,24 @@ class TestEvaluateTool:
 
         assert result["metrics"]["mse"] == 0.0
 
+    def test_scalar_prediction_broadcasts_to_vector_target(self):
+        x = np.arange(4.0)
+        y = np.ones(4)
+
+        result = self.make_tool({"x": x}, y).execute("1")
+
+        assert result["metrics"]["mse"] == 0.0
+
+    def test_scalar_target_broadcasts_to_vector_prediction(self):
+        x = np.arange(4.0)
+        y = np.arange(4.0)
+        tool = self.make_tool({"x": x}, y)
+
+        result = tool.execute("0*x + 1", y="1")
+
+        assert result["metrics"]["mse"] == 0.0
+        assert result["diagnostics"]["error_profile"]["max_absolute_error"] == 0.0
+
     def test_invalid_formula(self):
         """测试无效公式。"""
         X = {"x1": np.array([1.0, 2.0, 3.0])}
@@ -110,6 +128,48 @@ class TestEvaluateTool:
         assert "rmse" in result["metrics"]
         assert "mae" in result["metrics"]
         assert "r2" in result["metrics"]
+
+    def test_optional_residual_diagnostics(self):
+        x1 = np.array([0.0, 1.0, 2.0, 3.0])
+        x2 = np.array([4.0, 3.0, 2.0, 1.0])
+        y = 2 * x1 + np.array([0.0, 0.0, 1.0, -2.0])
+        tool = self.make_tool({"x1": x1, "x2": x2}, y)
+
+        default_result = tool.execute("2*x1")
+        concise = tool.execute("2*x1", show_diagnostics=False)
+        detailed = tool.execute("2*x1", show_diagnostics=True)
+
+        assert default_result["diagnostics"]
+        assert "diagnostics" not in concise
+        diagnostics = detailed["diagnostics"]
+        assert set(diagnostics) == {
+            "error_profile", "worst_samples", "strongest_residual_correlations"
+        }
+        assert diagnostics["error_profile"]["max_absolute_error"] == 2.0
+        assert len(diagnostics["worst_samples"]) == 3
+        assert diagnostics["worst_samples"][0]["index"] == 3
+        correlation_names = {
+            item["variable"] for item in diagnostics["strongest_residual_correlations"]
+        }
+        assert correlation_names == {"x1", "x2", "y"}
+
+    def test_residual_diagnostics_is_implemented_by_base_tool(self):
+        assert "residual_diagnostics" in BaseTool.__dict__
+        assert "residual_diagnostics" not in EvaluateTool.__dict__
+
+    def test_transformed_target_is_included_once_in_residual_correlations(self):
+        x = np.arange(1.0, 5.0)
+        y = np.exp(x)
+        diagnostics = EvaluateTool(data={"x": x, "y": y}, target="y").execute(
+            "0.5*x",
+            y="log(y)",
+            show_diagnostics=True,
+        )["diagnostics"]
+
+        names = {
+            item["variable"] for item in diagnostics["strongest_residual_correlations"]
+        }
+        assert names == {"x", "y", "log(y)"}
 
     def test_metadata_exists(self):
         """测试元数据存在。"""
