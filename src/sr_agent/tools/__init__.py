@@ -6,10 +6,14 @@
 
 from .base_tool import BaseTool, ToolMetadata, ToolCallResult, ToolRunAbort
 from .statistics_analysis import StatisticsTool
+from .relationship_analysis import RelationshipAnalysisTool
 from .evaluate_formula import EvaluateTool, SubmitFormulaTool
 from .evaluate_code import EvaluateCodeTool
 from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
+from .power_law_fit import PowerLawFitTool
+from .rational_fit import RationalFitTool
+from .constant_fit import ConstantFitTool
 from .code_executor import CodeExecutorTool
 from .workspace_code_executor import WorkspaceCodeExecutorTool
 from .read_skill import ReadSkill
@@ -27,11 +31,15 @@ __all__ = [
     "ToolCallResult",
     "ToolRunAbort",
     "StatisticsTool",
+    "RelationshipAnalysisTool",
     "EvaluateTool",
     "SubmitFormulaTool",
     "EvaluateCodeTool",
     "LLMTool",
     "PolynomialFitTool",
+    "PowerLawFitTool",
+    "RationalFitTool",
+    "ConstantFitTool",
     "CodeExecutorTool",
     "WorkspaceCodeExecutorTool",
     "ReadSkill",
