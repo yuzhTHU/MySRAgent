@@ -50,9 +50,22 @@ class EditSkill(BaseTool):
             new_content, exceptions = self._apply_replacements(old_content, replacements)
             skill.path.write_text(new_content, encoding="utf-8")
             return {
-                "message": f"Edited skill {name!r} with {len(replacements)} replacement(s).",
+                "skill": name,
+                "requested_replacements": len(replacements),
+                "applied_replacements": len(replacements) - len(exceptions),
                 "exceptions": exceptions,
             }
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        text = (
+            f"Edited skill {result['skill']!r}: "
+            f"Detected {result['requested_replacements']} requested replacements, "
+            f"applied {result['applied_replacements']} replacements."
+        )
+        if result["exceptions"]:
+            text += "\nExceptions: " + "; ".join(result["exceptions"])
+        return text
 
     def _parse_patch(self, patch: str) -> List[Tuple[str, str]]:
         lines = patch.splitlines(keepends=True)

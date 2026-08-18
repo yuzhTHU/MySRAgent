@@ -30,7 +30,7 @@ class EvaluateTool(BaseTool):
             y: Target variable name. Use target variable by default.
                 Expressions are also supported, e.g., "log(y)", "y - x1"
             fit: Whether to optimize formula parameters using BFGS algorithm.
-            show_diagnostics: Whether metrics should include a compact residual error profile,
+            show_diagnostics: Whether the result should include a compact residual error profile,
                 the worst samples, and the strongest residual-variable correlations.
         """
         data = self.context['data']
@@ -49,12 +49,23 @@ class EvaluateTool(BaseTool):
         if fit:
             nd.BFGSFit(eq_f).fit(data, y_true)
 
-        return self.evaluate(
+        evaluation = self.evaluate(
             f=eq_f,
             y=eq_y,
             y_true=y_true,
             show_diagnostics=show_diagnostics,
         )
+        return {
+            **evaluation,
+            "parameters_optimized": fit,
+        }
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        text = cls.format_evaluation_result(result, title="Evaluated formula")
+        if result.get("parameters_optimized"):
+            text += "\nNumeric parameters were optimized on these same samples; the reported fit is in-sample."
+        return text
 
 @BaseTool.register('submit_formula')
 class SubmitFormulaTool(EvaluateTool):

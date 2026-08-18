@@ -22,11 +22,12 @@ class TestPolynomialFitTool:
         result = self.tool.execute(max_degree=1)
 
         assert set(result.keys()) == {
-            "formula", "metrics", "is_candidate", "diagnostics", "exceptions"
+            "formula", "metrics", "is_candidate", "diagnostics", "fit_configuration", "exceptions"
         }
         assert isinstance(result["formula"], str)
         assert isinstance(result["is_candidate"], bool)
         assert result["exceptions"] == []
+        assert result["fit_configuration"]["input_features"] == ["x"]
         assert result["metrics"]["r2"] > 0.99
         assert result["metrics"]["rmse"] < 1e-8
         assert "aic" in result["metrics"]

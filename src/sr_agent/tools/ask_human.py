@@ -24,10 +24,13 @@ class AskHumanTool(BaseTool):
                 about what direction to explore next. A human expert will read this summary and reply with guidance.
         """
         if (callback := self.context.get("human_input_callback")) is None:
-            return {"human_response": "(No human available.)"}
+            return {"human_available": False, "human_response": None}
         else:
-            return {"human_response": callback(message)}
+            return {"human_available": True, "human_response": callback(message)}
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        return f"Human response: {result['human_response']}"
+        if not result["human_available"]:
+            return "No human-input channel is available in this run; continue without a response or use another safe approach."
+        else:
+            return f"Human response: {result['human_response']}"

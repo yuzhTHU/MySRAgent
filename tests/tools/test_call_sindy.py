@@ -148,13 +148,14 @@ class TestSINDyTool:
     def test_format_result_uses_method_from_config(self):
         rendered = SINDyTool.format_result_dict({
             "formula": "x",
-            "metrics": {"mse": 0.0, "r2": 1.0},
+            "metrics": {"mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1},
             "is_candidate": True,
-            "config": {"method": "SINDy"},
+            "config": {"method": "SINDy", "poly_degree": 2, "include_trig": False, "threshold": 0.1},
             "exceptions": [],
         })
 
-        assert "config={'method': 'SINDy'}" in rendered
+        assert "polynomial degree up to 2" in rendered
+        assert "not proof" in rendered
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
         x = np.arange(5.0)

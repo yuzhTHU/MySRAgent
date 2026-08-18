@@ -16,20 +16,21 @@ class TestPySRTool:
     def test_format_result_reads_unified_pareto_metrics(self):
         rendered = PySRTool.format_result_dict({
             "formula": "x",
-            "metrics": {"mse": 0.0, "r2": 1.0, "complexity": 1},
+            "metrics": {"mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1},
             "is_candidate": True,
             "method": "PySR",
-            "complexity": 1,
+            "backend_complexity": 1,
             "all_formulas": [{
                 "formula": "x",
-                "metrics": {"mse": 0.0, "complexity": 1},
+                "metrics": {"mse": 0.0, "rmse": 0.0, "complexity": 1},
                 "is_candidate": True,
             }],
             "exceptions": [],
             "retry_hint": None,
         })
 
-        assert "MSE=0" in rendered
+        assert "RMSE=0" in rendered
+        assert "not proof" in rendered
         assert "complexity=1" in rendered
 
     def test_execute_restores_feature_names_before_evaluation(self, monkeypatch):

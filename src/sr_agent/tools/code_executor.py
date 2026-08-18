@@ -578,6 +578,18 @@ class CodeExecutorTool(BaseTool):
             }
 
     @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        parts = []
+        if result["stdout"]:
+            parts.append(result["stdout"].rstrip())
+        if result["stderr"]:
+            parts.append(f"Program stderr:\n{result["stderr"].rstrip()}")
+        if not parts:
+            parts.append("Program completed successfully and printed no output.")
+        parts.append(f"(Execution duration: {result['duration']:.3f} seconds.)")
+        return "\n".join(parts)
+
+    @classmethod
     def extract_code(cls, code: str) -> str:
         raw_code = str(code).strip()
         if "```python" in raw_code:

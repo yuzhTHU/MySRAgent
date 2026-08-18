@@ -128,7 +128,8 @@ class TestPropertyPredictorExecution:
         result = tool()
         assert result.ok is True
         assert result.meta_data["tool"] == "predict_property"
-        assert "Property Prediction Results" in result.result_str
+        assert "Heuristic neural-network property predictions" in result.result_str
+        assert "not statistical proof" in result.result_str
 
     def test_format_result_dict(self, simple_data, fake_checkpoint, fake_model):
         tool = PropertyPredictorTool(data=simple_data, target="y")

@@ -16,8 +16,8 @@ class TestAskHumanTool:
         """无回调时返回默认消息。"""
         tool = AskHumanTool()
         result = tool.execute("What should I do next?")
-        assert "human_response" in result
-        assert "No human available" in result["human_response"]
+        assert result == {"human_available": False, "human_response": None}
+        assert "No human-input channel" in tool.format_result_dict(result)
 
     def test_with_callback(self):
         """有回调时正确调用并返回结果。"""
@@ -29,6 +29,7 @@ class TestAskHumanTool:
 
         tool = AskHumanTool(human_input_callback=mock_callback)
         result = tool.execute("Best MSE=0.01. What formula structure?")
+        assert result["human_available"] is True
         assert result["human_response"] == "Try sin(x1 + x2)"
         assert len(responses) == 1
         assert "Best MSE=0.01" in responses[0]
@@ -47,7 +48,7 @@ class TestAskHumanTool:
 
     def test_format_result_dict(self):
         """测试结果格式化。"""
-        result = {"human_response": "Use polynomial features"}
+        result = {"human_available": True, "human_response": "Use polynomial features"}
         formatted = AskHumanTool.format_result_dict(result)
         assert "Use polynomial features" in formatted
 

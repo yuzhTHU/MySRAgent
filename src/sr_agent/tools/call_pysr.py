@@ -159,7 +159,7 @@ class PySRTool(BaseTool):
         return {
             **evaluation,
             "method": method,
-            "complexity": complexity,
+            # "backend_complexity": complexity,
             "all_formulas": all_formulas,
             "config": {
                 "timeout": timeout,

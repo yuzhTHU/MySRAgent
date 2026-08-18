@@ -24,7 +24,7 @@ class TestCreateSkillTool:
         skill_path = tmp_path / "skills" / "example-skill" / "SKILL.md"
         assert result["success"] is True
         assert result["name"] == "example-skill"
-        assert result["path"] == str(skill_path)
+        assert result["readonly"] is False
         assert skill_path.exists()
         assert skill_path.read_text(encoding="utf-8").startswith("---\n")
 
@@ -154,8 +154,9 @@ class TestEditSkillTool:
         skill_path = tmp_path / "skills" / "editable-skill" / "SKILL.md"
         content = skill_path.read_text(encoding="utf-8")
 
-        assert result["message"] == "Edited skill 'editable-skill' with 1 replacement(s)."
-        assert "exceptions" in result
+        assert result["skill"] == "editable-skill"
+        assert result["applied_replacements"] == 1
+        assert result["warnings"] == []
         assert "New text." in content
         assert "Old text." not in content
 
@@ -216,8 +217,8 @@ class TestEditSkillTool:
             ),
         )
 
-        assert result["exceptions"]
-        assert "matched more than once" in result["exceptions"][0]
+        assert result["applied_replacements"] == 0
+        assert "matched more than once" in result["warnings"][0]
 
     def test_execute_rejects_missing_search_marker(self, tmp_path: Path):
         create_tool = CreateSkill(skills_dir=tmp_path / "skills")

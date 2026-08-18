@@ -70,6 +70,13 @@ class CreateSkill(BaseTool):
         return {
             "success": True,
             "name": name,
-            "path": str(skill_path),
-            "message": f"Skill created: {name}",
+            "readonly": readonly,
         }
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        access = "read-only" if result["readonly"] else "editable"
+        return (
+            f"Created {access} skill {result['name']!r}. "
+            f"Use read_skill to inspect its saved instructions."
+        )
