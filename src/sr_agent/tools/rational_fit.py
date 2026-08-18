@@ -154,8 +154,12 @@ class RationalFitTool(BaseTool):
             if len(alternatives) >= top_k:
                 break
         return final["evaluation"] | {
-            "metrics": final["evaluation"]["metrics"] | {
-                "valid_sample_ratio": final["valid_sample_ratio"],
+            "data_split_results": final["evaluation"]["data_split_results"] | {
+                "train": final["evaluation"]["data_split_results"]["train"] | {
+                    "metrics": final["evaluation"]["data_split_results"]["train"]["metrics"] | {
+                        "valid_sample_ratio": final["valid_sample_ratio"],
+                    },
+                },
             },
             "selected_polynomial_degrees": {
                 "numerator_degree": selected["numerator_degree"],
@@ -216,13 +220,16 @@ class RationalFitTool(BaseTool):
         formula_symbol = self.parse_formula(formula)
         abs_den = np.abs(denominator[np.isfinite(denominator)])
         quantiles = np.quantile(abs_den, [0, 0.01]).tolist() if len(abs_den) else [float("nan")] * 2
+        validation_metrics = self.calculate_metrics(
+            formula_symbol, target[validation], prediction[validation]
+        )
         validation_evaluation = self.evaluate(
-            f=formula_symbol, y=y_symbol, y_pred=prediction[validation], y_true=target[validation],
+            f=formula_symbol, y=y_symbol,
             show_diagnostics=show_diagnostics,
         )
         return {
             "formula": formula,
-            "validation_rmse": validation_evaluation["metrics"]["rmse"],
+            "validation_rmse": validation_metrics["rmse"],
             "evaluation": validation_evaluation,
             "complexity": model["complexity"], "matrix_rank": model["rank"],
             "valid_sample_ratio": float(np.mean(np.isfinite(prediction))),
@@ -238,11 +245,9 @@ class RationalFitTool(BaseTool):
         safety = result["denominator_safety_on_observed_samples"]
         stability = result["heldout_rmse_across_subsamples"]
         lines = [
-            f"Best fitted rational formula: {result['formula']}",
+            cls.format_evaluation_result(result, title="Best fitted rational formula"),
             f"Selected structure: numerator polynomial degree {degrees['numerator_degree']}; "
             f"denominator polynomial degree {degrees['denominator_degree']}.",
-            f"Fit quality on all usable samples: RMSE={result['metrics']['rmse']:.6g}, "
-            f"R²={result['metrics']['r2']:.6g}, formula complexity={result['metrics']['complexity']}.",
             f"Denominator safety on observed samples: minimum |denominator|="
             f"{safety['minimum_absolute_denominator']:.6g}; 1st percentile="
             f"{safety['first_percentile_absolute_denominator']:.6g}. "

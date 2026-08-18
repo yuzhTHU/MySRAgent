@@ -108,10 +108,14 @@ class SearchRecordWriter:
         for tool_call, call_result in zip(tool_calls, results):
             if not call_result.ok:
                 continue
-            if (metrics := call_result.result.get("metrics")) is None:
+            split_results = call_result.result.get("data_split_results", {})
+            split_name = "validation" if "validation" in split_results else "train"
+            metrics = split_results.get(split_name, {}).get("metrics")
+            if metrics is None:
                 continue
             record = {
                 "formula": call_result.result.get("formula"),
+                "split": split_name,
                 "rmse": metrics.get("rmse"),
                 "mse": metrics.get("mse"),
                 "mae": metrics.get("mae"),

@@ -42,6 +42,10 @@ class SRAgentInteractive(SRAgent):
         max_restart_loop: int = 1,
         restart_top_k: int = 1,
         max_workers: int = 0,
+        validation_fraction: float = 0.2,
+        split_random_state: int = 42,
+        ranking_metric: str = "mse",
+        larger_is_better: bool = False,
         use_workspace: bool = False,
         workspace_files: List[str | Path] | None = None,
         human_input_callback: Optional[Callable[[str], str]] = None,
@@ -61,6 +65,10 @@ class SRAgentInteractive(SRAgent):
             max_restart_loop: 重启次数（R）。
             restart_top_k: 重启时注入历史最佳结果数量。
             max_workers: 并行工作进程数（0 表示不并行）。
+            validation_fraction: 验证集比例。
+            split_random_state: 数据划分随机种子。
+            ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
+            larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
             use_workspace: 是否使用工作区。
             workspace_files: 初始化到工作区的文件/目录路径列表。
             human_input_callback: 人类输入回调函数。默认 None 时使用 input()。
@@ -84,6 +92,10 @@ class SRAgentInteractive(SRAgent):
             max_restart_loop=max_restart_loop,
             restart_top_k=restart_top_k,
             max_workers=max_workers,
+            validation_fraction=validation_fraction,
+            split_random_state=split_random_state,
+            ranking_metric=ranking_metric,
+            larger_is_better=larger_is_better,
         )
 
         # 工作区
@@ -115,13 +127,16 @@ class SRAgentInteractive(SRAgent):
         if not isinstance(y, dict):
             y = {"target": y}
 
+        train_data, validation_data = self._split_data(X, y)
+
         with Workspace(self.workspace_files, self.save_path) as workspace:
             _logger.note(f"Workspace initialized at: {workspace.path}")
 
             ## 实例化工具和 LLM API
             tool_context = {
-                "data": X | y,
+                "data": train_data,
                 "target": next(iter(y)),
+                "evaluation_data": validation_data,
                 "workspace": workspace if self.use_workspace else None,
                 "workspace_dir": str(workspace.path) if self.use_workspace else None,
                 "human_input_callback": self.human_input_callback,
@@ -157,7 +172,7 @@ class SRAgentInteractive(SRAgent):
                     # 用平凡结果或者历史最佳结果构建新的 initial prompt
                     restart_records = heapq.nsmallest(self.restart_top_k, topk_records)
                     initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
-                    initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, record in restart_records}
+                    initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, _, record in restart_records}
                     self.named_timer.add('build_initial_prompt')
 
                     for C in range(1, self.global_width + 1):  # C 次独立重复对话
@@ -284,7 +299,7 @@ class SRAgentInteractive(SRAgent):
                 "\n--- Previously Explored Formulas (from best to worst) ---\n"
                 "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
             )
-            for priority, sequence, record in restart_records:
+            for priority, complexity, sequence, record in restart_records:
                 formula = record.get('formula', 'N/A')
                 mse = record.get('mse', float('inf'))
                 r2 = record.get('r2', None)

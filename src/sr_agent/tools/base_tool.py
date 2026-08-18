@@ -387,32 +387,14 @@ class BaseTool(ABC, FactoryMixin):
             return "object"
         return ""
 
-    def evaluate(
-        self,
-        f: nd.Symbol,
-        y: nd.Symbol,
-        y_pred: np.ndarray = None,
-        y_true: np.ndarray = None,
-        show_diagnostics: bool = True,
-    ) -> Dict[str, Any]:
-        """Evaluate a symbolic prediction against a symbolic target.
+    @classmethod
+    def calculate_metrics(cls, f: nd.Symbol, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+        """Calculate metrics for already-computed target and prediction arrays.
 
-        ``f`` and ``y`` are always required and define the prediction and target.
-        Supplying ``y_pred`` and/or ``y_true`` only caches their already-computed
-        values; missing arrays are evaluated from the corresponding symbols.
-        Formula complexity is always computed as ``len(f)``.
-
-        Set ``show_diagnostics`` to include a compact residual error profile,
-        the worst samples, and the strongest residual-variable correlations.
+        This low-level helper is intentionally separate from :meth:`evaluate` so
+        code-defined models can supply predictions produced outside nd2py while
+        still using exactly the same metric definitions.
         """
-        if not isinstance(f, nd.Symbol) or not isinstance(y, nd.Symbol):
-            raise TypeError("f and y must both be nd2py.Symbol instances.")
-        data = self.context["data"]
-        if y_pred is None:
-            y_pred = f.eval(data)
-        if y_true is None:
-            y_true = y.eval(data)
-
         try:
             y_pred, y_true = np.broadcast_arrays(np.asarray(y_pred), np.asarray(y_true))
         except ValueError as exc:
@@ -447,8 +429,8 @@ class BaseTool(ABC, FactoryMixin):
         else:
             aic = bic = float("nan")
 
-        pearson_r, spearman_r = self.correlation_coefficients(y_true, y_pred)
-        metrics = {
+        pearson_r, spearman_r = cls.correlation_coefficients(y_true, y_pred)
+        return {
             "mse": mse,
             "rmse": rmse,
             "mae": mae,
@@ -460,45 +442,157 @@ class BaseTool(ABC, FactoryMixin):
             "spearman_r": spearman_r,
             "complexity": len(f),
         }
+
+    def evaluate(
+        self,
+        f: nd.Symbol,
+        y: nd.Symbol,
+        show_diagnostics: bool = True,
+    ) -> Dict[str, Any]:
+        """Evaluate a symbolic prediction against a symbolic target.
+
+        ``f`` and ``y`` define the prediction and target.
+        Formula complexity is computed as ``len(f)``.
+
+        Set ``show_diagnostics`` to include a compact residual error profile,
+        the worst samples, and the strongest residual-variable correlations.
+        """
+        if not isinstance(f, nd.Symbol) or not isinstance(y, nd.Symbol):
+            raise TypeError("f and y must both be nd2py.Symbol instances.")
+
+        data_split_results = {
+            'train': {'metrics': None, 'diagnostics': None},
+            'validation': {'metrics': None, 'diagnostics': None},
+        }
+        if data := self.context.get("data"):
+            y_pred = f.eval(data)
+            y_true = y.eval(data)
+            data_split_results['train']['metrics'] = self.calculate_metrics(f, y_true, y_pred)
+            if show_diagnostics:
+                data_split_results['train']['diagnostics'] = self.residual_diagnostics(
+                    y_true=np.asarray(y_true),
+                    y_pred=np.asarray(y_pred),
+                    data=data,
+                    target_expression=y.to_str(),
+                )
+            else:
+                data_split_results['train'].pop('diagnostics')
+        else:
+            raise ValueError("Training data is missing in context['data'] for evaluation.")
+        if data := self.context.get("evaluation_data"):
+            y_pred = f.eval(data)
+            y_true = y.eval(data)
+            data_split_results['validation']['metrics'] = self.calculate_metrics(f, y_true, y_pred)
+            if show_diagnostics:
+                data_split_results['validation']['diagnostics'] = self.residual_diagnostics(
+                    y_true=np.asarray(y_true),
+                    y_pred=np.asarray(y_pred),
+                    data=data,
+                    target_expression=y.to_str(),
+                )
+            else:
+                data_split_results['validation'].pop('diagnostics')
+        else:
+            data_split_results.pop('validation')
+
         target = self.context["target"]
         var_names = {var.name for var in f.iter_preorder() if isinstance(var, nd.Variable)}
         is_candidate = (y.to_str() == target) and (target not in var_names)
         evaluation = {
             "formula": f.to_str(),
-            "metrics": metrics,
             "is_candidate": is_candidate,
+            "data_split_results": data_split_results,
         }
-        if show_diagnostics:
-            evaluation["diagnostics"] = self.residual_diagnostics(
-                y_true=y_true,
-                y_pred=y_pred,
-                data=self.context.get("data", {}),
-                target_expression=y.to_str(),
-            )
         return evaluation
 
-    @staticmethod
-    def failed_evaluation(formula: str = "(None)", show_diagnostics: bool = True) -> Dict[str, Any]:
+    def failed_evaluation(self, formula: str = "(None)", show_diagnostics: bool = True) -> Dict[str, Any]:
         """Build the common result shape when a formula-producing backend fails."""
-        result = {
-            "formula": formula,
-            "metrics": {
-                "mse": float("inf"),
-                "rmse": float("inf"),
-                "mae": float("inf"),
-                "mape": float("inf"),
-                "r2": -float("inf"),
-                "aic": float("inf"),
-                "bic": float("inf"),
-                "pearson_r": -float("inf"),
-                "spearman_r": -float("inf"),
-                "complexity": float("inf"),
-            },
-            "is_candidate": False,
+        empty_metrics = {
+            "mse": float("inf"),
+            "rmse": float("inf"),
+            "mae": float("inf"),
+            "mape": float("inf"),
+            "r2": -float("inf"),
+            "aic": float("inf"),
+            "bic": float("inf"),
+            "pearson_r": -float("inf"),
+            "spearman_r": -float("inf"),
+            "complexity": float("inf"),
         }
-        if show_diagnostics:
-            result["diagnostics"] = {}
-        return result
+        data_split_results = {
+            'train': {'metrics': None},
+            'validation': {'metrics': None},
+        }
+        if data := self.context.get("data"):
+            data_split_results['train']['metrics'] = empty_metrics
+        else:
+            raise ValueError("Training data is missing in context['data'] for evaluation.")
+        if data := self.context.get("evaluation_data"):
+            data_split_results['validation']['metrics'] = empty_metrics
+        else:
+            data_split_results.pop('validation')
+        return {
+            "formula": formula,
+            "is_candidate": False,
+            "data_split_results": data_split_results,
+        }
+
+    @classmethod
+    def format_evaluation_result(cls, result: Dict[str, Any], title: str = "Formula evaluation") -> str:
+        """Format the common formula-evaluation schema for an LLM."""
+        split_results = result["data_split_results"]
+        train_result = split_results["train"]
+        metrics = train_result["metrics"]
+        lines = [
+            f"{title}: {result['formula']}",
+            f"Training-set fit quality: RMSE={metrics.get('rmse', float('nan')):.6g}, "
+            f"MAE={metrics.get('mae', float('nan')):.6g}, "
+            f"R²={metrics.get('r2', float('nan')):.6g}, "
+            f"formula complexity={metrics.get('complexity', '?')}.",
+        ]
+        if validation_result := split_results.get("validation"):
+            validation_metrics = validation_result["metrics"]
+            lines.append(
+                f"Validation-set performance: RMSE={validation_metrics.get('rmse', float('nan')):.6g}, "
+                f"MAE={validation_metrics.get('mae', float('nan')):.6g}, "
+                f"R²={validation_metrics.get('r2', float('nan')):.6g}."
+            )
+            train_rmse = metrics.get("rmse", float("nan"))
+            validation_rmse = validation_metrics.get("rmse", float("nan"))
+            if (np.isfinite(train_rmse) and np.isfinite(validation_rmse)
+                    and validation_rmse > max(2.0 * train_rmse, train_rmse + 1e-12)):
+                lines.append(
+                    "Warning: validation error is substantially larger than training error; "
+                    "the candidate may be overfitting or the validation domain may differ."
+                )
+        if diagnostics := train_result.get("diagnostics"):
+            profile = diagnostics.get("error_profile", {})
+            lines.append(
+                f"Error extremes: 95th-percentile absolute error="
+                f"{profile.get('p95_absolute_error', float('nan')):.6g}; maximum absolute error="
+                f"{profile.get('max_absolute_error', float('nan')):.6g}; median signed residual="
+                f"{profile.get('median_signed_residual', float('nan')):.6g}."
+            )
+            if correlations := diagnostics.get("strongest_residual_correlations"):
+                strongest = correlations[0]
+                lines.append(
+                    f"Strongest remaining residual association: {strongest['variable']} "
+                    f"(residual Pearson={strongest['pearson']:.4g}, residual Spearman="
+                    f"{strongest['spearman']:.4g}). This can suggest missing structure, but very small "
+                    "absolute residuals may make the correlation practically irrelevant."
+                )
+        if validation_diagnostics := split_results.get("validation", {}).get("diagnostics"):
+            profile = validation_diagnostics.get("error_profile", {})
+            lines.append(
+                f"Validation residual profile: 95th-percentile absolute error="
+                f"{profile.get('p95_absolute_error', float('nan')):.6g}; maximum absolute error="
+                f"{profile.get('max_absolute_error', float('nan')):.6g}."
+            )
+        lines.append(
+            "Eligible for submission (default target predicted without using the target as an input): "
+            f"{result['is_candidate']}. This is an interface check, not proof that the formula is correct."
+        )
+        return "\n".join(lines)
 
     @classmethod
     def residual_diagnostics(

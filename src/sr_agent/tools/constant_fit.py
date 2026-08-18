@@ -61,7 +61,6 @@ class ConstantFitTool(BaseTool):
         formula = f"({constant:.12g})" if use_eq_as_y else f"({constant:.12g}) * ({eq})"
         evaluation = self.evaluate(
             f=self.parse_formula(formula), y=y_symbol,
-            y_pred=prediction, y_true=observed[valid],
             show_diagnostics=show_diagnostics,
         )
 
@@ -84,7 +83,7 @@ class ConstantFitTool(BaseTool):
 
         scale = max(abs(constant), np.finfo(float).eps)
         target_scale = max(float(np.mean(np.abs(observed[valid]))), np.finfo(float).eps)
-        fitted_rmse = evaluation["metrics"]["rmse"]
+        fitted_rmse = evaluation["data_split_results"]["train"]["metrics"]["rmse"]
         recognized = []
         for expression, value in raw_candidates:
             relative_error = abs(value - constant) / scale
@@ -151,10 +150,7 @@ class ConstantFitTool(BaseTool):
             f"{result['subsample_constant_relative_std']:.3%} of the absolute fitted coefficient; "
             "this is not a confidence interval).",
             f"Samples usable for this fit: {result['usable_sample_fraction']:.1%}.",
-            f"Fit quality: RMSE={result['metrics']['rmse']:.6g}, R²={result['metrics']['r2']:.6g}, "
-            f"formula complexity={result['metrics']['complexity']}.",
-            "Eligible for submission (default target predicted without using the target as an input): "
-            f"{result['is_candidate']}.",
+            cls.format_evaluation_result(result, title="Fit quality for constant relationship"),
             "This checks the supplied expression up to a constant scale; it does not test omitted "
             "variables or alternative formula structures.",
         ])

@@ -46,6 +46,7 @@ class MyTool(BaseTool):
 工具实例化时传入的上下文可通过 `self.context` 访问，用于存放数据、模型、缓存等不应放在参数列表中由 Agent 生成的值。目前包含以下字段：
 - `self.context["data"]`: 原始数据 DataFrame，{变量名: np.ndarray} 的字典格式。
 - `self.context["target"]`: 目标变量名称字符串。除目标变量外的其他变量都可以作为公式中的自变量。
+- `self.context["evaluation_data"]`: 可选的隐藏验证集 `{变量名: np.ndarray}` 字典。工具只应在 `data`（训练集）上拟合；`evaluate()` 会自动在训练集和验证集上重新求值。
 
 ## 公式处理
 
@@ -65,8 +66,6 @@ class MyTool(BaseTool):
 return self.evaluate(
     f=formula_symbol,
     y=target_symbol,
-    y_pred=y_pred,
-    y_true=y_true,
 )
 ```
 
@@ -77,15 +76,17 @@ return self.evaluate(
 result = self.evaluate(
     f=formula_symbol,
     y=target_symbol,
-    y_pred=y_pred,
-    y_true=y_true,
 )
 result["formula"] = custom_formula_text
 return result
 ```
 
-`f` 和 `y` 必须是 `nd2py.Symbol`。`y_pred` 与 `y_true` 是可选的求值缓存；未提供时，
-`evaluate()` 会分别调用 `f.eval(data)` 与 `y.eval(data)`。复杂度固定为 `len(f)`，不能由调用方覆盖。
+`f` 和 `y` 必须是 `nd2py.Symbol`。`evaluate()` 会分别在训练集和验证集上调用
+`f.eval(data)` 与 `y.eval(data)`（不存在的验证集不会返回）。训练集和验证集结果统一保存在
+`data_split_results["train"]` 与 `data_split_results["validation"]` 中，各自包含 `metrics`，以及可选的
+`diagnostics`；不存在验证集时不返回 `validation` 字段。
+代码模型如果已经在沙箱中得到预测数组，应调用 `BaseTool.calculate_metrics()` 复用相同的指标定义。
+复杂度固定为 `len(f)`，不能由调用方覆盖。
 残差诊断默认开启；内部候选筛选可显式传入 `show_diagnostics=False`，最终入选公式应保留诊断。
 
 ## 错误处理

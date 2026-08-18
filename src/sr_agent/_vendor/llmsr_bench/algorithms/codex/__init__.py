@@ -369,7 +369,9 @@ def best_formula_from_tool_calls(path: Path) -> str | None:
             record = json.loads(line)
             result = record["tool_call_result"]["result"]
             formula = result["formula"]
-            metrics = result["metrics"]
+            split_results = result["data_split_results"]
+            split_name = "validation" if "validation" in split_results else "train"
+            metrics = split_results[split_name]["metrics"]
             mse = float(metrics["mse"])
         except Exception:
             continue

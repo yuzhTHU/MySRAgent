@@ -52,7 +52,6 @@ class EvaluateTool(BaseTool):
         evaluation = self.evaluate(
             f=eq_f,
             y=eq_y,
-            y_true=y_true,
             show_diagnostics=show_diagnostics,
         )
         return {

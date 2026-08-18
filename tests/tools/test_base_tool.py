@@ -293,51 +293,22 @@ class TestBaseToolEvaluate:
         assert result["is_candidate"] is True
         assert result["diagnostics"]
 
-    def test_cached_arrays_avoid_symbol_evaluation(self):
-        tool = UnitSampleTool(data={}, target="missing_target")
+    def test_calculate_metrics_reuses_external_predictions(self):
         f = nd.parse("missing_prediction")
-        y = nd.parse("missing_target")
-
-        result = tool.evaluate(
-            f=f,
-            y=y,
-            y_pred=np.array([1.0, 2.0]),
-            y_true=np.array([1.0, 2.0]),
-            show_diagnostics=False,
+        metrics = UnitSampleTool.calculate_metrics(
+            f, np.array([1.0, 2.0]), np.array([1.0, 2.0])
         )
-
-        metrics = result["metrics"]
         assert metrics["mse"] == 0.0
         assert metrics["complexity"] == len(f)
-        assert "diagnostics" not in result
 
-    def test_cached_prediction_and_target_are_broadcast_symmetrically(self):
-        tool = UnitSampleTool(data={}, target="target")
+    def test_calculate_metrics_broadcasts_prediction_and_target_symmetrically(self):
         f = nd.parse("prediction")
-        y = nd.parse("target")
+        assert UnitSampleTool.calculate_metrics(f, np.array([2.0, 2.0]), np.array(2.0))["mse"] == 0.0
+        assert UnitSampleTool.calculate_metrics(f, np.array(2.0), np.array([2.0, 2.0]))["mse"] == 0.0
 
-        prediction_scalar = tool.evaluate(
-            f=f, y=y, y_pred=np.array(2.0), y_true=np.array([2.0, 2.0]),
-            show_diagnostics=False,
-        )
-        target_scalar = tool.evaluate(
-            f=f, y=y, y_pred=np.array([2.0, 2.0]), y_true=np.array(2.0),
-            show_diagnostics=False,
-        )
-
-        assert prediction_scalar["metrics"]["mse"] == 0.0
-        assert target_scalar["metrics"]["mse"] == 0.0
-
-    def test_incompatible_cached_shapes_raise_clear_error(self):
-        tool = UnitSampleTool(data={})
+    def test_incompatible_external_shapes_raise_clear_error(self):
         with pytest.raises(ValueError, match="cannot be broadcast"):
-            tool.evaluate(
-                f=nd.parse("prediction"),
-                y=nd.parse("target"),
-                y_pred=np.ones(2),
-                y_true=np.ones(3),
-                show_diagnostics=False,
-            )
+            UnitSampleTool.calculate_metrics(nd.parse("prediction"), np.ones(2), np.ones(3))
 
     def test_aic_and_bic_use_number_of_fitted_constants(self):
         x = np.arange(1.0, 21.0)
@@ -363,6 +334,4 @@ class TestBaseToolEvaluate:
             tool.evaluate(
                 f="x",
                 y=nd.parse("y"),
-                y_pred=np.array([1.0]),
-                y_true=np.array([1.0]),
             )

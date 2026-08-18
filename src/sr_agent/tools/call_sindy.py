@@ -249,14 +249,16 @@ class SINDyTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        parts = [f"SINDy result (config={result['config']}):"]
-        parts.append(f"  Formula: {result['formula']}")
-        if result['metrics'].get('mse') is not None:
-            parts.append(f"  MSE: {result['metrics']['mse']:.6g}")
-        if result['metrics'].get('r2') is not None:
-            parts.append(f"  R²: {result['metrics']['r2']:.6g}")
-        if result.get('is_candidate'):
-            parts.append("  [This formula is a valid candidate for submission]")
+        if result["formula"] == "(None)":
+            warnings = "; ".join(result.get("exceptions", [])) or "No further error detail was provided."
+            return f"SINDy did not produce a valid formula. Details: {warnings}"
+        config = result["config"]
+        parts = [cls.format_evaluation_result(result, title="SINDy fitted formula")]
+        parts.append(
+            f"Search configuration: polynomial degree up to {config['poly_degree']}; "
+            f"trigonometric features {'enabled' if config['include_trig'] else 'disabled'}; "
+            f"coefficient sparsity threshold={config['threshold']}."
+        )
         if result.get('exceptions'):
-            parts.append(f"  Warnings: {'; '.join(result['exceptions'])}")
+            parts.append(f"Warnings: {'; '.join(result['exceptions'])}")
         return "\n".join(parts)

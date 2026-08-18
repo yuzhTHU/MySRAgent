@@ -148,7 +148,10 @@ class PySRTool(BaseTool):
 
         # Generate retry hint if result is poor and timeout can be increased
         retry_hint = None
-        mse = evaluation["metrics"].get("mse", float("inf"))
+        split_results = evaluation["data_split_results"]
+        selected_split = "validation" if "validation" in split_results else "train"
+        selected_metrics = split_results[selected_split]["metrics"]
+        mse = selected_metrics.get("mse", float("inf"))
         if (mse > 1e-3 or formula_str is None) and timeout < MAX_TIMEOUT:
             suggested_timeout = min(timeout * 2, MAX_TIMEOUT)
             retry_hint = (
@@ -297,25 +300,23 @@ class PySRTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        parts = [f"PySR result (method={result['method']}):"]
-        parts.append(f"  Best formula: {result['formula']} (complexity={result.get('complexity', '?')})")
-        if result['metrics'].get('mse') is not None:
-            parts.append(f"  MSE: {result['metrics']['mse']:.6g}")
-        if result['metrics'].get('r2') is not None:
-            parts.append(f"  R²: {result['metrics']['r2']:.6g}")
-        if result.get('is_candidate'):
-            parts.append("  [This formula is a valid candidate for submission]")
+        parts = [
+            f"Symbolic-regression backend used: {result['method']}.",
+            cls.format_evaluation_result(result, title="Best formula found"),
+        ]
         if result.get('all_formulas'):
-            parts.append("  Pareto front (top candidates by accuracy):")
+            parts.append("Other formulas offering accuracy-versus-complexity trade-offs:")
             for eq in result['all_formulas'][:5]:
-                metrics = eq["metrics"]
+                split_results = eq["data_split_results"]
+                split_name = "validation" if "validation" in split_results else "train"
+                metrics = split_results[split_name]["metrics"]
+                rmse = metrics.get("rmse", np.sqrt(metrics.get("mse", float("nan"))))
                 parts.append(
-                    f"    - {eq['formula']} "
-                    f"(MSE={metrics['mse']:.6g}, "
-                    f"complexity={metrics['complexity']})"
+                    f"  - {eq['formula']} | {split_name.title()} RMSE={rmse:.6g}, "
+                    f"formula complexity={metrics['complexity']}"
                 )
         if result.get('retry_hint'):
-            parts.append(f"  ** Retry suggestion: {result['retry_hint']}")
+            parts.append(f"Retry suggestion: {result['retry_hint']}")
         if result.get('exceptions'):
-            parts.append(f"  Warnings: {'; '.join(result['exceptions'])}")
+            parts.append(f"Warnings: {'; '.join(result['exceptions'])}")
         return "\n".join(parts)

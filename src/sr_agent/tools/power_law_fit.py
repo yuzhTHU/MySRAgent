@@ -105,10 +105,9 @@ class PowerLawFitTool(BaseTool):
         formula = f"({scale:.12g})" + (" * " + " * ".join(factors) if factors else "")
         evaluation = self.evaluate(
             f=self.parse_formula(formula), y=y_symbol,
-            y_pred=prediction, y_true=target[valid],
             show_diagnostics=show_diagnostics,
         )
-        evaluation["metrics"].update({
+        evaluation["data_split_results"]["train"]["metrics"].update({
             "log_rmse": float(np.sqrt(np.mean((np.log(np.abs(prediction)) - log_y) ** 2))),
             "valid_sample_ratio": float(np.mean(valid)),
         })
@@ -159,12 +158,11 @@ class PowerLawFitTool(BaseTool):
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
         lines = [
-            f"Best fitted power-law formula: {result['formula']}",
-            f"Fit quality: RMSE={result['metrics']['rmse']:.6g}, R²={result['metrics']['r2']:.6g}, "
-            f"log-space RMSE={result['metrics']['log_rmse']:.6g}, "
-            f"formula complexity={result['metrics']['complexity']}.",
+            cls.format_evaluation_result(result, title="Best fitted power-law formula"),
+            f"Training-set log-space RMSE={result['data_split_results']['train']['metrics']['log_rmse']:.6g}; "
+            f"formula complexity={result['data_split_results']['train']['metrics']['complexity']}.",
             f"Samples satisfying the nonzero-target and positive-input requirements: "
-            f"{result['metrics']['valid_sample_ratio']:.1%}.",
+            f"{result['data_split_results']['train']['metrics']['valid_sample_ratio']:.1%}.",
         ]
         exponent_parts = [
             f"{name}={value:.6g} (std {result['heuristic_exponent_std_across_subset_refits'][name]:.3g}; "

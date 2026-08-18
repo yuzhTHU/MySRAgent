@@ -262,6 +262,7 @@ class PropertyPredictorTool(BaseTool):
                         }
 
         result = {
+            "target": target_name,
             "monotonicity": monotonicity,
             "convexity": convexity,
             "periodicity": periodicity,
@@ -281,37 +282,43 @@ class PropertyPredictorTool(BaseTool):
             return f"Error: {result['error']}"
 
         lines = [
-            f"Property Prediction Results (analyzed {result['n_variables_analyzed']} variables, "
-            f"{result['n_samples_used']} samples):",
+            f"Heuristic neural-network property predictions for target {result['target']!r} "
+            f"(analyzed {result['n_variables_analyzed']} variables using {result['n_samples_used']} sampled rows):",
+            "Model scores below are uncalibrated confidence-like scores, not statistical proof. Treat low-score predictions as uncertain.",
             "",
             "=== Per-Variable Properties ===",
             "",
             "Monotonicity (whether y is monotonic w.r.t. each variable):",
         ]
         for var, info in result["monotonicity"].items():
-            lines.append(f"  {var}: {info['prediction']} (confidence: {info['confidence']:.1%})")
+            label = info['prediction'] if info['confidence'] >= 0.6 else f"uncertain; top label is {info['prediction']}"
+            lines.append(f"  {var}: {label} (model score: {info['confidence']:.1%})")
 
         lines.append("")
         lines.append("Convexity (whether y is convex/concave w.r.t. each variable):")
         for var, info in result["convexity"].items():
-            lines.append(f"  {var}: {info['prediction']} (confidence: {info['confidence']:.1%})")
+            label = info['prediction'] if info['confidence'] >= 0.6 else f"uncertain; top label is {info['prediction']}"
+            lines.append(f"  {var}: {label} (model score: {info['confidence']:.1%})")
 
         lines.append("")
         lines.append("Periodicity (whether y is periodic w.r.t. each variable):")
         for var, info in result["periodicity"].items():
-            lines.append(f"  {var}: {info['prediction']} (confidence: {info['confidence']:.1%})")
+            label = info['prediction'] if info['confidence'] >= 0.6 else f"uncertain; top label is {info['prediction']}"
+            lines.append(f"  {var}: {label} (model score: {info['confidence']:.1%})")
 
         sep = result["multiplicative_separable"]
         lines.append("")
-        lines.append(f"Multiplicative Separability: {sep['prediction']} (confidence: {sep['confidence']:.1%})")
+        sep_label = sep['prediction'] if sep['confidence'] >= 0.6 else f"uncertain; top label is {sep['prediction']}"
+        lines.append(f"Multiplicative Separability: {sep_label} (model score: {sep['confidence']:.1%})")
 
         # Per-variable hints
-        if any(info["prediction"] == "periodic" for info in result["periodicity"].values()):
+        if any(info["prediction"] == "periodic" and info["confidence"] >= 0.6 for info in result["periodicity"].values()):
             lines.append("")
             lines.append("Hint: Periodic variables suggest the formula likely contains trigonometric functions "
                          "(sin, cos) of those variables.")
 
-        if result["multiplicative_separable"]["prediction"] == "multiplicatively separable":
+        if (result["multiplicative_separable"]["prediction"] == "multiplicatively separable"
+                and result["multiplicative_separable"]["confidence"] >= 0.6):
             lines.append("")
             lines.append("Hint: The formula may be expressible as a product of functions of individual variables, "
                          "e.g., y = f(x1) * g(x2). Try decomposing the problem.")
@@ -327,11 +334,13 @@ class PropertyPredictorTool(BaseTool):
             interesting = []
             for cname, cinfo in combo.items():
                 flags = []
-                if cinfo["periodicity"]["prediction"] == "periodic":
+                if cinfo["periodicity"]["prediction"] == "periodic" and cinfo["periodicity"]["confidence"] >= 0.6:
                     flags.append(f"periodic ({cinfo['periodicity']['confidence']:.1%})")
-                if cinfo["monotonicity"]["prediction"] in ("increasing", "decreasing"):
+                if (cinfo["monotonicity"]["prediction"] in ("increasing", "decreasing")
+                        and cinfo["monotonicity"]["confidence"] >= 0.6):
                     flags.append(f"{cinfo['monotonicity']['prediction']} ({cinfo['monotonicity']['confidence']:.1%})")
-                if cinfo["convexity"]["prediction"] in ("convex", "concave"):
+                if (cinfo["convexity"]["prediction"] in ("convex", "concave")
+                        and cinfo["convexity"]["confidence"] >= 0.6):
                     flags.append(f"{cinfo['convexity']['prediction']} ({cinfo['convexity']['confidence']:.1%})")
                 if flags:
                     interesting.append((cname, flags, cinfo))
@@ -343,11 +352,14 @@ class PropertyPredictorTool(BaseTool):
                 lines.append("Hint: Variable combinations with detected properties suggest the formula may contain "
                              "functions of those combinations. For example:")
                 for cname, flags, cinfo in interesting:
-                    if cinfo["periodicity"]["prediction"] == "periodic":
+                    if (cinfo["periodicity"]["prediction"] == "periodic"
+                            and cinfo["periodicity"]["confidence"] >= 0.6):
                         lines.append(f"  - {cname} is periodic → consider sin({cname}), cos({cname})")
-                    if cinfo["monotonicity"]["prediction"] in ("increasing", "decreasing"):
+                    if (cinfo["monotonicity"]["prediction"] in ("increasing", "decreasing")
+                            and cinfo["monotonicity"]["confidence"] >= 0.6):
                         lines.append(f"  - {cname} is {cinfo['monotonicity']['prediction']} → y may depend on {cname} directly or via a monotonic function")
-                    if cinfo["convexity"]["prediction"] in ("convex", "concave"):
+                    if (cinfo["convexity"]["prediction"] in ("convex", "concave")
+                            and cinfo["convexity"]["confidence"] >= 0.6):
                         lines.append(f"  - {cname} is {cinfo['convexity']['prediction']} → consider {cname}², sqrt({cname}), exp({cname}), etc.")
             else:
                 lines.append("  No notable properties detected in variable combinations.")

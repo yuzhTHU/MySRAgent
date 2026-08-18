@@ -66,10 +66,10 @@ class EvaluateCodeTool(BaseTool):
             show_diagnostics: Whether metrics should include compact residual diagnostics.
         """
         data = self.context['data']
+        evaluation_data = self.context.get("evaluation_data", {})
         y = y or self.context['target']
         y = y.strip().strip('"').strip("'")
         eq_y = self.parse_formula(y)
-        y_true = eq_y.eval(data)
 
         timeout_seconds = CodeExecutorTool.bounded_int(timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS)
         memory_limit_mb = CodeExecutorTool.bounded_int(memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB)
@@ -83,7 +83,7 @@ class EvaluateCodeTool(BaseTool):
         process = mp_context.Process(target=self.sandbox_worker, args=(
             prepared_model_code, model_func_name,
             prepared_predict_code, predict_func_name,
-            self.context['data'], self.context['target'],
+            data, evaluation_data, self.context['target'],
             timeout_seconds, memory_limit_mb, output_limit_bytes,
             result_queue,
         ))
@@ -126,21 +126,46 @@ class EvaluateCodeTool(BaseTool):
         else:
             raise Exception(f"Sandbox subprocess did not return result and has exited with code {process.exitcode}.")
 
-        y_pred = np.asarray(result["y_pred"])
         opaque_f = nd.parse("__code_model_prediction__")
-        evaluation = self.evaluate(
-            f=opaque_f, 
-            y=eq_y, 
-            y_pred=y_pred, 
-            y_true=y_true,
-            show_diagnostics=show_diagnostics,
-        )
-        evaluation["formula"] = result["model_str"]
-        evaluation['metrics']['complexity'] = len(model_code) + len(predict_code)
-        evaluation['metrics'].pop('aic')
-        evaluation['metrics'].pop('bic')
-        evaluation["is_candidate"] = evaluation["is_candidate"] and result["is_candidate"]
+        split_data = {"train": data}
+        if evaluation_data:
+            split_data["validation"] = evaluation_data
+        data_split_results = {}
+        for split_name, split_data in split_data.items():
+            y_pred = np.asarray(result["predictions"][split_name])
+            y_true = np.asarray(eq_y.eval(split_data))
+            y_pred, y_true = np.broadcast_arrays(y_pred, y_true)
+            metrics = self.calculate_metrics(opaque_f, y_true, y_pred)
+            metrics["complexity"] = len(model_code) + len(predict_code)
+            metrics.pop("aic", None)
+            metrics.pop("bic", None)
+            split_result = {"metrics": metrics}
+            if show_diagnostics:
+                split_result["diagnostics"] = self.residual_diagnostics(
+                    y_true=y_true,
+                    y_pred=y_pred,
+                    data=split_data,
+                    target_expression=eq_y.to_str(),
+                )
+            data_split_results[split_name] = split_result
+
+        evaluation = {
+            "formula": result["model_str"],
+            "is_candidate": result["is_candidate"] and eq_y.to_str() == self.context["target"],
+            "data_split_results": data_split_results,
+        }
         return evaluation
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        text = cls.format_evaluation_result(result, title="Evaluated code-defined model")
+        return (
+            text + "\n" +
+            "(Note: The formula field is a human-readable model description supplied by the code, "
+            "not necessarily a parseable symbolic expression. "
+            "Complexity for this code-defined model is measured as source-code character count, "
+            "so it is not directly comparable to symbolic formula node complexity.)"
+        )
 
     @classmethod
     def prepare_function_code(cls, code: str, expected_params: tuple[str, ...], code_name: str) -> tuple[str, str]:
@@ -179,6 +204,7 @@ class EvaluateCodeTool(BaseTool):
         predict_code: str,
         predict_func_name: str,
         data: Dict[str, Any],
+        evaluation_data: Dict[str, Any],
         target: str,
         timeout_seconds: int,
         memory_limit_mb: int,
@@ -211,7 +237,15 @@ class EvaluateCodeTool(BaseTool):
                 }
 
                 model = cls.call_code_function(model_code, model_func_name, (data,), "<evaluate-code-model>", safe_globals)
-                y_pred = cls.call_code_function(predict_code, predict_func_name, (data, model), "<evaluate-code-predict>", safe_globals)
+                prediction_data = {"train": data}
+                if validation_data := evaluation_data:
+                    prediction_data["validation"] = validation_data
+                predictions = {}
+                for split_name, split_values in prediction_data.items():
+                    predictions[split_name] = np.asarray(cls.call_code_function(
+                        predict_code, predict_func_name, (split_values, model),
+                        f"<evaluate-code-predict-{split_name}>", safe_globals,
+                    ))
                 model_str = cls.format_model(model)
 
                 try:
@@ -224,7 +258,7 @@ class EvaluateCodeTool(BaseTool):
                     is_candidate = False
 
             result_queue.put({
-                "y_pred": np.asarray(y_pred),
+                "predictions": predictions,
                 "model_str": model_str,
                 "is_candidate": is_candidate,
                 "stdout": stdout.getvalue(),
@@ -234,7 +268,7 @@ class EvaluateCodeTool(BaseTool):
         except BaseException as e:
             stderr.write(traceback.format_exc(limit=8))
             result_queue.put({
-                "y_pred": None,
+                "predictions": {},
                 "model_str": "",
                 "is_candidate": False,
                 "stdout": stdout.getvalue(),

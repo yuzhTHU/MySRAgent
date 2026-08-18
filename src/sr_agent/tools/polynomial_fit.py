@@ -150,15 +150,32 @@ class PolynomialFitTool(BaseTool):
         evaluation = self.evaluate(
             f=polynomial, 
             y=eq_y, 
-            y_pred=y_pred, 
-            y_true=data_y,
             show_diagnostics=show_diagnostics,
         )
 
         return {
             **evaluation,
+            "fit_configuration": {
+                "input_features": [feature.to_str() for feature in eq_x_list],
+                "maximum_degree": max_degree,
+                "interactions_included": include_interactions,
+                "bias_included": include_bias,
+            },
             "exceptions": exceptions
         }
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        text = cls.format_evaluation_result(result, title="Best fitted polynomial")
+        config = result["fit_configuration"]
+        text += (
+            f"\nFit configuration: inputs={config['input_features']}; maximum degree="
+            f"{config['maximum_degree']}; interactions included={config['interactions_included']}; "
+            f"constant bias included={config['bias_included']}."
+        )
+        if result["exceptions"]:
+            text += "\nFit warnings: " + "; ".join(result["exceptions"])
+        return text
 
     def _get_allowed_interactions(
         self,

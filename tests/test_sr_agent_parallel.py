@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import numpy as np
 
 from sr_agent.api.core import ToolCall
 from sr_agent.sr_agent import SRAgent
@@ -59,6 +60,20 @@ def test_build_initial_prompt_includes_refinement_budget_rule(tmp_path):
     assert "at most 7 refinement rounds" in system_content
     assert "At the final refinement round (L = 7)" in system_content
     assert "final-answer mechanism" in system_content
+
+
+def test_split_data_keeps_validation_and_test_out_of_training_context(tmp_path):
+    agent = SRAgent(
+        llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
+        save_path=str(tmp_path), validation_fraction=0.2,
+        split_random_state=7,
+    )
+    train, validation = agent._split_data(
+        {"x": np.arange(10.0)}, {"y": np.arange(10.0) * 2},
+    )
+    assert len(train["x"]) == 8
+    assert len(validation["x"]) == 2
+    assert set(train["x"]).isdisjoint(validation["x"])
 
 
 def test_update_buffer_injects_iteration_status(tmp_path):

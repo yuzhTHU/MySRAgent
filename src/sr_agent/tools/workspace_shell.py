@@ -157,14 +157,15 @@ class WorkspaceShellTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        if not result.get("success", False):
+            detail = result.get("error") or result.get("stderr") or "No error detail was provided."
+            return f"Command failed: {detail}"
         parts = []
         if result.get("stdout"):
             parts.append(result["stdout"])
         if result.get("stderr"):
-            parts.append(f"[stderr] {result['stderr']}")
-        if result.get("error"):
-            parts.append(f"[error] {result['error']}")
-        return "\n".join(parts) if parts else "(no output)"
+            parts.append(f"Command stderr:\n{result['stderr']}")
+        return "\n".join(parts) if parts else "Command completed successfully and produced no output."
 
     def execute_single(self, command: str, workspace: Workspace, stdin_text: str) -> Dict[str, Any]:
         """执行单个命令（管道拆分后的一段）。"""

@@ -63,6 +63,10 @@ class SRAgent(FactoryMixin):
         restart_top_k: int = 1,
         llm_max_tokens: int = 4096,
         max_workers: int = 0,
+        validation_fraction: float = 0.2,
+        split_random_state: int = 42,
+        ranking_metric: str = "mse",
+        larger_is_better: bool = False,
     ):
         """初始化 Agent。
 
@@ -80,6 +84,10 @@ class SRAgent(FactoryMixin):
             restart_top_k: 下一轮 restart prompt 中保留的历史最佳结果数量。
             llm_max_tokens: 每次 LLM 响应的最大 token 数。
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
+            validation_fraction: 验证集比例；验证集结果会展示给 Agent。设为 0 可关闭。
+            split_random_state: 数据划分的随机种子。
+            ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
+            larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
@@ -107,6 +115,12 @@ class SRAgent(FactoryMixin):
         self.restart_top_k = restart_top_k
         self.llm_max_tokens = llm_max_tokens
         self.max_workers = max_workers
+        if not 0 <= validation_fraction < 1:
+            raise ValueError("validation_fraction must be in [0, 1).")
+        self.validation_fraction = validation_fraction
+        self.split_random_state = split_random_state
+        self.ranking_metric = ranking_metric
+        self.larger_is_better = larger_is_better
 
         # 关键组件
         self.tool_cls_list = tool_cls_list
@@ -153,8 +167,14 @@ class SRAgent(FactoryMixin):
         if not isinstance(y, dict):
             y = {"target": y}
 
+        train_data, validation_data = self._split_data(X, y)
+
         ## 实例化工具和 LLM API
-        tool_context = { "data": X | y, "target": next(iter(y)) }
+        tool_context = {
+            "data": train_data,
+            "target": next(iter(y)),
+            "evaluation_data": validation_data,
+        }
         self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
         self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
         self.llm_api = LLMAPI.create(
@@ -186,7 +206,7 @@ class SRAgent(FactoryMixin):
                 # 用平凡结果或者历史最佳结果构建新的 initial prompt
                 restart_records = heapq.nsmallest(self.restart_top_k, topk_records)
                 initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
-                initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, record in restart_records}
+                initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, _, record in restart_records}
                 self.named_timer.add('build_initial_prompt')
 
                 for C in range(1, self.global_width + 1):  # C 次独立重复对话
@@ -236,7 +256,7 @@ class SRAgent(FactoryMixin):
                         self.named_timer.add('record_search')
                         self.total_timer.add()
 
-                        if topk_records and topk_records[0][-1]['mse'] == 0.0:
+                        if topk_records and topk_records[0][-1]['data_split_results']['train']['metrics']['mse'] == 0.0:
                             raise FitEarlyStop()
 
             _logger.note(f"Finished all iterations. Returning best result.")
@@ -258,6 +278,31 @@ class SRAgent(FactoryMixin):
             e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
             raise
 
+    def _split_data(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray]):
+        """Split aligned arrays into train and validation data mappings."""
+        data = X | y
+        arrays = {name: np.asarray(value) for name, value in data.items()}
+        lengths = {len(value) for value in arrays.values()}
+        if len(lengths) != 1:
+            raise ValueError(f"All X and y arrays must have the same length, got lengths={sorted(lengths)}.")
+        n_samples = next(iter(lengths))
+        n_validation = int(round(n_samples * self.validation_fraction))
+        if self.validation_fraction > 0 and n_validation == 0:
+            n_validation = 1
+        if n_validation >= n_samples:
+            raise ValueError(
+                f"Dataset has {n_samples} samples, but requested {n_validation} validation samples; "
+                "at least one training sample is required."
+            )
+        indices = np.random.default_rng(self.split_random_state).permutation(n_samples)
+        validation_indices = indices[:n_validation]
+        train_indices = indices[n_validation:]
+
+        def select(selected):
+            return {name: value[selected] for name, value in arrays.items()}
+
+        return select(train_indices), select(validation_indices) if n_validation else {}
+
     def build_initial_prompt(self, problem_description, X, y, restart_records):
         """根据历史最佳结果构建新的 initial prompt。
 
@@ -270,7 +315,7 @@ class SRAgent(FactoryMixin):
         # 根据是否有历史最优结果来动态设置 MSE 目标
         if not restart_records:
             mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-        elif (best_mse := restart_records[0][-1]['mse']) > 0:
+        elif (best_mse := restart_records[0][-1]['data_split_results']['train']['metrics']['mse']) > 0:
             target_mse = best_mse * 0.1
             mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
         else:
@@ -306,10 +351,10 @@ class SRAgent(FactoryMixin):
                 "\n--- Previously Explored Formulas (from best to worst) ---\n"
                 "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
             )
-            for priority, sequence, record in restart_records:
+            for priority, complexity, sequence, record in restart_records:
                 formula = record.get('formula', 'N/A')
-                mse = record.get('mse', float('inf'))
-                r2 = record.get('r2', None)
+                mse = record['data_split_results']['train']['metrics'].get('mse', float('inf'))
+                r2 = record['data_split_results']['train']['metrics'].get('r2', None)
                 r2_str = f", R²={r2:.6g}" if r2 is not None else ""
                 user_content += f"  • Formula: {formula}\n    MSE={mse:.6g}{r2_str}\n\n"
             user_content += "---\n\n"
@@ -408,7 +453,7 @@ class SRAgent(FactoryMixin):
         buffer: List[Dict[str, Any]],
         response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
         results_list: List[List[ToolCallResult]],
-        topk_records: List[Tuple[float, int, Dict[str, Any]]],
+        topk_records: List[Tuple[float, float, int, Dict[str, Any]]],
         node_parents: Dict[str, str],
         prompt: List[Dict[str, Any]],
         usage: Dict[str, Any],
@@ -423,14 +468,14 @@ class SRAgent(FactoryMixin):
         # 记录本轮搜索迭代的原始数据和选中分支信息，供后续分析和可视化使用
         self.record_search_iteration(response_list, results_list, node_parents, prompt, usage, R, L, C)
         node_parents = {}
-        # 选择产生了最佳 mse 的 tool_call 所在的 response 分支
+        # 选择产生了最佳排序指标的 tool_call 所在的 response 分支
         selected_K = 1
-        selected_mse = float('inf')
+        selected_priority = float('inf')
         for K, results in enumerate(results_list, 1):
             for result in results:
-                if (metrics := result.get('metrics')) is not None and metrics['mse'] < selected_mse:
+                if (priorities := self.sortby(result)) is not None and priorities[0] < selected_priority:
                     selected_K = K
-                    selected_mse = metrics['mse']
+                    selected_priority = priorities[0]
         node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=selected_K)] = 'direct_parent'
         _logger.info(f"Selected LLM branch: {selected_K}/{len(results_list)}")
         _, tool_calls, message = response_list[selected_K - 1]
@@ -442,7 +487,7 @@ class SRAgent(FactoryMixin):
         for K, ((extra_content, extra_tool_calls, extra_message), extra_results) in enumerate(zip(response_list, results_list), 1):
             for tool_call, result in zip(extra_tool_calls, extra_results):
                 # 只考虑不涉及 formula & metrics 的工具调用结果
-                if K == selected_K or result.get('metrics') is not None:
+                if K == selected_K or result.get('data_split_results', {}).get('train', {}).get('metrics') is not None:
                     continue
                 tool_calls.append(tool_call)
                 results.append(result)
@@ -490,10 +535,12 @@ class SRAgent(FactoryMixin):
                 item_formula = item['formula']
             else:
                 item_formula = str(item['formula'])[:160-len('...')] + '...'
+            metric_label, metric_value = self.record_metric(item)
+            complexity = item["data_split_results"]["train"]["metrics"].get("complexity", float("inf"))
             pareto_front_str.append(
                 f"{idx}. "
-                f"MSE={item['mse']:.6g}, "
-                f"complexity={item['complexity']}, "
+                f"{metric_label}={metric_value:.6g}, "
+                f"complexity={complexity}, "
                 f"formula={item_formula}"
             )
         if pareto_front_str:
@@ -515,22 +562,26 @@ class SRAgent(FactoryMixin):
         for K in range(1, len(response_list) + 1):
             for act, res in zip(response_list[K - 1][1], results_list[K - 1]):
                 if res.result.get('is_candidate'):
-                    assert 'mse' in res.result['metrics'], "Tool result must contain 'mse' in metrics for candidate formulas."
-                    assert 'complexity' in res.result['metrics'], "Tool result must contain 'complexity' in metrics for candidate formulas."
+                    train_metrics = res.result['data_split_results']['train']['metrics']
+                    assert self.ranking_metric in train_metrics, f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
+                    assert 'complexity' in train_metrics, "Tool result must contain 'complexity' in metrics for candidate formulas."
                     record = {
                         "formula": res.result['formula'],
-                        **res.result['metrics'],
+                        "data_split_results": res.result["data_split_results"],
                         "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
-                    priority = res.result['metrics']['mse'] # 按照 mse 排序 (越小越重要)
-                    sequence = len(topk_records) # 相同 priority 时按照 sequence 排序 (越小越重要)
-                    heapq.heappush(topk_records, (priority, sequence, record))
+                    sequence = len(topk_records) # 相同 priority 和 complexity 时按照 sequence 排序 (越小越重要)
+                    heapq.heappush(topk_records, (*self.sortby(record), sequence, record))
                     # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
                     for formula_dict in res.result.get('all_formulas', []):
-                        record = {**formula_dict, "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K)}
-                        priority = formula_dict['mse']
+                        assert self.ranking_metric in formula_dict["data_split_results"]["train"]["metrics"], f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
+                        record = {
+                            "formula": formula_dict["formula"],
+                            "data_split_results": formula_dict["data_split_results"],
+                            "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
+                        }
                         sequence = len(topk_records)
-                        heapq.heappush(topk_records, (priority, sequence, record))
+                        heapq.heappush(topk_records, (*self.sortby(record), sequence, record))
         return topk_records
     
     def log_info(self, response_list, topk_records, R: int, L: int, C: int):
@@ -543,10 +594,15 @@ class SRAgent(FactoryMixin):
             f"{name}: {count} ({new_count[name]} new)" 
             for name, count in self.tools_counter.named_count.items()
         )
-        best_record = topk_records[0][-1] if topk_records else {}
+        if topk_records:
+            best_record = topk_records[0][-1]
+            metric_label, metric_value = self.record_metric(best_record)
+            best_metric = f"{best_record['formula']} ({metric_label}={metric_value:.6g})"
+        else:
+            best_metric = "None"
         log = {
             "Progress": self.format_progress(R, L, C),
-            "Best": f"{best_record['formula']} (MSE={best_record['mse']:.6g})" if best_record else "None",
+            "Best": best_metric,
             "Tool Calls": tool_calls_str,
             "Speed": self.total_timer.to_str('pace'),
             "Time Usage": self.named_timer.to_str('time', 'pace', 'by_time'),
@@ -651,12 +707,35 @@ class SRAgent(FactoryMixin):
     def format_progress(self, R: int, L: int, C: int):
         return f'(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × (L={L}/{self.max_refinement_depth}) × (K={self.local_sample_size})'
 
+    def record_metric(self, record):
+        if not record:
+            return None, None
+
+        metric_label = self.ranking_metric.replace('_', ' ').upper()
+        validation_metrics = record["data_split_results"].get("validation", {}).get("metrics", {})
+        if (metric_value := validation_metrics.get(self.ranking_metric)) is not None:
+            return f"validation {metric_label}", metric_value
+        train_metrics = record["data_split_results"].get("train", {}).get("metrics", {})
+        if (metric_value := train_metrics.get(self.ranking_metric)) is not None:
+            return f"training {metric_label}", metric_value
+        return None, None
+
+    def sortby(self, record):
+        _, metric_value = self.record_metric(record)
+        if metric_value is None:
+            return None
+        return (
+            -metric_value if self.larger_is_better else metric_value,
+            record['data_split_results']['train']['metrics'].get('complexity', float('inf')),
+        )
+
     def get_pareto_front(self, topk_records):
         """从 top-k 结果中提取 Pareto 前沿。"""
         pareto_front = []
         current_complexity = float('inf')
-        for _, _, record in sorted(topk_records):
-            if record['complexity'] < current_complexity:
+        for _, _, _, record in sorted(topk_records):
+            complexity = record['data_split_results']['train']['metrics'].get('complexity', float('inf'))
+            if complexity < current_complexity:
                 pareto_front.append(record)
-                current_complexity = record['complexity']
+                current_complexity = complexity
         return pareto_front
