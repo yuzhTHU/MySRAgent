@@ -292,7 +292,7 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
     try:
         data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
         f_true = problem.gt_expression
-        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", ""))
+        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", "").replace("math.", ""))
         symbolic_acc = get_symbolic_acc(
             f_true,
             f_pred,
