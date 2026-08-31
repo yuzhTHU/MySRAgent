@@ -47,6 +47,8 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "300")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call).")
+    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider used for the symbolic-accuracy equivalence judge.")
@@ -71,6 +73,24 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
     # 运行
     status = run_codex_command(command, artifacts, args)
+
+    # 二阶段 finalize pass：主 agent 未以 completed 提交有效公式时
+    # （典型：DeepSeek 过度思考导致超时，result.json 只有 in_progress 基线），
+    # 另起一个 Codex 实例，从主 pass 的探索日志中提取最佳公式并写入 result.json。
+    result = load_result_json(artifacts["result_path"])
+    main_submitted = result.get("status") == "completed" and (result.get("discovered_expression") or result.get("formula"))
+    if not main_submitted and not args.no_codex_finalize:
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] main pass did not complete a submission "
+            f"(status=[blue]{result.get('status', 'unknown')}[reset]); "
+            f"starting finalization pass with a fresh Codex instance..."
+        ))
+        finalize_status = run_finalize_pass(args, artifacts)
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] finalization pass exited with status "
+            f"[green]{finalize_status}[reset]; result: [blue]{result_status(artifacts['result_path'])}[reset]"
+        ))
+        result = load_result_json(artifacts["result_path"])
 
     # 后处理
     result = load_result_json(artifacts["result_path"])
@@ -139,6 +159,8 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
     final_path         = problem_dir / "final_message.txt"  # 记录 Codex 输出的最终消息
     event_path         = problem_dir / "codex_events.jsonl" # 记录 Codex 输出的事件流
     tool_call_log_path = problem_dir / "tool_calls.jsonl"   # 记录工具调用日志
+    finalize_event_path = problem_dir / "codex_finalize_events.jsonl" # 记录 finalize pass 的事件流
+    finalize_message_path = problem_dir / "finalize_message.txt"     # 记录 finalize pass 的最终消息
     if not args.codex_overwrite and any(path.exists() for path in (context_path, problem_path, result_path)):
         raise FileExistsError(f"Codex artifacts already exist in {problem_dir}. Use --codex-overwrite to regenerate them.")
 
@@ -217,6 +239,8 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
         "tool_call_log_path": tool_call_log_path,
         "event_path": event_path,
         "final_path": final_path,
+        "finalize_event_path": finalize_event_path,
+        "finalize_message_path": finalize_message_path,
         "start_time": start_time,
     }
 
@@ -240,15 +264,66 @@ def build_codex_command(args: argparse.Namespace, artifacts: dict[str, Path]) ->
     ]
 
 
-def run_codex_command(command: list[str], artifacts, args: argparse.Namespace) -> int:
+_FINALIZE_PROMPT = """You are the finalization pass of a symbolic-regression benchmark run. A previous coding agent already explored this problem for the full time budget but never wrote a final formula to `result.json`. Your only job is to recover the best formula the previous agent found and write it to `result.json`. This is not optional: the run is judged by `result.json`, and it currently has no valid `discovered_expression`.
+
+The problem directory contains the previous agent's full exploration log:
+- `codex_events.jsonl`: every command the previous agent ran and its output. It very likely contains candidate formulas and their evaluation scores (e.g. `R²=`, `RMSE`, `r2`, `Reformulated`, `best formula`) printed during exploration.
+- `problem.json` and `manifest.json`: problem description and variable metadata (the first symbol is the target; the rest are input features).
+- `context.npz`: training data. Load with `np.load('context.npz', allow_pickle=True)`; the `data` key holds a dict of feature arrays plus the target array.
+- `README.md`: the original task instructions.
+- `result.json`: the only file you are allowed to write.
+
+Follow these steps in order:
+1. Immediately scan `codex_events.jsonl` and extract the best candidate formula the previous agent found, i.e. the one with the highest R² / lowest error. Search for lines containing `R²`, `RMSE`, `r2`, `formula`, or `Reformulated`.
+2. If the formula is not obvious or looks wrong, run at most 2 short python commands to verify or refine it (load `context.npz` with `allow_pickle=True`).
+3. Write `result.json` now:
+
+{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
+
+The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Do not over-search: extracting the previous agent's best formula and submitting it is far better than submitting nothing."""
+
+
+def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path]) -> list[str]:
+    prefix = codex_command_prefix(args)
+    extra_args = shlex.split(args.codex_extra_args)
+    approval_args = []
+    if args.codex_approval_policy:
+        approval_args = ["-c", f"approval_policy={json.dumps(args.codex_approval_policy)}"]
+    return [
+        *prefix,
+        "exec",
+        "--json",
+        "-C", str(artifacts["problem_dir"]),
+        "-s", args.codex_sandbox, *approval_args,
+        "-m", args.codex_model,
+        "-o", str(artifacts["finalize_message_path"]),
+        *extra_args,
+        _FINALIZE_PROMPT,
+    ]
+
+
+def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> int:
+    command = build_finalize_command(args, artifacts)
+    command_for_log = " ".join(shlex.quote(part) for part in command[:-1]) + " <finalize_prompt>"
+    _logger.info(tag2ansi(f"[blue bold][CODEX FINALIZE][reset] {command_for_log}"))
+    return run_codex_command(
+        command, artifacts, args,
+        timeout_seconds=args.codex_finalize_timeout_seconds,
+        event_path=artifacts["finalize_event_path"],
+    )
+
+
+def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, timeout_seconds: int | None = None, event_path: Path | None = None) -> int:
     result_path = artifacts["result_path"]
     tool_call_log_path = artifacts["tool_call_log_path"]
+    timeout_seconds = args.codex_timeout_seconds if timeout_seconds is None else timeout_seconds
+    event_path = artifacts["event_path"] if event_path is None else event_path
     start = time.monotonic()
-    deadline = start + args.codex_timeout_seconds
+    deadline = start + timeout_seconds
     next_progress = start + args.codex_progress_interval
     event_count = 0
 
-    with artifacts["event_path"].open("w", encoding="utf-8") as event_file:
+    with event_path.open("w", encoding="utf-8") as event_file:
         process = subprocess.Popen(
             command,
             cwd=_REPO_ROOT, # 这里不能改成 problem_dir, 因为 problem_dir 是相对于 _REPO_ROOT 的路径
@@ -271,7 +346,7 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace) -
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
-                    event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": args.codex_timeout_seconds}, ensure_ascii=False) + "\n")
+                    event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": timeout_seconds}, ensure_ascii=False) + "\n")
                     event_file.flush()
                     return 124
 
