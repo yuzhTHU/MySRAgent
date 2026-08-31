@@ -47,7 +47,7 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
-    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "300")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call).")
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "180")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). Timeout without a submission counts as a failed run.")
     parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
@@ -283,12 +283,94 @@ Follow these steps in order:
 The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Do not over-search: extracting the previous agent's best formula and submitting it is far better than submitting nothing."""
 
 
-def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path]) -> list[str]:
+_RESUME_FINALIZE_PROMPT = """Your earlier exploration of this symbolic-regression problem was cut off by the time budget before you wrote a final formula to `result.json`. The run is judged by `result.json`, and it currently holds only your initial `in_progress` baseline, so the run counts as FAILED unless you submit now.
+
+Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search.
+
+Write `result.json` now, replacing the baseline:
+
+{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
+
+The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Submitting a formula is success; searching further is failure."""
+
+
+def get_thread_id_from_events(event_path: Path) -> str | None:
+    """从主 pass 事件流解析 codex 会话 thread_id（供 finalize pass 续接会话）。"""
+    try:
+        with event_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "thread.started":
+                    return event.get("thread_id")
+    except OSError:
+        return None
+    return None
+
+
+def _codex_session_meta(session_id: str) -> dict[str, Any]:
+    """在 ~/.codex/sessions 下定位该会话的 rollout 文件，读取 session_meta 元信息。"""
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    try:
+        for rollout in codex_home.glob(f"sessions/**/rollout-*-{session_id}.jsonl"):
+            with rollout.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "session_meta":
+                        return event.get("payload") or {}
+    except OSError:
+        return {}
+    return {}
+
+
+def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path], thread_id: str | None = None) -> list[str]:
     prefix = codex_command_prefix(args)
-    extra_args = shlex.split(args.codex_extra_args)
     approval_args = []
     if args.codex_approval_policy:
         approval_args = ["-c", f"approval_policy={json.dumps(args.codex_approval_policy)}"]
+    if thread_id:
+        # resume 续接主 pass 会话，继承其记忆与判断（历史最优公式的判定与主 agent 一致）。
+        # resume 不支持 -p/--profile、-s、-C：剥离 profile 参数；provider 从会话元信息
+        # 恢复（找不到则依赖会话继承，sandbox/cwd 由会话自带，与主 pass 一致）。
+        extra_args, skip_next = [], False
+        for part in shlex.split(args.codex_extra_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if part in ("-p", "--profile"):
+                skip_next = True
+                continue
+            if part.startswith("--profile="):
+                continue
+            extra_args.append(part)
+        provider_args = []
+        meta = _codex_session_meta(thread_id)
+        if meta.get("model_provider"):
+            provider_args = ["-c", f'model_provider="{meta["model_provider"]}"']
+        return [
+            *prefix,
+            "exec", "resume",
+            "--json",
+            "-m", args.codex_model,
+            *provider_args,
+            "-o", str(artifacts["finalize_message_path"]),
+            *approval_args,
+            *extra_args,
+            thread_id,
+            _RESUME_FINALIZE_PROMPT,
+        ]
+    extra_args = shlex.split(args.codex_extra_args)
     return [
         *prefix,
         "exec",
@@ -303,7 +385,18 @@ def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path])
 
 
 def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> int:
-    command = build_finalize_command(args, artifacts)
+    thread_id = get_thread_id_from_events(artifacts["event_path"])
+    if thread_id:
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] resuming main-pass session "
+            f"[green]{thread_id}[reset] to recover its best formula..."
+        ))
+    else:
+        _logger.note(tag2ansi(
+            f"[yellow bold][CODEX FINALIZE][reset] no thread.started in events; "
+            f"falling back to a cold-start Codex instance"
+        ))
+    command = build_finalize_command(args, artifacts, thread_id)
     command_for_log = " ".join(shlex.quote(part) for part in command[:-1]) + " <finalize_prompt>"
     _logger.info(tag2ansi(f"[blue bold][CODEX FINALIZE][reset] {command_for_log}"))
     return run_codex_command(
@@ -322,6 +415,8 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
     deadline = start + timeout_seconds
     next_progress = start + args.codex_progress_interval
     event_count = 0
+    # 提交即止：agent 将 result.json 置为 completed 后提前结束，避免提交后继续消耗时间与 token。
+    baseline_mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
 
     with event_path.open("w", encoding="utf-8") as event_file:
         process = subprocess.Popen(
@@ -349,6 +444,20 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
                     event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": timeout_seconds}, ensure_ascii=False) + "\n")
                     event_file.flush()
                     return 124
+
+                # 提交即止：result.json 被置为 completed 后提前结束（见上方 baseline_mtime 注释）。
+                try:
+                    if result_path.stat().st_mtime > baseline_mtime:
+                        with result_path.open("r", encoding="utf-8") as rf:
+                            _r = json.load(rf)
+                        if _r.get("status") == "completed":
+                            _logger.info(tag2ansi(
+                                f"[green bold][CODEX DONE][reset] result.json marked completed; "
+                                f"stopping early (elapsed={int(now - start)}s)"
+                            ))
+                            return 0
+                except (OSError, json.JSONDecodeError):
+                    pass
 
                 for key, _ in selector.select(timeout=1):
                     line = key.fileobj.readline()
