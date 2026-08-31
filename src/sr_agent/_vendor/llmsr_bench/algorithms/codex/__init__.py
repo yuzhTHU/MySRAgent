@@ -288,7 +288,7 @@ _RESUME_FINALIZE_PROMPT = """Your earlier exploration of this symbolic-regressio
 
 Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search. If you cannot identify a formula you consider credible, refuse to submit: do not create or modify `result.json`, and exit.
 
-Write `result.json` now, replacing the baseline:
+Update `result.json` now: preserve its existing fields and fill `discovered_expression` and `status` ("completed"), optionally `notes`:
 
 {"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
 
@@ -422,6 +422,14 @@ def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> i
     return status
 
 
+def _kill_group(process: subprocess.Popen, sig: int) -> None:
+    """向 codex 进程组发送信号；进程组已消失（进程恰好自然退出）时静默忽略。"""
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
 def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, timeout_seconds: int | None = None, event_path: Path | None = None) -> int:
     result_path = artifacts["result_path"]
     tool_call_log_path = artifacts["tool_call_log_path"]
@@ -443,6 +451,7 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,  # 独立进程组：信号用 killpg 全组发送，保证到达 codex 二进制
         )
         assert process.stdout is not None
         selector = selectors.DefaultSelector()
@@ -453,15 +462,17 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
                 if now >= deadline:
                     # 先 SIGINT 让 codex 优雅退出（清理会话写锁），避免强杀残留
                     # thread-store 写锁导致后续 finalize resume 立即失败。
-                    process.send_signal(signal.SIGINT)
+                    # 必须 killpg：进程链为 npx -> codex.js(node shim) -> 二进制，
+                    # 单发信号只打到 npx，codex.js 收不到就不会转发，优雅退出落空。
+                    _kill_group(process, signal.SIGINT)
                     try:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        process.terminate()
+                        _kill_group(process, signal.SIGTERM)
                         try:
                             process.wait(timeout=10)
                         except subprocess.TimeoutExpired:
-                            process.kill()
+                            _kill_group(process, signal.SIGKILL)
                             process.wait()
                     event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": timeout_seconds}, ensure_ascii=False) + "\n")
                     event_file.flush()
@@ -477,6 +488,13 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
                                 f"[green bold][CODEX DONE][reset] result.json marked completed; "
                                 f"stopping early (elapsed={int(now - start)}s)"
                             ))
+                            # 终止 codex 进程组，避免提交后孤儿进程继续消耗时间与 token。
+                            _kill_group(process, signal.SIGINT)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                _kill_group(process, signal.SIGKILL)
+                                process.wait()
                             return 0
                 except (OSError, json.JSONDecodeError):
                     pass
