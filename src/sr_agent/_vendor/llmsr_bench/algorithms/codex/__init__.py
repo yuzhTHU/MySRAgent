@@ -275,8 +275,8 @@ The problem directory contains the previous agent's full exploration log:
 
 Follow these steps in order:
 1. Immediately scan `codex_events.jsonl` and extract the best candidate formula the previous agent found, i.e. the one with the highest R² / lowest error. Search for lines containing `R²`, `RMSE`, `r2`, `formula`, or `Reformulated`.
-2. If the formula is not obvious or looks wrong, run at most 2 short python commands to verify or refine it (load `context.npz` with `allow_pickle=True`).
-3. Write `result.json` now:
+2. If the formula is not obvious or looks wrong, refuse to submit: do not create or modify `result.json`, and exit.
+3. Otherwise, write `result.json` now:
 
 {"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
 
