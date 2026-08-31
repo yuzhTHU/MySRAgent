@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+import signal
 import json
 import shlex
 import shutil
@@ -399,11 +400,26 @@ def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> i
     command = build_finalize_command(args, artifacts, thread_id)
     command_for_log = " ".join(shlex.quote(part) for part in command[:-1]) + " <finalize_prompt>"
     _logger.info(tag2ansi(f"[blue bold][CODEX FINALIZE][reset] {command_for_log}"))
-    return run_codex_command(
+    status = run_codex_command(
         command, artifacts, args,
         timeout_seconds=args.codex_finalize_timeout_seconds,
         event_path=artifacts["finalize_event_path"],
     )
+    if status != 0 and thread_id:
+        # resume 失败重试一次：典型原因是主 pass 超时被强杀后 codex 会话写锁残留，
+        # resume 因 thread-store conflict 立即退出；codex 退出时会释放锁，
+        # 等待片刻后重试可成功（v6 实测：失败后锁目录已清空）。
+        _logger.note(tag2ansi(
+            f"[yellow bold][CODEX FINALIZE][reset] resume failed (status={status}); "
+            f"waiting 2s and retrying once..."
+        ))
+        time.sleep(2)
+        status = run_codex_command(
+            command, artifacts, args,
+            timeout_seconds=args.codex_finalize_timeout_seconds,
+            event_path=artifacts["finalize_event_path"].with_name("codex_finalize_retry_events.jsonl"),
+        )
+    return status
 
 
 def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, timeout_seconds: int | None = None, event_path: Path | None = None) -> int:
@@ -435,12 +451,18 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
             while process.poll() is None:
                 now = time.monotonic()
                 if now >= deadline:
-                    process.terminate()
+                    # 先 SIGINT 让 codex 优雅退出（清理会话写锁），避免强杀残留
+                    # thread-store 写锁导致后续 finalize resume 立即失败。
+                    process.send_signal(signal.SIGINT)
                     try:
-                        process.wait(timeout=10)
+                        process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
                     event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": timeout_seconds}, ensure_ascii=False) + "\n")
                     event_file.flush()
                     return 124
