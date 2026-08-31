@@ -285,7 +285,7 @@ The expression must use only the feature variables listed in `manifest.json` plu
 
 _RESUME_FINALIZE_PROMPT = """Your earlier exploration of this symbolic-regression problem was cut off by the time budget before you wrote a final formula to `result.json`. The run is judged by `result.json`, and it currently holds only your initial `in_progress` baseline, so the run counts as FAILED unless you submit now.
 
-Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search.
+Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search. If you cannot identify a formula you consider credible, refuse to submit: do not create or modify `result.json`, and exit.
 
 Write `result.json` now, replacing the baseline:
 
