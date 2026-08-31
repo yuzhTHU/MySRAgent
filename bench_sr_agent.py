@@ -298,8 +298,8 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
             f_pred,
             data,
             return_details=True,
-            llm_provider=args.llm_provider,
-            llm_model=args.llm_model,
+            llm_provider=getattr(args, "llm_provider", None),
+            llm_model=getattr(args, "llm_model", None),
         )
         foo = lambda x: tag2ansi(('[green bold]EQUIVALENT[reset]' if x is True else '[red bold]NOT EQUIVALENT[reset]' if x is False else f'[gray bold]{x!r}[reset]'))
         _logger.note(tag2ansi(

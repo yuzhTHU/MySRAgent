@@ -49,6 +49,8 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
+    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider used for the symbolic-accuracy equivalence judge.")
+    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model used for the symbolic-accuracy equivalence judge.")
     return parser
 
 
