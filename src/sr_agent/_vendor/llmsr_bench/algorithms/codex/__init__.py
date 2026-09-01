@@ -48,8 +48,8 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
-    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "180")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). Timeout without a submission counts as a failed run.")
-    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "180")), type=int, help="(deprecated, kept for CLI compatibility) The LLM-based finalization pass does not use this timeout.")
+    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: an LLM API call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider used for the symbolic-accuracy equivalence judge.")
@@ -77,14 +77,15 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
     # 二阶段 finalize pass：主 agent 未以 completed 提交有效公式时
     # （典型：DeepSeek 过度思考导致超时，result.json 只有 in_progress 基线），
-    # 另起一个 Codex 实例，从主 pass 的探索日志中提取最佳公式并写入 result.json。
+    # 不再启动第二个 Codex 实例，而是把主 pass 的探索日志发给 LLM API
+    # （与主 pass 相同的模型），让它挑出最佳公式输出 JSON 并合并进 result.json。
     result = load_result_json(artifacts["result_path"])
     main_submitted = result.get("status") == "completed" and (result.get("discovered_expression") or result.get("formula"))
     if not main_submitted and not args.no_codex_finalize:
         _logger.note(tag2ansi(
             f"[blue bold][CODEX FINALIZE][reset] main pass did not complete a submission "
             f"(status=[blue]{result.get('status', 'unknown')}[reset]); "
-            f"starting finalization pass with a fresh Codex instance..."
+            f"starting LLM finalization pass..."
         ))
         finalize_status = run_finalize_pass(args, artifacts)
         _logger.note(tag2ansi(
@@ -265,38 +266,37 @@ def build_codex_command(args: argparse.Namespace, artifacts: dict[str, Path]) ->
     ]
 
 
-_FINALIZE_PROMPT = """You are the finalization pass of a symbolic-regression benchmark run. A previous coding agent already explored this problem for the full time budget but never wrote a final formula to `result.json`. Your only job is to recover the best formula the previous agent found and write it to `result.json`. This is not optional: the run is judged by `result.json`, and it currently has no valid `discovered_expression`.
+_FINALIZE_MAX_LOG_BYTES = 400_000
+_FINALIZE_MAX_ATTEMPTS = 3
 
-The problem directory contains the previous agent's full exploration log:
-- `codex_events.jsonl`: every command the previous agent ran and its output. It very likely contains candidate formulas and their evaluation scores (e.g. `R²=`, `RMSE`, `r2`, `Reformulated`, `best formula`) printed during exploration.
-- `problem.json` and `manifest.json`: problem description and variable metadata (the first symbol is the target; the rest are input features).
-- `context.npz`: training data. Load with `np.load('context.npz', allow_pickle=True)`; the `data` key holds a dict of feature arrays plus the target array.
-- `README.md`: the original task instructions.
-- `result.json`: the only file you are allowed to write.
-
-Follow these steps in order:
-1. Immediately scan `codex_events.jsonl` and extract the best candidate formula the previous agent found, i.e. the one with the highest R² / lowest error. Search for lines containing `R²`, `RMSE`, `r2`, `formula`, or `Reformulated`.
-2. If the formula is not obvious or looks wrong, refuse to submit: do not create or modify `result.json`, and exit.
-3. Otherwise, write `result.json` now:
-
-{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
-
-The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Do not over-search: extracting the previous agent's best formula and submitting it is far better than submitting nothing."""
-
-
-_RESUME_FINALIZE_PROMPT = """Your earlier exploration of this symbolic-regression problem was cut off by the time budget before you wrote a final formula to `result.json`. The run is judged by `result.json`, and it currently holds only your initial `in_progress` baseline, so the run counts as FAILED unless you submit now.
-
-Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search. If you cannot identify a formula you consider credible, refuse to submit: do not create or modify `result.json`, and exit.
-
-Update `result.json` now: preserve its existing fields and fill `discovered_expression` and `status` ("completed"), optionally `notes`:
-
-{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
-
-The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Submitting a formula is success; searching further is failure."""
+_FINALIZE_SYSTEM_PROMPT = (
+    "You are a formula-extraction assistant for a symbolic-regression benchmark. "
+    "You will receive the exploration log of a coding agent that searched for the formula "
+    "relating the input features to the target variable, but did not submit a final answer "
+    "before its time budget ran out. Your only job is to identify the best candidate formula "
+    "in the log and output it as JSON.\n"
+    "Rules:\n"
+    "- Pick the candidate with the highest R² / lowest error in the log.\n"
+    "- Transcribe the formula exactly as printed, character by character. Do not modify, simplify, or re-derive it.\n"
+    "- The formula may use only the feature variables listed in the user message, plus the constants pi and e.\n"
+    "- Output only one JSON object and nothing else, with exactly these fields:\n"
+    '  {"discovered_expression": "<formula>", "status": "completed", "notes": "<short note>"}\n'
+    "- If you cannot identify any credible formula, output "
+    '{"discovered_expression": null, "status": "failed", "notes": "no credible formula in log"}.\n'
+    "- Do not wrap the JSON in code fences and do not add any other text."
+)
 
 
-def get_thread_id_from_events(event_path: Path) -> str | None:
-    """从主 pass 事件流解析 codex 会话 thread_id（供 finalize pass 续接会话）。"""
+def _extract_exploration_text(event_path: Path, max_bytes: int = _FINALIZE_MAX_LOG_BYTES) -> str:
+    """从主 pass 事件流提取 (命令, 输出) 文本块，供 finalize LLM 提取最佳公式。
+
+    只保留 command_execution 的 (command, aggregated_output) 对；thread/turn 等簿记
+    事件丢弃。总大小超过 max_bytes 时按字节预算截断为 头部 25% + 尾部 75%
+    （R² 最优的探索通常出现在后期，尾部给更多预算；触发截断的几乎都是
+    打印大数组的刷屏输出，丢弃的主体是无评估信息的数字）。
+    """
+    pairs: list[tuple[str, str]] = []
+    pending: dict[str, str] = {}
     try:
         with event_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -307,119 +307,162 @@ def get_thread_id_from_events(event_path: Path) -> str | None:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") == "thread.started":
-                    return event.get("thread_id")
+                item = event.get("item") or {}
+                if event.get("type") == "item.started" and item.get("type") == "command_execution":
+                    raw_command = item.get("command")
+                    command = raw_command if isinstance(raw_command, str) else " ".join(raw_command or [])
+                    pending[item.get("id", "")] = command
+                elif event.get("type") == "item.completed" and item.get("type") == "command_execution":
+                    command = pending.pop(item.get("id", ""), "")
+                    output = item.get("aggregated_output") or ""
+                    if command or output:
+                        pairs.append((command, output))
     except OSError:
+        pass
+
+    def render(selected: list[tuple[str, str]]) -> str:
+        blocks = []
+        for i, (command, output) in enumerate(selected):
+            blocks.append(f"[Command {i + 1}]\n{command}\n[Output {i + 1}]\n{output}")
+        return "\n\n".join(blocks)
+
+    text = render(pairs)
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    head_budget = int(max_bytes * 0.25)
+    tail_budget = max_bytes - head_budget
+    head: list[tuple[str, str]] = []
+    acc = 0
+    for pair in pairs:
+        size = len(pair[0].encode("utf-8")) + len(pair[1].encode("utf-8"))
+        if acc + size > head_budget:
+            break
+        head.append(pair)
+        acc += size
+    tail: list[tuple[str, str]] = []
+    acc = 0
+    for pair in reversed(pairs):
+        size = len(pair[0].encode("utf-8")) + len(pair[1].encode("utf-8"))
+        if acc + size > tail_budget:
+            break
+        tail.append(pair)
+        acc += size
+    tail.reverse()
+    return render(head + tail)
+
+
+def _parse_finalize_json(content: str) -> dict | None:
+    """从 LLM 回复文本中解析包含 discovered_expression 字段的 JSON 对象；失败返回 None。"""
+    text = content.strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)  # 剥掉可能的 markdown 围栏
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
         return None
-    return None
-
-
-def _codex_session_meta(session_id: str) -> dict[str, Any]:
-    """在 ~/.codex/sessions 下定位该会话的 rollout 文件，读取 session_meta 元信息。"""
-    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     try:
-        for rollout in codex_home.glob(f"sessions/**/rollout-*-{session_id}.jsonl"):
-            with rollout.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if event.get("type") == "session_meta":
-                        return event.get("payload") or {}
-    except OSError:
-        return {}
-    return {}
-
-
-def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path], thread_id: str | None = None) -> list[str]:
-    prefix = codex_command_prefix(args)
-    approval_args = []
-    if args.codex_approval_policy:
-        approval_args = ["-c", f"approval_policy={json.dumps(args.codex_approval_policy)}"]
-    if thread_id:
-        # resume 续接主 pass 会话，继承其记忆与判断（历史最优公式的判定与主 agent 一致）。
-        # resume 不支持 -p/--profile、-s、-C：剥离 profile 参数；provider 从会话元信息
-        # 恢复（找不到则依赖会话继承，sandbox/cwd 由会话自带，与主 pass 一致）。
-        extra_args, skip_next = [], False
-        for part in shlex.split(args.codex_extra_args):
-            if skip_next:
-                skip_next = False
-                continue
-            if part in ("-p", "--profile"):
-                skip_next = True
-                continue
-            if part.startswith("--profile="):
-                continue
-            extra_args.append(part)
-        provider_args = []
-        meta = _codex_session_meta(thread_id)
-        if meta.get("model_provider"):
-            provider_args = ["-c", f'model_provider="{meta["model_provider"]}"']
-        return [
-            *prefix,
-            "exec", "resume",
-            "--json",
-            "-m", args.codex_model,
-            *provider_args,
-            "-o", str(artifacts["finalize_message_path"]),
-            *approval_args,
-            *extra_args,
-            thread_id,
-            _RESUME_FINALIZE_PROMPT,
-        ]
-    extra_args = shlex.split(args.codex_extra_args)
-    return [
-        *prefix,
-        "exec",
-        "--json",
-        "-C", str(artifacts["problem_dir"]),
-        "-s", args.codex_sandbox, *approval_args,
-        "-m", args.codex_model,
-        "-o", str(artifacts["finalize_message_path"]),
-        *extra_args,
-        _FINALIZE_PROMPT,
-    ]
+        parsed = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or "discovered_expression" not in parsed:
+        return None
+    return parsed
 
 
 def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> int:
-    thread_id = get_thread_id_from_events(artifacts["event_path"])
-    if thread_id:
+    """收尾：把主 pass 的探索日志发给 LLM API，提取最佳公式合并进 result.json。
+
+    主 pass 未提交时不再启动第二个 Codex 实例（resume 存在超时/写锁/模型不服从
+    指令等不可控问题，v8 实测两道题各烧 360s 后失败）：改为直接调用与主 pass
+    相同的模型（llm_provider + codex_model），把日志文本与提取要求作为一次普通
+    对话发送，解析回复中的 JSON。最多 3 次调用：回复无法解析或缺
+    discovered_expression 字段 → 附错误反馈重试；模型明确拒绝（无可信公式，
+    discovered_expression 为 null/空）→ 立即失败不再重试。
+    """
+    from sr_agent.api.llm_api import LLMAPI  # 延迟导入，避免包初始化期循环依赖
+
+    event_path = artifacts["event_path"]
+    result_path = artifacts["result_path"]
+    finalize_message_path = artifacts["finalize_message_path"]
+    log_text = _extract_exploration_text(event_path)
+    if not log_text.strip():
         _logger.note(tag2ansi(
-            f"[blue bold][CODEX FINALIZE][reset] resuming main-pass session "
-            f"[green]{thread_id}[reset] to recover its best formula..."
+            f"[yellow bold][CODEX FINALIZE][reset] no exploration records in "
+            f"[green]{event_path}[reset]; skipping finalization (nothing to extract)."
         ))
-    else:
-        _logger.note(tag2ansi(
-            f"[yellow bold][CODEX FINALIZE][reset] no thread.started in events; "
-            f"falling back to a cold-start Codex instance"
-        ))
-    command = build_finalize_command(args, artifacts, thread_id)
-    command_for_log = " ".join(shlex.quote(part) for part in command[:-1]) + " <finalize_prompt>"
-    _logger.info(tag2ansi(f"[blue bold][CODEX FINALIZE][reset] {command_for_log}"))
-    status = run_codex_command(
-        command, artifacts, args,
-        timeout_seconds=args.codex_finalize_timeout_seconds,
-        event_path=artifacts["finalize_event_path"],
-    )
-    if status != 0 and thread_id:
-        # resume 失败重试一次：典型原因是主 pass 超时被强杀后 codex 会话写锁残留，
-        # resume 因 thread-store conflict 立即退出；codex 退出时会释放锁，
-        # 等待片刻后重试可成功（v6 实测：失败后锁目录已清空）。
-        _logger.note(tag2ansi(
-            f"[yellow bold][CODEX FINALIZE][reset] resume failed (status={status}); "
-            f"waiting 2s and retrying once..."
-        ))
-        time.sleep(2)
-        status = run_codex_command(
-            command, artifacts, args,
-            timeout_seconds=args.codex_finalize_timeout_seconds,
-            event_path=artifacts["finalize_event_path"].with_name("codex_finalize_retry_events.jsonl"),
-        )
-    return status
+        return 1
+
+    features: list[str] = []
+    try:
+        manifest = json.loads(artifacts["manifest_path"].read_text(encoding="utf-8"))
+        symbols = [str(s) for s in manifest.get("symbols", [])]
+        features = symbols[1:]  # 首个符号是 target
+    except (OSError, json.JSONDecodeError):
+        pass
+    feature_hint = f"The feature variables are: {', '.join(features)}. " if features else ""
+
+    api = LLMAPI.create(llm_provider=args.llm_provider, llm_model=args.codex_model)
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": _FINALIZE_SYSTEM_PROMPT},
+        {"role": "user", "content": feature_hint + "Exploration log:\n\n" + log_text + "\n\nNow output the result JSON."},
+    ]
+
+    for attempt in range(1, _FINALIZE_MAX_ATTEMPTS + 1):
+        content = ""
+        try:
+            for content, _, _ in api(messages, n=1, max_tokens=2048, temperature=0.0):
+                pass
+        except Exception as e:
+            _logger.warning(tag2ansi(
+                f"[yellow bold][CODEX FINALIZE][reset] LLM call failed on attempt "
+                f"{attempt}/{_FINALIZE_MAX_ATTEMPTS}: [{type(e).__name__}] {e}"
+            ))
+        with finalize_message_path.open("w" if attempt == 1 else "a", encoding="utf-8") as f:
+            f.write(f"===== finalize attempt {attempt} =====\n{content}\n")
+
+        parsed = _parse_finalize_json(content)
+        if parsed is not None:
+            expression = str(parsed.get("discovered_expression") or "").strip()
+            if not expression:
+                # 明确拒绝：模型认为日志中没有可信公式，重试无法改变结论。
+                _logger.note(tag2ansi(
+                    f"[yellow bold][CODEX FINALIZE][reset] LLM refused to submit "
+                    f"(no credible formula in log); failing the task without retry."
+                ))
+                return 1
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                result = {}
+            result["discovered_expression"] = expression
+            result["status"] = "completed"
+            note = str(parsed.get("notes") or "").strip()
+            result["notes"] = "extracted by llm finalize" + (f"; {note}" if note else "")
+            result_path.write_text(
+                json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n",
+                encoding="utf-8",
+            )
+            _logger.note(tag2ansi(
+                f"[blue bold][CODEX FINALIZE][reset] extracted formula on attempt "
+                f"{attempt}: [green]{expression}[/green]"
+            ))
+            return 0
+
+        if attempt < _FINALIZE_MAX_ATTEMPTS:
+            _logger.note(tag2ansi(
+                f"[yellow bold][CODEX FINALIZE][reset] reply not a JSON with "
+                f"discovered_expression (attempt {attempt}/{_FINALIZE_MAX_ATTEMPTS}); retrying..."
+            ))
+            if content:
+                messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": (
+                "Your previous reply could not be parsed as a JSON object containing a "
+                'non-null "discovered_expression" field. Reply with ONLY the JSON object, '
+                'for example {"discovered_expression": "<formula>", "status": "completed", "notes": "..."}.'
+            )})
+    _logger.note(tag2ansi(
+        f"[yellow bold][CODEX FINALIZE][reset] no valid JSON after "
+        f"{_FINALIZE_MAX_ATTEMPTS} attempts; task counts as failed."
+    ))
+    return 1
 
 
 def _kill_group(process: subprocess.Popen, sig: int) -> None:
