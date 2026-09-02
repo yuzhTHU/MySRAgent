@@ -48,7 +48,7 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
-    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "180")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). Timeout without a submission counts as a failed run.")
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "60")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). 60s only allows a fast memory-based submission; reading logs / re-analysis times out and counts as missing.")
     parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
@@ -419,7 +419,30 @@ def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> i
             timeout_seconds=args.codex_finalize_timeout_seconds,
             event_path=artifacts["finalize_event_path"].with_name("codex_finalize_retry_events.jsonl"),
         )
-    return status
+    # 统计分层（学长的三分类设计）：主 pass 自提交 = completed；resume 补交 = resume；
+    # resume 也搞不定 = missing。resume 成功时把 status 从 completed 改为 resume，
+    # 实验结束后扫 experiments/*/result.json 即可区分三类题。
+    result_path = artifacts["result_path"]
+    result = load_result_json(result_path)
+    if status == 0 and result.get("status") == "completed" and (
+        result.get("discovered_expression") or result.get("formula")
+    ):
+        result["status"] = "resume"
+        result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n", encoding="utf-8")
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] resume submitted a formula; "
+            f"marking result status as [green]resume[/green]."
+        ))
+        return 0
+    # resume 也搞不定：把 status 标记为 missing 存进 result.json，
+    # 供后续统计定位与更优模型补跑。
+    result["status"] = "missing"
+    result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n", encoding="utf-8")
+    _logger.note(tag2ansi(
+        f"[yellow bold][CODEX FINALIZE][reset] finalize failed (status={status}); "
+        f"marking result status as [red]missing[/red]."
+    ))
+    return 1
 
 
 def _kill_group(process: subprocess.Popen, sig: int) -> None:
