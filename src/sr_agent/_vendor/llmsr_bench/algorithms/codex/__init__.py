@@ -583,6 +583,29 @@ def latest_usage_from_codex_events(event_path: Path) -> dict[str, Any] | None:
             continue
         if candidate := find_usage(event):
             usage = candidate
+    if usage is not None:
+        return usage
+    # codex 0.152 的 stdout 事件流不含 token 统计（v8 实测 token_usage 恒为 None）：
+    # 回退到 codex 会话 rollout 文件，读取最后一条 token_count 的累计用量
+    # （口径含 finalize/resume 回合，与之前手动统计一致）。
+    thread_id = get_thread_id_from_events(event_path)
+    if not thread_id:
+        return None
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    try:
+        for rollout in codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"):
+            for line in rollout.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip() or not line.strip().startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = event.get("payload") or {}
+                if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+                    usage = (payload.get("info") or {}).get("total_token_usage")
+    except OSError:
+        pass
     return usage
 
 
@@ -604,7 +627,8 @@ def result_status(path: Path) -> str:
 
 def count_jsonl(path: Path) -> int | None:
     if not path.exists():
-        return None
+        # 文件不存在 = 没有任何工具调用记录（no-tool 模式下必然如此），计数为 0。
+        return 0
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return sum(1 for line in f if line.strip())
 
