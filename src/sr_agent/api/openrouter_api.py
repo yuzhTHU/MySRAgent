@@ -65,6 +65,13 @@ class OpenRouterAPI(LLMAPI):
         details = []
         for idx in range(1, n + 1):
             max_retry = 3
+            # 初始化：max_retry 次请求全部异常时，下方 details.append 仍会引用
+            # 这些变量（v10 manual_finalize 实测：openrouter 403 连续失败触发
+            # UnboundLocalError，掩盖了真实错误）。空值让上层拿到空回复后自行重试。
+            content, message, response_dict = "", None, None
+            token_usage: dict = {}
+            price_usage: dict = {}
+            tool_call = []
             for attempt in range(1, max_retry + 1):
                 try:
                     completion = client.chat.completions.create(**payload)
