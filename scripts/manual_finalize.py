@@ -248,7 +248,8 @@ def main() -> int:
             continue
         result["discovered_expression"] = expression
         result["status"] = "manual"
-        result["notes"] = "manual finalize by ChatGPT"
+        gpt_note = str(parsed.get("notes") or "").strip()
+        result["notes"] = "manual finalize by ChatGPT" + (f"; {gpt_note}" if gpt_note else "")
         result_path.write_text(
             json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n",
             encoding="utf-8",
