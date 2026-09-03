@@ -148,6 +148,7 @@ def main() -> int:
     parser.add_argument("experiments", help="experiments 目录，如 logs/.../codex_flash_no-tool_anonymize_v10/experiments")
     parser.add_argument("action", choices=["export", "import", "status"], help="export: 生成给 ChatGPT 的 txt; import: 解析 ChatGPT 回复并写回 result.json; status: 查看各状态题数")
     parser.add_argument("--limit", type=int, default=None, help="最多处理的题数")
+    parser.add_argument("--save-dir", default=None, help="export 用：GPT 桌面版所在电脑的目录（prompt 会让 GPT 把 JSON 存到该目录），如 'C:/Users/xxx/Desktop/replies'")
     args = parser.parse_args()
 
     experiments = Path(args.experiments)
@@ -188,10 +189,17 @@ def main() -> int:
                 continue
             features = features_from_manifest(problem_dir)
             feature_hint = f"The feature variables are: {', '.join(features)}. " if features else ""
+            save_instruction = ""
+            if args.save_dir:
+                save_instruction = (
+                    f'\n\nAfter outputting the JSON, also save it as a file named '
+                    f'"{problem_dir.name}.json" in the directory "{args.save_dir}" on this computer. '
+                    f"If the directory does not exist, create it first."
+                )
             prompt = (
                 _SYSTEM_PROMPT + "\n\n" +
                 feature_hint + "Exploration log:\n\n" + log_text +
-                "\n\nNow output the result JSON."
+                "\n\nNow output the result JSON." + save_instruction
             )
             out = prompts_dir / f"{problem_dir.name}.txt"
             out.write_text(prompt, encoding="utf-8")
@@ -209,6 +217,8 @@ def main() -> int:
     ok = invalid = skipped = 0
     for problem_dir in missing:
         reply_path = replies_dir / f"{problem_dir.name}.txt"
+        if not reply_path.exists():
+            reply_path = replies_dir / f"{problem_dir.name}.json"
         if not reply_path.exists():
             skipped += 1
             continue
