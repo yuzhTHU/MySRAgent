@@ -28,15 +28,23 @@ from pathlib import Path
 _MAX_LOG_BYTES = 400_000
 
 _SYSTEM_PROMPT = (
-    "You are a formula-extraction assistant for a symbolic-regression benchmark. "
+    "You are a formula-reconstruction assistant for a symbolic-regression benchmark. "
     "You will receive the exploration log of a coding agent that searched for the formula "
     "relating the input features to the target variable, but did not submit a final answer "
-    "before its time budget ran out. Your only job is to identify the best candidate formula "
-    "in the log and output it as JSON.\n"
+    "before its time budget ran out.\n"
+    "Your job is to reconstruct the formula that this agent would most likely have submitted "
+    "as its final answer, had it not run out of time. Do not simply pick the formula you think "
+    "is best: infer the agent's own intent from its exploration trajectory.\n"
     "Rules:\n"
-    "- Identify the best candidate formula in the log, using your own judgment of what the exploring agent would consider its best result.\n"
+    "- Follow the agent's own logic: which hypothesis did it start from and how did it refine "
+    "it over time, which formula was it focused on in the final stretch of the log, which "
+    "candidate did it repeatedly evaluate or polish, and which evaluation metric did the "
+    "agent itself use to judge candidates.\n"
+    "- If the trajectory is ambiguous, you may fall back on judging which candidate is most "
+    "credible, but the agent's own logic takes priority.\n"
     "- Transcribe the formula exactly as printed, character by character. Do not modify, simplify, or re-derive it.\n"
     "- The formula may use only the feature variables listed in the user message, plus the constants pi and e.\n"
+    "- In the notes field, briefly state why you believe the agent would have chosen this formula.\n"
     "- Output only one JSON object and nothing else, with exactly these fields:\n"
     '  {"discovered_expression": "<formula>", "status": "completed", "notes": "<short note>"}\n'
     "- If you cannot identify any credible formula, output "
