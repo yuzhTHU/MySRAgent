@@ -34,7 +34,7 @@ _SYSTEM_PROMPT = (
     "before its time budget ran out. Your only job is to identify the best candidate formula "
     "in the log and output it as JSON.\n"
     "Rules:\n"
-    "- Pick the best candidate formula in the log (typically the one with the highest R² / lowest error).\n"
+    "- Identify the best candidate formula in the log, using your own judgment of what the exploring agent would consider its best result.\n"
     "- Transcribe the formula exactly as printed, character by character. Do not modify, simplify, or re-derive it.\n"
     "- The formula may use only the feature variables listed in the user message, plus the constants pi and e.\n"
     "- Output only one JSON object and nothing else, with exactly these fields:\n"
