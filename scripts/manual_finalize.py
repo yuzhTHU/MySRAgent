@@ -146,7 +146,7 @@ def collect_missing(experiments: Path, limit: int | None) -> list[Path]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="manual finalize：配合 ChatGPT 手动补充 missing 题")
     parser.add_argument("experiments", help="experiments 目录，如 logs/.../codex_flash_no-tool_anonymize_v10/experiments")
-    parser.add_argument("action", choices=["export", "import"], help="export: 生成给 ChatGPT 的 txt; import: 解析 ChatGPT 回复并写回 result.json")
+    parser.add_argument("action", choices=["export", "import", "status"], help="export: 生成给 ChatGPT 的 txt; import: 解析 ChatGPT 回复并写回 result.json; status: 查看各状态题数")
     parser.add_argument("--limit", type=int, default=None, help="最多处理的题数")
     args = parser.parse_args()
 
@@ -156,6 +156,24 @@ def main() -> int:
         return 1
     prompts_dir = experiments / "manual" / "prompts"
     replies_dir = experiments / "manual" / "replies"
+
+    if args.action == "status":
+        cnt: dict[str, int] = {}
+        missing_list = []
+        for result_path in sorted(experiments.glob("*/result.json")):
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            st = result.get("status", "unknown")
+            cnt[st] = cnt.get(st, 0) + 1
+            if st == "missing":
+                missing_list.append(result_path.parent.name)
+        print(f"状态分布: {dict(cnt)}")
+        print(f"待补充 missing（{len(missing_list)} 个）:")
+        for name in missing_list:
+            print(f"  {name}")
+        return 0
 
     missing = collect_missing(experiments, args.limit)
     print(f"发现 {len(missing)} 个 missing 题" + (f"（--limit {args.limit}）" if args.limit else ""))
