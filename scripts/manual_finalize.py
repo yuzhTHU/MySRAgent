@@ -1,30 +1,31 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""manual finalize：用更强的模型从 missing 题的探索日志提取公式，补充结果。
+"""manual finalize：配合 ChatGPT（网页版/桌面版）手动补充 missing 题的公式。
 
-学长方案：对 resume 也救不回的 missing 题，把主 pass 的探索日志发给好模型
-（默认 openrouter 的 openai/gpt-5.5），让它输出 result.json 内容；解析成功则
-以 status="manual" 写回该题 result.json，与 agent 自提交（completed）和
-resume 补交（resume）明确区分，供后续统一 judge 评估 missing 题的平均性能。
+学长方案：对 resume 也救不回的 missing 题，把主 pass 的探索日志交给好模型
+（ChatGPT），让它输出 result.json 内容；解析成功以 status="manual" 写回
+该题 result.json，与 agent 自提交（completed）/resume 补交（resume）区分。
+
+工作流（中间对话由你手动完成）：
+  1. export：为每道 missing 题生成一个干净 txt（完整指令 + 变量名 + 整理后
+     的日志），放在 manual/prompts/<题目录名>.txt
+  2. 把 txt 拖进 ChatGPT（桌面版直接拖文件，网页版复制粘贴内容），
+     让它按文件要求输出 JSON
+  3. 把 ChatGPT 回复的 JSON 存为 manual/replies/<题目录名>.txt
+  4. import：解析 replies 里的 JSON，合法则以 status="manual" 写回 result.json
 
 用法:
-    venv/bin/python scripts/manual_finalize.py <experiments_dir> [--model openai/gpt-5.5] [--limit 10] [--dry-run]
+    venv/bin/python scripts/manual_finalize.py <experiments_dir> export [--limit 10]
+    venv/bin/python scripts/manual_finalize.py <experiments_dir> import [--limit 10]
 
-前置: source ~/.bashrc && use_openrouter（OPENROUTER_API_KEY 供 API 调用）
-只处理 status=missing 的题；正在跑（started）的题自动跳过。
+只处理 status=missing 的题；正在跑的题自动跳过；result.json 其余字段原样保留。
 """
 from __future__ import annotations
-import os
 import sys
 import json
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from sr_agent.api.llm_api import LLMAPI  # noqa: E402
-
 _MAX_LOG_BYTES = 400_000
-_MAX_ATTEMPTS = 3
 
 _SYSTEM_PROMPT = (
     "You are a formula-extraction assistant for a symbolic-regression benchmark. "
@@ -103,7 +104,7 @@ def extract_log_text(event_path: Path, max_bytes: int = _MAX_LOG_BYTES) -> str:
 
 
 def parse_finalize_json(content: str) -> dict | None:
-    """从 LLM 回复文本中解析包含 discovered_expression 字段的 JSON 对象；失败返回 None。"""
+    """从 ChatGPT 回复文本中解析包含 discovered_expression 字段的 JSON 对象；失败返回 None。"""
     import re
     text = content.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
@@ -128,92 +129,97 @@ def features_from_manifest(problem_dir: Path) -> list[str]:
         return []
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("experiments", help="experiments 目录，如 logs/.../codex_flash_no-tool_anonymize_v10/experiments")
-    parser.add_argument("--model", default="openai/gpt-5.5", help="openrouter 模型 ID（默认 openai/gpt-5.5）")
-    parser.add_argument("--limit", type=int, default=None, help="最多补充的题数（默认全部 missing）")
-    parser.add_argument("--dry-run", action="store_true", help="只预览将处理哪些题，不调用 API")
-    args = parser.parse_args()
-
-    experiments = Path(args.experiments)
-    if not experiments.is_dir():
-        print(f"目录不存在: {experiments}")
-        return 1
-
-    missing_dirs = []
+def collect_missing(experiments: Path, limit: int | None) -> list[Path]:
+    missing = []
     for result_path in sorted(experiments.glob("*/result.json")):
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         if result.get("status") == "missing":
-            missing_dirs.append(result_path.parent)
-    print(f"发现 {len(missing_dirs)} 个 missing 题" + (f"（--limit {args.limit}）" if args.limit else ""))
-    if args.limit:
-        missing_dirs = missing_dirs[:args.limit]
-    if args.dry_run:
-        for d in missing_dirs:
-            print(f"  [dry-run] {d.name}")
+            missing.append(result_path.parent)
+    if limit:
+        missing = missing[:limit]
+    return missing
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="manual finalize：配合 ChatGPT 手动补充 missing 题")
+    parser.add_argument("experiments", help="experiments 目录，如 logs/.../codex_flash_no-tool_anonymize_v10/experiments")
+    parser.add_argument("action", choices=["export", "import"], help="export: 生成给 ChatGPT 的 txt; import: 解析 ChatGPT 回复并写回 result.json")
+    parser.add_argument("--limit", type=int, default=None, help="最多处理的题数")
+    args = parser.parse_args()
+
+    experiments = Path(args.experiments)
+    if not experiments.is_dir():
+        print(f"目录不存在: {experiments}")
+        return 1
+    prompts_dir = experiments / "manual" / "prompts"
+    replies_dir = experiments / "manual" / "replies"
+
+    missing = collect_missing(experiments, args.limit)
+    print(f"发现 {len(missing)} 个 missing 题" + (f"（--limit {args.limit}）" if args.limit else ""))
+
+    if args.action == "export":
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        made = 0
+        for problem_dir in missing:
+            log_text = extract_log_text(problem_dir / "codex_events.jsonl")
+            if not log_text.strip():
+                print(f"[跳过] {problem_dir.name}: 无探索记录")
+                continue
+            features = features_from_manifest(problem_dir)
+            feature_hint = f"The feature variables are: {', '.join(features)}. " if features else ""
+            prompt = (
+                _SYSTEM_PROMPT + "\n\n" +
+                feature_hint + "Exploration log:\n\n" + log_text +
+                "\n\nNow output the result JSON."
+            )
+            out = prompts_dir / f"{problem_dir.name}.txt"
+            out.write_text(prompt, encoding="utf-8")
+            made += 1
+            print(f"[导出] {problem_dir.name} ({len(prompt.encode('utf-8')) // 1024}KB)")
+        print(f"\n完成: 导出 {made} 个 prompt 到 {prompts_dir}")
+        print(f"下一步: 把每个 txt 拖进 ChatGPT，把它的 JSON 回复存到 {replies_dir}/ 下")
+        print(f"        （文件名与 prompt 相同：<题目录名>.txt），然后执行 import。")
         return 0
 
-    api = LLMAPI.create(llm_provider="openrouter", llm_model=args.model)
-    ok = refuse = failed = 0
-    for problem_dir in missing_dirs:
-        name = problem_dir.name
-        log_text = extract_log_text(problem_dir / "codex_events.jsonl")
-        if not log_text.strip():
-            print(f"[跳过] {name}: 无探索记录")
-            failed += 1
+    # import
+    if not replies_dir.is_dir():
+        print(f"replies 目录不存在: {replies_dir}（请先 export 并完成 ChatGPT 对话）")
+        return 1
+    ok = invalid = skipped = 0
+    for problem_dir in missing:
+        reply_path = replies_dir / f"{problem_dir.name}.txt"
+        if not reply_path.exists():
+            skipped += 1
             continue
-        features = features_from_manifest(problem_dir)
-        feature_hint = f"The feature variables are: {', '.join(features)}. " if features else ""
-        messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": feature_hint + "Exploration log:\n\n" + log_text + "\n\nNow output the result JSON."},
-        ]
-        expression = None
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            content = ""
-            try:
-                for content, _, _ in api(messages, n=1, max_tokens=2048, temperature=0.0):
-                    pass
-            except Exception as e:
-                print(f"[警告] {name}: LLM 调用失败 [{type(e).__name__}] {e}")
-                continue
-            parsed = parse_finalize_json(content)
-            if parsed is not None:
-                expression = str(parsed.get("discovered_expression") or "").strip()
-                if not expression:
-                    break  # 明确拒绝：日志中没有可信公式
-                break
-            if attempt < _MAX_ATTEMPTS:
-                if content:
-                    messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": (
-                    "Your previous reply could not be parsed as a JSON object containing a "
-                    'non-null "discovered_expression" field. Reply with ONLY the JSON object.'
-                )})
+        content = reply_path.read_text(encoding="utf-8")
+        parsed = parse_finalize_json(content)
+        expression = str(parsed.get("discovered_expression") or "").strip() if parsed else ""
         if not expression:
-            print(f"[拒绝/失败] {name}: 未提取到公式，保持 missing")
-            refuse += 1
+            print(f"[无效] {problem_dir.name}: 回复无法解析为含公式的 JSON，保持 missing")
+            invalid += 1
             continue
-        # 以 status="manual" 写回，保留其余字段
         result_path = problem_dir / "result.json"
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             result = {}
+        if result.get("status") != "missing":
+            print(f"[跳过] {problem_dir.name}: 当前 status={result.get('status')}，只允许覆盖 missing")
+            skipped += 1
+            continue
         result["discovered_expression"] = expression
         result["status"] = "manual"
-        result["notes"] = f"manual finalize by {args.model}"
+        result["notes"] = "manual finalize by ChatGPT"
         result_path.write_text(
             json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n",
             encoding="utf-8",
         )
         ok += 1
-        print(f"[补充] {name}: {expression[:60]}")
-    print(f"\n完成: 补充 {ok} 个, 拒绝/失败 {refuse} 个, 无记录 {failed} 个")
+        print(f"[补充] {problem_dir.name}: {expression[:60]}")
+    print(f"\n完成: 补充 {ok} 个, 无效 {invalid} 个, 跳过 {skipped} 个")
     return 0
 
 
