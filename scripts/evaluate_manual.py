@@ -24,10 +24,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import nd2py as nd  # noqa: E402
-from sr_agent.utils.logger import _setup_custom_levels  # noqa: E402
 from sr_agent.utils.symbolic_acc import get_symbolic_acc  # noqa: E402
-
-_setup_custom_levels()  # judge 内部使用 TRACE 日志级别，需先注册
 
 
 def parse_expr(expression: str) -> nd.Symbol:
