@@ -4,14 +4,12 @@
 所有工具都应继承自 BaseTool，并提供统一的接口。
 """
 from __future__ import annotations
-
 import time
-import traceback
 import warnings
 import numpy as np
 import nd2py as nd
+from pathlib import Path
 from logging import getLogger
-from datetime import datetime
 from dataclasses import dataclass
 from scipy import stats
 from docstring_parser import DocstringStyle, parse
@@ -222,6 +220,76 @@ class BaseTool(ABC, FactoryMixin):
             if tools_used is None or tool_cls.metadata.name in tools_used:
                 tool_list.append(tool_cls)
         return tool_list
+
+    @classmethod
+    def load_custom_tool(cls, path: str) -> dict:
+        """Load or update one BaseTool stored in a skill's tool.py.
+
+        Re-loading the same path replaces its previous registration. A load
+        failure leaves that path unavailable. A name owned by another path is
+        rejected.
+        """
+        path = Path(path).resolve()
+        if path.suffix != ".py" or not path.is_file():
+            raise ValueError(f"Custom tool file does not exist or is not a Python file: {path}")
+
+        for registered_name, registered_cls in list(cls.REGISTRY_DICT.items()):
+            if getattr(registered_cls, "source_path", None) == path:
+                del cls.REGISTRY_DICT[registered_name]
+        registry_before = dict(cls.REGISTRY_DICT)
+        namespace = {
+            "__name__": f"sr_agent_custom_tool_{abs(hash(str(path)))}",
+            "__file__": str(path),
+        }
+        try:
+            exec(compile(path.read_bytes(), str(path), "exec"), namespace)
+            candidates = []
+            for c in namespace.values():
+                if isinstance(c, type) and issubclass(c, cls) and c is not cls:
+                    candidates.append(c)
+            if len(candidates) != 1:
+                raise ValueError(f"Custom tool must define exactly one BaseTool subclass, found {len(candidates)}.")
+            tool_cls = candidates[0]
+
+            if any(registered is tool_cls for registered in cls.REGISTRY_DICT.values()):
+                raise ValueError(
+                    "Custom tools must not use @BaseTool.register(...); "
+                    "set metadata.name and let the loader register the tool."
+                )
+
+            tool_name = getattr(tool_cls.metadata, "name", None)
+            if not isinstance(tool_name, str) or not tool_name.strip():
+                raise ValueError("Custom tool metadata.name must be a non-empty string.")
+            tool_name = tool_name.strip()
+
+            if tool_name in registry_before:
+                raise ValueError(f"Tool name '{tool_name}' is already registered.")
+            tool_cls.source_path = path
+
+            cls.register(tool_name)(tool_cls)
+            return {"tool_name": tool_name, "path": str(path), "class_name": tool_cls.__name__}
+        except Exception:
+            cls.REGISTRY_DICT.clear()
+            cls.REGISTRY_DICT.update(registry_before)
+            raise
+
+    @classmethod
+    def discover_custom_tools(cls, skills_dir: str | None = None) -> list[dict]:
+        """Auto-load custom tools saved under a skills dir into the registry.
+
+        SRAgent is self-evolving: tools created by create_skill in an earlier
+        session appear in later sessions automatically.
+        """
+        from ..skills.skill_registry import SkillRegistry
+
+        skills_dir = (SkillRegistry(skills_dir).skills_dir).resolve()
+        loaded: list[dict] = []
+        for tool_path in sorted(skills_dir.glob("*/tool.py")):
+            try:
+                loaded.append(cls.load_custom_tool(tool_path))
+            except Exception as exc:  # noqa: BLE001 - a broken custom tool must not block discovery
+                _logger.warning(f"Skipping custom tool {tool_path}: {exc}")
+        return loaded
 
     @classmethod
     def to_dict(cls) -> dict:
@@ -693,6 +761,7 @@ class BaseTool(ABC, FactoryMixin):
             pearson = float(np.corrcoef(x, y)[0, 1])
             spearman = float(stats.spearmanr(x, y).statistic)
         return pearson, spearman
+
 
 def is_numeric_array(data: List[Any]) -> bool:
     arr = np.asarray(data)

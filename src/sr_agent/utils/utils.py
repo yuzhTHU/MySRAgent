@@ -1,14 +1,26 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 import os
 import random
+import builtins
 
 __all__ = [
     "softmax",
     "seed_all",
+    "bounded_value",
 ]
 
 
+def bounded_value(value, min, max, default, converter=None):
+    """Convert a value when requested, then constrain it to an inclusive range."""
+    try:
+        parsed = converter(value) if converter is not None else value
+    except (TypeError, ValueError):
+        parsed = default
+    return builtins.max(min, builtins.min(max, parsed))
+
+
 def softmax(x):
+    import numpy as np
     x = np.exp(x - x.max())
     return x / x.sum()
 

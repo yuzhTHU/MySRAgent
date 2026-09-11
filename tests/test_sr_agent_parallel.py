@@ -17,6 +17,15 @@ class UnitParallelTool(BaseTool):
         return {"value": value, "offset": self.context["offset"]}
 
 
+@BaseTool.register("unit_messages_tool")
+class UnitMessagesTool(BaseTool):
+    metadata = ToolMetadata(name="unit_messages_tool")
+
+    def execute(self) -> dict:
+        """Return injected messages."""
+        return {"messages": self.context["messages"]}
+
+
 def make_agent(tmp_path):
     agent = SRAgent(
         llm_provider="unused",
@@ -43,6 +52,27 @@ def test_execute_action_parallel_preserves_order_and_records_usage(tmp_path):
     assert results[1].result_str == 'Unknown tool calling for "missing_tool"'
     assert results[2].result == {"value": 2, "offset": 10}
     assert agent.tools_counter.named_count == {"unit_parallel_tool": 2}
+
+
+def test_get_results_uses_messages_already_injected_into_tool_context(tmp_path):
+    agent = make_agent(tmp_path)
+    agent.tools = [UnitMessagesTool()]
+    agent.max_workers = 2
+    prompt = [{"role": "system", "content": "Reusable context"}]
+    agent.tools[0].context["messages"] = prompt
+    response_list = [
+        (
+            "",
+            [
+                ToolCall(name="unit_messages_tool", params={}),
+                ToolCall(name="unit_messages_tool", params={}),
+            ],
+            {},
+        )
+    ]
+
+    results = agent.get_results(response_list, R=1, L=1, C=1)
+    assert results[0][0].result == {"messages": [{"role": "system", "content": "Reusable context"}]}
 
 
 def test_build_initial_prompt_includes_refinement_budget_rule(tmp_path):

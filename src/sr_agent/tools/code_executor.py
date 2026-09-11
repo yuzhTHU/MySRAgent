@@ -20,6 +20,7 @@ import contextlib
 import multiprocessing as mp
 from types import ModuleType
 from typing import Any, Dict, Tuple
+from ..utils import bounded_value
 from .base_tool import BaseTool, ToolMetadata
 
 
@@ -520,9 +521,27 @@ class CodeExecutorTool(BaseTool):
             raise Exception(f"Code security check failed since: {validation_result['error_msg']}")
 
         # 准备子进程
-        timeout_seconds = self.bounded_int(timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS)
-        memory_limit_mb = self.bounded_int(memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB)
-        output_limit_bytes = self.bounded_int(output_limit_bytes, self.DEFAULT_OUTPUT_LIMIT_BYTES, 1024, self.MAX_OUTPUT_LIMIT_BYTES)
+        timeout_seconds = bounded_value(
+            timeout_seconds, 
+            min=1, 
+            max=self.MAX_TIMEOUT_SECONDS, 
+            default=self.DEFAULT_TIMEOUT_SECONDS, 
+            converter=int
+        )
+        memory_limit_mb = bounded_value(
+            memory_limit_mb, 
+            default=self.DEFAULT_MEMORY_LIMIT_MB, 
+            min=64, 
+            max=self.MAX_MEMORY_LIMIT_MB, 
+            converter=int
+        )
+        output_limit_bytes = bounded_value(
+            output_limit_bytes, 
+            default=self.DEFAULT_OUTPUT_LIMIT_BYTES, 
+            min=1024, 
+            max=self.MAX_OUTPUT_LIMIT_BYTES, 
+            converter=int
+        )
         mp_context = mp.get_context("spawn") if os.name == "nt" else mp.get_context("fork")  # Windows (nt) 不支持 fork, 必须用 spawn
         result_queue = mp_context.Queue(maxsize=1)
         worker_args = (program, stdin_text, timeout_seconds, memory_limit_mb, output_limit_bytes, result_queue)
@@ -630,8 +649,4 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def bounded_int(cls, value: Any, default: int, minimum: int, maximum: int) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            parsed = default
-        return max(minimum, min(maximum, parsed))
+        return bounded_value(value, min=minimum, max=maximum, default=default, converter=int)

@@ -174,6 +174,9 @@ class SRAgent(FactoryMixin):
             "data": train_data,
             "target": next(iter(y)),
             "evaluation_data": validation_data,
+            "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
+            "llm_max_tokens": self.llm_max_tokens,
         }
         self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
         self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
@@ -225,6 +228,8 @@ class SRAgent(FactoryMixin):
 
                         # Step 1: 根据 Buffer 创建 Prompt
                         prompt = self.build_prompt(buffer, R=R, L=L, C=C)
+                        for tool in self.tools:
+                            tool.context["messages"] = deepcopy(prompt)
                         self.named_timer.add('build_prompt')
 
                         # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组

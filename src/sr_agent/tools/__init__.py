@@ -19,6 +19,7 @@ from .workspace_code_executor import WorkspaceCodeExecutorTool
 from .read_skill import ReadSkill
 from .create_skill import CreateSkill
 from .edit_skill import EditSkill
+from .edit_tool import EditTool
 from .call_sindy import SINDyTool
 from .call_pysr import PySRTool
 from .predict_property import PropertyPredictorTool
@@ -45,9 +46,16 @@ __all__ = [
     "ReadSkill",
     "CreateSkill",
     "EditSkill",
+    "EditTool",
     "SINDyTool",
     "PySRTool",
     "PropertyPredictorTool",
     "AskHumanTool",
     "WorkspaceShellTool",
 ]
+
+
+# SRAgent is self-evolving: after every built-in BaseTool subclass above has been
+# registered, auto-load any custom tools saved under the skills directory so they
+# are available to later sessions without an explicit load step.
+BaseTool.discover_custom_tools()

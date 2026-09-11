@@ -108,6 +108,38 @@ return result
 - 因此，**尚未实现完善或测试不充分的工具不应注册** —— Agent 调用这类工具的成功率太低，不注册即可确保 Agent 无法使用它，避免浪费调用次数和 token。
 - 可以将 `@BaseTool.register(...)` 注释掉来暂时取消注册，待工具成熟后再启用。
 
+## 自定义工具
+
+`create_skill` 可创建说明型 skill，也可在 skill 目录中同时创建自定义工具；
+`edit_tool` 用于修改已有的自定义工具：
+
+```text
+skills/<skill-name>/SKILL.md
+skills/<skill-name>/tool.py
+```
+
+`tool.py` 必须定义一个继承 `BaseTool` 的类，并设置唯一的 `metadata.name`。
+自定义工具不要使用 `@BaseTool.register(...)`，加载器会根据 `metadata.name` 统一注册。
+创建或编辑成功后，工具会立即尝试加载并注册到 `BaseTool`；重名工具会被拒绝。
+
+## 创建 Skill
+
+调用 `create_skill(request="...")` 表达要沉淀的可复用经验；工具默认把当前 Agent 的
+system prompt、全部历史 messages 和本次工具调用消息传给配置的同一 provider/model；
+也可以用 `history_messages=N` 只提供最近 N 条消息。内部
+完成若干轮澄清和草稿生成后才写入文件。
+
+LLM 会选择一种类型：
+
+- `instructions`：只创建说明性 `SKILL.md`。
+- `data_analysis`：创建返回普通数据分析结果的 `tool.py`。
+- `formula_proposer`：创建公式提议工具；必须把 `self.evaluate(...)` 的结果直接
+  返回或合并进返回字典，保留 `formula`、`is_candidate` 和 `data_split_results` 等字段。
+
+默认不覆盖已有 skill；传入 `force=true` 可替换可编辑 skill 的 `SKILL.md` 和
+`tool.py`，但不会修改目录中的其他文件，也不能覆盖只读 skill。自定义 `tool.py`
+不得写 `@BaseTool.register(...)`，加载器会根据 `metadata.name` 注册工具。
+
 ## TODO：统一评估数据划分模式
 
 需要评估拟合结果的工具后续应共享一个统一接口，但本轮暂不实现，以避免同时改变所有工具的契约。计划支持：

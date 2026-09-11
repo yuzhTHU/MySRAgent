@@ -11,10 +11,22 @@ Your current working directory: <WORK_DIR>
 ## Hard Limits
 
 - Finish within <TIMEOUT_SECONDS> seconds.
-- If near the limit, write the best current formula to `result.json`.
 - Do not read, write or create files outside this directory.
 - Do not modify files other than <RESULT_PATH>.
 - Do not start or delegate to sub-agents. This benchmark measures the current coding agent as a single solver.
+
+## Submission Protocol (MANDATORY — applies in ALL cases, even if tools are unavailable)
+
+Your run is judged by the content of <RESULT_PATH>. If it does not contain a valid
+`discovered_expression` when the run ends, the run counts as FAILED. Follow these steps in order:
+
+1. Immediately after reading this README — before any data analysis — write an initial baseline to <RESULT_PATH>, e.g. a simple linear model: `{"discovered_expression": "1.0*x1 + 1.0*x2 + 1.0*x3 + 1.0*x4 + 0.0", "status": "in_progress"}`. Coefficients do not need to be fitted yet; the file just needs a valid entry. This is not optional.
+
+2. After every 5 analysis commands, update <RESULT_PATH> with your current best formula, even if it did not improve. Never run more than 2 analysis commands without updating it.
+
+3. Whenever a new formula beats the one currently in <RESULT_PATH>, update it immediately before doing anything else.s
+
+4. When you are confident a formula is final, set `"status": "completed"`.
 
 ## Public Files
 
@@ -22,7 +34,7 @@ The problem directory contains:
 
 - `<PROBLEM_PATH>`: Public problem description and variable metadata.
 - `<MANIFEST_PATH>`: Paths and metadata for this run.
-- `<RESULT_PATH>`: Write your final expression here.
+- `<RESULT_PATH>`: Write your expression here (see Submission Protocol above).
 - `<CALL_TOOL_PATH>`: Local tool wrapper for this problem.
 - `<CONTEXT_PATH>`: Tool context, relied by `<CALL_TOOL_PATH>`.
 - `<README_PATH>`: Readme file saving this information
@@ -56,16 +68,15 @@ python <CALL_TOOL_PATH> call evaluate_formula --params '{"f": "sin(x1) + x2", "f
 
 5. Also call at least one structure-discovery tool, such as `polynomial_fit`, `call_sindy`, or `call_pysr`, unless the relationship is already obvious from the required tool outputs.
 
-6. Custom Python analysis is allowed under your current workspace or `/tmp`, but it is supplementary. Do not skip the documented tool calls.
+6. Custom Python analysis is allowed under your current workspace or `/tmp`, but it is supplementary.
 
-7. When you have a final formula, update `<RESULT_PATH>`. Preserve the existing fields and fill at least:
+7. During ablation experiments, some tools may be removed. Don't be surprised if you find that some of the tools mentioned above are not provided by `call_tool.py`.
 
-8. During ablation experiments, some tools may be removed. Don't be surprised if you find that some of the tools mentioned above are not provided by `call_tool.py`.
-
+8. JSON format for <RESULT_PATH>:
 ```json
 {
   "discovered_expression": "sin(x1) + x2",
-  "status": "completed",
+  "status": "in_progress", // or "completed"
   "notes": "short optional notes"
 }
 ```
