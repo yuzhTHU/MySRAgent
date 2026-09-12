@@ -712,10 +712,12 @@ class SRAgent(FactoryMixin):
             return None, None
 
         metric_label = self.ranking_metric.replace('_', ' ').upper()
-        validation_metrics = record["data_split_results"].get("validation", {}).get("metrics", {})
+        # 分析类工具(statistics_analysis 等)的结果没有 data_split_results 键,
+        # 用 .get 防护后这些记录会返回 (None, None), 在 sortby/update_buffer 中被跳过。
+        validation_metrics = record.get("data_split_results", {}).get("validation", {}).get("metrics", {})
         if (metric_value := validation_metrics.get(self.ranking_metric)) is not None:
             return f"validation {metric_label}", metric_value
-        train_metrics = record["data_split_results"].get("train", {}).get("metrics", {})
+        train_metrics = record.get("data_split_results", {}).get("train", {}).get("metrics", {})
         if (metric_value := train_metrics.get(self.ranking_metric)) is not None:
             return f"training {metric_label}", metric_value
         return None, None
