@@ -11,7 +11,7 @@ Your current working directory: <WORK_DIR>
 ## Hard Limits
 
 - Finish within <TIMEOUT_SECONDS> seconds.
-- Do not read, write or create files outside this directory.
+- Do not read, write or create files outside this directory, except temporary analysis scripts in `/tmp`.
 - Do not modify files other than <RESULT_PATH>.
 - Do not start or delegate to sub-agents. This benchmark measures the current coding agent as a single solver.
 
@@ -72,7 +72,8 @@ python <CALL_TOOL_PATH> call evaluate_formula --params '{"f": "sin(x1) + x2", "f
 
 7. During ablation experiments, some tools may be removed. Don't be surprised if you find that some of the tools mentioned above are not provided by `call_tool.py`.
 
-8. JSON format for <RESULT_PATH>:
+8. When you have a final formula, update `<RESULT_PATH>`. Preserve the existing fields and fill at least:
+
 ```json
 {
   "discovered_expression": "sin(x1) + x2",

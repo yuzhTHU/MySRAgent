@@ -292,14 +292,14 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
     try:
         data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
         f_true = problem.gt_expression
-        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", ""))
+        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", "").replace("math.", ""))
         symbolic_acc = get_symbolic_acc(
             f_true,
             f_pred,
             data,
             return_details=True,
-            llm_provider=args.llm_provider,
-            llm_model=args.llm_model,
+            llm_provider=getattr(args, "llm_provider", None),
+            llm_model=getattr(args, "llm_model", None),
         )
         foo = lambda x: tag2ansi(('[green bold]EQUIVALENT[reset]' if x is True else '[red bold]NOT EQUIVALENT[reset]' if x is False else f'[gray bold]{x!r}[reset]'))
         _logger.note(tag2ansi(

@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+import signal
 import json
 import shlex
 import shutil
@@ -47,8 +48,12 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
     parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "60")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). 60s only allows a fast memory-based submission; reading logs / re-analysis times out and counts as missing.")
+    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
+    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider used for the symbolic-accuracy equivalence judge.")
+    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash", help="LLM model used for the symbolic-accuracy equivalence judge.")
     return parser
 
 
@@ -69,6 +74,24 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
     # 运行
     status = run_codex_command(command, artifacts, args)
+
+    # 二阶段 finalize pass
+    # 主 agent 未以 completed 提交有效公式时另起一个 Codex 实例，从主 pass 的探索日志中提取最佳公式并写入 result.json。
+    # 例如：DeepSeek 过度思考导致超时
+    result = load_result_json(artifacts["result_path"])
+    main_submitted = result.get("status") == "completed" and (result.get("discovered_expression") or result.get("formula"))
+    if not main_submitted and not args.no_codex_finalize:
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] main pass did not complete a submission "
+            f"(status=[blue]{result.get('status', 'unknown')}[reset]); "
+            f"starting finalization pass with a fresh Codex instance..."
+        ))
+        finalize_status = run_finalize_pass(args, artifacts)
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] finalization pass exited with status "
+            f"[green]{finalize_status}[reset]; result: [blue]{result_status(artifacts['result_path'])}[reset]"
+        ))
+        result = load_result_json(artifacts["result_path"])
 
     # 后处理
     result = load_result_json(artifacts["result_path"])
@@ -137,6 +160,8 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
     final_path         = problem_dir / "final_message.txt"  # 记录 Codex 输出的最终消息
     event_path         = problem_dir / "codex_events.jsonl" # 记录 Codex 输出的事件流
     tool_call_log_path = problem_dir / "tool_calls.jsonl"   # 记录工具调用日志
+    finalize_event_path = problem_dir / "codex_finalize_events.jsonl" # 记录 finalize pass 的事件流
+    finalize_message_path = problem_dir / "finalize_message.txt"     # 记录 finalize pass 的最终消息
     if not args.codex_overwrite and any(path.exists() for path in (context_path, problem_path, result_path)):
         raise FileExistsError(f"Codex artifacts already exist in {problem_dir}. Use --codex-overwrite to regenerate them.")
 
@@ -215,6 +240,8 @@ def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
         "tool_call_log_path": tool_call_log_path,
         "event_path": event_path,
         "final_path": final_path,
+        "finalize_event_path": finalize_event_path,
+        "finalize_message_path": finalize_message_path,
         "start_time": start_time,
     }
 
@@ -238,15 +265,207 @@ def build_codex_command(args: argparse.Namespace, artifacts: dict[str, Path]) ->
     ]
 
 
-def run_codex_command(command: list[str], artifacts, args: argparse.Namespace) -> int:
+_FINALIZE_PROMPT = """You are the finalization pass of a symbolic-regression benchmark run. A previous coding agent already explored this problem for the full time budget but never wrote a final formula to `result.json`. Your only job is to recover the best formula the previous agent found and write it to `result.json`. This is not optional: the run is judged by `result.json`, and it currently has no valid `discovered_expression`.
+
+The problem directory contains the previous agent's full exploration log:
+- `codex_events.jsonl`: every command the previous agent ran and its output. It very likely contains candidate formulas and their evaluation scores (e.g. `R²=`, `RMSE`, `r2`, `Reformulated`, `best formula`) printed during exploration.
+- `problem.json` and `manifest.json`: problem description and variable metadata (the first symbol is the target; the rest are input features).
+- `context.npz`: training data. Load with `np.load('context.npz', allow_pickle=True)`; the `data` key holds a dict of feature arrays plus the target array.
+- `README.md`: the original task instructions.
+- `result.json`: the only file you are allowed to write.
+
+Follow these steps in order:
+1. Immediately scan `codex_events.jsonl` and extract the best candidate formula the previous agent found, i.e. the one with the highest R² / lowest error. Search for lines containing `R²`, `RMSE`, `r2`, `formula`, or `Reformulated`.
+2. If the formula is not obvious or looks wrong, refuse to submit: do not create or modify `result.json`, and exit.
+3. Otherwise, write `result.json` now:
+
+{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
+
+The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Do not over-search: extracting the previous agent's best formula and submitting it is far better than submitting nothing."""
+
+
+_RESUME_FINALIZE_PROMPT = """Your earlier exploration of this symbolic-regression problem was cut off by the time budget before you wrote a final formula to `result.json`. The run is judged by `result.json`, and it currently holds only your initial `in_progress` baseline, so the run counts as FAILED unless you submit now.
+
+Your task, and nothing else: look at your exploration history (your memory and `codex_events.jsonl`), identify the best formula it contains, and submit it to `result.json`. Do not run any verification, calculation, or data analysis. Do not start a new search. If you cannot identify a formula you consider credible, refuse to submit: do not create or modify `result.json`, and exit.
+
+Update `result.json` now: preserve its existing fields and fill `discovered_expression` and `status` ("completed"), optionally `notes`:
+
+{"discovered_expression": "<expr>", "status": "completed", "notes": "<short note>"}
+
+The expression must use only the feature variables listed in `manifest.json` plus `pi`/`e` constants. Submitting a formula is success; searching further is failure."""
+
+
+def get_thread_id_from_events(event_path: Path) -> str | None:
+    """从主 pass 事件流解析 codex 会话 thread_id（供 finalize pass 续接会话）。"""
+    try:
+        with event_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "thread.started":
+                    return event.get("thread_id")
+    except OSError:
+        return None
+    return None
+
+
+def _codex_session_meta(session_id: str) -> dict[str, Any]:
+    """在 ~/.codex/sessions 下定位该会话的 rollout 文件，读取 session_meta 元信息。"""
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    try:
+        for rollout in codex_home.glob(f"sessions/**/rollout-*-{session_id}.jsonl"):
+            with rollout.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "session_meta":
+                        return event.get("payload") or {}
+    except OSError:
+        return {}
+    return {}
+
+
+def build_finalize_command(args: argparse.Namespace, artifacts: dict[str, Path], thread_id: str | None = None) -> list[str]:
+    prefix = codex_command_prefix(args)
+    approval_args = []
+    if args.codex_approval_policy:
+        approval_args = ["-c", f"approval_policy={json.dumps(args.codex_approval_policy)}"]
+    if thread_id:
+        # resume 续接主 pass 会话，继承其记忆与判断（历史最优公式的判定与主 agent 一致）。
+        # resume 不支持 -p/--profile、-s、-C：剥离 profile 参数；provider 从会话元信息
+        # 恢复（找不到则依赖会话继承，sandbox/cwd 由会话自带，与主 pass 一致）。
+        extra_args, skip_next = [], False
+        for part in shlex.split(args.codex_extra_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if part in ("-p", "--profile"):
+                skip_next = True
+                continue
+            if part.startswith("--profile="):
+                continue
+            extra_args.append(part)
+        provider_args = []
+        meta = _codex_session_meta(thread_id)
+        if meta.get("model_provider"):
+            provider_args = ["-c", f'model_provider="{meta["model_provider"]}"']
+        return [
+            *prefix,
+            "exec", "resume",
+            "--json",
+            "-m", args.codex_model,
+            *provider_args,
+            "-o", str(artifacts["finalize_message_path"]),
+            *approval_args,
+            *extra_args,
+            thread_id,
+            _RESUME_FINALIZE_PROMPT,
+        ]
+    extra_args = shlex.split(args.codex_extra_args)
+    return [
+        *prefix,
+        "exec",
+        "--json",
+        "-C", str(artifacts["problem_dir"]),
+        "-s", args.codex_sandbox, *approval_args,
+        "-m", args.codex_model,
+        "-o", str(artifacts["finalize_message_path"]),
+        *extra_args,
+        _FINALIZE_PROMPT,
+    ]
+
+
+def run_finalize_pass(args: argparse.Namespace, artifacts: dict[str, Path]) -> int:
+    thread_id = get_thread_id_from_events(artifacts["event_path"])
+    if thread_id:
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] resuming main-pass session "
+            f"[green]{thread_id}[reset] to recover its best formula..."
+        ))
+    else:
+        _logger.note(tag2ansi(
+            f"[yellow bold][CODEX FINALIZE][reset] no thread.started in events; "
+            f"falling back to a cold-start Codex instance"
+        ))
+    command = build_finalize_command(args, artifacts, thread_id)
+    command_for_log = " ".join(shlex.quote(part) for part in command[:-1]) + " <finalize_prompt>"
+    _logger.info(tag2ansi(f"[blue bold][CODEX FINALIZE][reset] {command_for_log}"))
+    status = run_codex_command(
+        command, artifacts, args,
+        timeout_seconds=args.codex_finalize_timeout_seconds,
+        event_path=artifacts["finalize_event_path"],
+    )
+    if status != 0 and thread_id:
+        # resume 失败重试一次：典型原因是主 pass 超时被强杀后 codex 会话写锁残留，
+        # resume 因 thread-store conflict 立即退出；codex 退出时会释放锁，
+        # 等待片刻后重试可成功（v6 实测：失败后锁目录已清空）。
+        _logger.note(tag2ansi(
+            f"[yellow bold][CODEX FINALIZE][reset] resume failed (status={status}); "
+            f"waiting 2s and retrying once..."
+        ))
+        time.sleep(2)
+        status = run_codex_command(
+            command, artifacts, args,
+            timeout_seconds=args.codex_finalize_timeout_seconds,
+            event_path=artifacts["finalize_event_path"].with_name("codex_finalize_retry_events.jsonl"),
+        )
+    # 统计分层（学长的三分类设计）：主 pass 自提交 = completed；resume 补交 = resume；
+    # resume 也搞不定 = missing。resume 成功时把 status 从 completed 改为 resume，
+    # 实验结束后扫 experiments/*/result.json 即可区分三类题。
+    result_path = artifacts["result_path"]
+    result = load_result_json(result_path)
+    if status == 0 and result.get("status") == "completed" and (
+        result.get("discovered_expression") or result.get("formula")
+    ):
+        result["status"] = "resume"
+        result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n", encoding="utf-8")
+        _logger.note(tag2ansi(
+            f"[blue bold][CODEX FINALIZE][reset] resume submitted a formula; "
+            f"marking result status as [green]resume[/green]."
+        ))
+        return 0
+    # resume 也搞不定：把 status 标记为 missing 存进 result.json，
+    # 供后续统计定位与更优模型补跑。
+    result["status"] = "missing"
+    result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n", encoding="utf-8")
+    _logger.note(tag2ansi(
+        f"[yellow bold][CODEX FINALIZE][reset] finalize failed (status={status}); "
+        f"marking result status as [red]missing[/red]."
+    ))
+    return 1
+
+
+def _kill_group(process: subprocess.Popen, sig: int) -> None:
+    """向 codex 进程组发送信号；进程组已消失（进程恰好自然退出）时静默忽略。"""
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, timeout_seconds: int | None = None, event_path: Path | None = None) -> int:
     result_path = artifacts["result_path"]
     tool_call_log_path = artifacts["tool_call_log_path"]
+    timeout_seconds = args.codex_timeout_seconds if timeout_seconds is None else timeout_seconds
+    event_path = artifacts["event_path"] if event_path is None else event_path
     start = time.monotonic()
-    deadline = start + args.codex_timeout_seconds
+    deadline = start + timeout_seconds
     next_progress = start + args.codex_progress_interval
     event_count = 0
+    # 提交即止：agent 将 result.json 置为 completed 后提前结束，避免提交后继续消耗时间与 token。
+    baseline_mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
 
-    with artifacts["event_path"].open("w", encoding="utf-8") as event_file:
+    with event_path.open("w", encoding="utf-8") as event_file:
         process = subprocess.Popen(
             command,
             cwd=_REPO_ROOT, # 这里不能改成 problem_dir, 因为 problem_dir 是相对于 _REPO_ROOT 的路径
@@ -255,6 +474,7 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace) -
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,  # 独立进程组：信号用 killpg 全组发送，保证到达 codex 二进制
         )
         assert process.stdout is not None
         selector = selectors.DefaultSelector()
@@ -263,15 +483,44 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace) -
             while process.poll() is None:
                 now = time.monotonic()
                 if now >= deadline:
-                    process.terminate()
+                    # 先 SIGINT 让 codex 优雅退出（清理会话写锁），避免强杀残留
+                    # thread-store 写锁导致后续 finalize resume 立即失败。
+                    # 必须 killpg：进程链为 npx -> codex.js(node shim) -> 二进制，
+                    # 单发信号只打到 npx，codex.js 收不到就不会转发，优雅退出落空。
+                    _kill_group(process, signal.SIGINT)
                     try:
-                        process.wait(timeout=10)
+                        process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                    event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": args.codex_timeout_seconds}, ensure_ascii=False) + "\n")
+                        _kill_group(process, signal.SIGTERM)
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            _kill_group(process, signal.SIGKILL)
+                            process.wait()
+                    event_file.write(json.dumps({"type": "bench.timeout", "timeout_seconds": timeout_seconds}, ensure_ascii=False) + "\n")
                     event_file.flush()
                     return 124
+
+                # 提交即止：result.json 被置为 completed 后提前结束（见上方 baseline_mtime 注释）。
+                try:
+                    if result_path.stat().st_mtime > baseline_mtime:
+                        with result_path.open("r", encoding="utf-8") as rf:
+                            _r = json.load(rf)
+                        if _r.get("status") == "completed":
+                            _logger.info(tag2ansi(
+                                f"[green bold][CODEX DONE][reset] result.json marked completed; "
+                                f"stopping early (elapsed={int(now - start)}s)"
+                            ))
+                            # 终止 codex 进程组，避免提交后孤儿进程继续消耗时间与 token。
+                            _kill_group(process, signal.SIGINT)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                _kill_group(process, signal.SIGKILL)
+                                process.wait()
+                            return 0
+                except (OSError, json.JSONDecodeError):
+                    pass
 
                 for key, _ in selector.select(timeout=1):
                     line = key.fileobj.readline()
@@ -334,6 +583,29 @@ def latest_usage_from_codex_events(event_path: Path) -> dict[str, Any] | None:
             continue
         if candidate := find_usage(event):
             usage = candidate
+    if usage is not None:
+        return usage
+    # codex 0.152 的 stdout 事件流不含 token 统计（v8 实测 token_usage 恒为 None）：
+    # 回退到 codex 会话 rollout 文件，读取最后一条 token_count 的累计用量
+    # （口径含 finalize/resume 回合，与之前手动统计一致）。
+    thread_id = get_thread_id_from_events(event_path)
+    if not thread_id:
+        return None
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    try:
+        for rollout in codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"):
+            for line in rollout.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip() or not line.strip().startswith("{"):
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = event.get("payload") or {}
+                if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+                    usage = (payload.get("info") or {}).get("total_token_usage")
+    except OSError:
+        pass
     return usage
 
 
@@ -355,7 +627,8 @@ def result_status(path: Path) -> str:
 
 def count_jsonl(path: Path) -> int | None:
     if not path.exists():
-        return None
+        # 文件不存在 = 没有任何工具调用记录（no-tool 模式下必然如此），计数为 0。
+        return 0
     with path.open("r", encoding="utf-8", errors="replace") as f:
         return sum(1 for line in f if line.strip())
 
