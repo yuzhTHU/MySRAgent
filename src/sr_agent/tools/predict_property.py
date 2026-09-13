@@ -107,7 +107,8 @@ def _decode_per_var(logits: np.ndarray, label_map: dict, n_vars: int) -> list:
     return results
 
 
-@BaseTool.register("predict_property")
+# 此工具尚未处于 Ready 状态
+# @BaseTool.register("predict_property")
 class PropertyPredictorTool(BaseTool):
     metadata = ToolMetadata(name="predict_property")
 
@@ -125,7 +126,9 @@ class PropertyPredictorTool(BaseTool):
         This tool analyzes the relationship between input variables and the target to detect:
         - **Monotonicity**: Whether y is monotonically increasing, decreasing, or constant w.r.t. each variable.
         - **Convexity**: Whether y is convex, concave, or affine w.r.t. each variable.
-        - **Periodicity**: Whether y is periodic w.r.t. each individual input variable.
+        - **Periodicity**: A heuristic per-variable periodicity prediction. A negative
+          prediction does not rule out a periodic term modulated by another variable
+          (for example x * sin(omega * t)).
         - **Multiplicative Separability**: Whether y = f(x1) * g(x2) * ...
         Additionally, this tool automatically tests variable COMBINATIONS (xi*xj, xi+xj, xi-xj, xi/xj)
         to detect properties that only emerge in combinations (e.g., sin(x1*x2) is periodic in x1*x2
@@ -305,6 +308,10 @@ class PropertyPredictorTool(BaseTool):
         for var, info in result["periodicity"].items():
             label = info['prediction'] if info['confidence'] >= 0.6 else f"uncertain; top label is {info['prediction']}"
             lines.append(f"  {var}: {label} (model score: {info['confidence']:.1%})")
+        lines.append(
+            "Caution: a 'non-periodic' label cannot exclude modulated oscillations such as "
+            "x * sin(omega * t); test such interactions against data when scientifically plausible."
+        )
 
         sep = result["multiplicative_separable"]
         lines.append("")

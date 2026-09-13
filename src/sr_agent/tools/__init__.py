@@ -11,6 +11,7 @@ from .evaluate_formula import EvaluateTool, SubmitFormulaTool
 from .evaluate_code import EvaluateCodeTool
 from .call_llm import LLMTool
 from .polynomial_fit import PolynomialFitTool
+from .harmonic_interaction_fit import HarmonicInteractionFitTool
 from .power_law_fit import PowerLawFitTool
 from .rational_fit import RationalFitTool
 from .constant_fit import ConstantFitTool
@@ -38,6 +39,7 @@ __all__ = [
     "EvaluateCodeTool",
     "LLMTool",
     "PolynomialFitTool",
+    "HarmonicInteractionFitTool",
     "PowerLawFitTool",
     "RationalFitTool",
     "ConstantFitTool",

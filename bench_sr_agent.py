@@ -383,7 +383,7 @@ def aggregate_results(results: List[Dict]) -> Dict:
         r2_hit_rates[f"r2>={thr}"] = {"count": hits, "rate": hits / n if n > 0 else 0}
 
     summary = {
-        "dataset": results[0].get("equation_id", "").split("_")[0] if results else "",
+        "dataset": "|".join(sorted({r.get("dataset_identifier") for r in results} - {None})),
         "total_problems": n,
         "avg_search_time": float(np.mean([r["search_time"] for r in results])),
         "avg_symbolic_acc": float(np.mean([r.get("symbolic_acc") is True for r in results])),

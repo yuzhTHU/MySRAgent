@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import numpy as np
+from types import SimpleNamespace
 
 from sr_agent.api.core import ToolCall
 from sr_agent.sr_agent import SRAgent
@@ -151,6 +152,40 @@ def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
     assert "Do not spend this response on new data exploration" in final_status
 
 
+def test_record_metric_ignores_non_candidate_tool_results(tmp_path):
+    agent = make_agent(tmp_path)
+    diagnostic_result = ToolCallResult(
+        True,
+        {"content": "diagnostic output without formula metrics"},
+        "diagnostic output without formula metrics",
+        {},
+    )
+
+    assert agent.record_metric(diagnostic_result.result) == (None, None)
+    assert agent.sortby(diagnostic_result.result) is None
+
+
+def test_update_buffer_sorts_unwrapped_tool_results(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path)
+    monkeypatch.setattr(agent, "record_search_iteration", lambda *args: None)
+    agent.parser = SimpleNamespace(format_tool_result_messages=lambda *args: [])
+    buffer = [{"role": "user", "content": "Find a formula."}]
+    response_list = [
+        ("diagnostic", [], {"role": "assistant", "content": "diagnostic"}),
+        ("candidate", [], {"role": "assistant", "content": "candidate"}),
+    ]
+    results_list = [
+        [ToolCallResult(True, {"content": "diagnostic"}, "diagnostic", {})],
+        [ToolCallResult(True, {
+            "data_split_results": {"train": {"metrics": {"mse": 0.1, "complexity": 2}}},
+        }, "candidate", {})],
+    ]
+
+    agent.update_buffer(buffer, response_list, results_list, [], {}, list(buffer), {}, R=1, L=1, C=1)
+
+    assert buffer[-2]["content"] == "candidate"
+
+
 def test_update_topk_records_pareto_front(tmp_path):
     agent = make_agent(tmp_path)
     response_list = [
@@ -163,17 +198,23 @@ def test_update_topk_records_pareto_front(tmp_path):
     results_list = [[
         ToolCallResult(True, {
             "formula": "x",
-            "metrics": {"mse": 0.2, "complexity": 2},
+            "data_split_results": {
+                "train": {"metrics": {"mse": 0.2, "complexity": 2}},
+            },
             "is_candidate": True,
         }, "", {}),
         ToolCallResult(True, {
             "formula": "x + y",
-            "metrics": {"mse": 0.1, "complexity": 3},
+            "data_split_results": {
+                "train": {"metrics": {"mse": 0.1, "complexity": 3}},
+            },
             "is_candidate": True,
         }, "", {}),
         ToolCallResult(True, {
             "formula": "x + y + z",
-            "metrics": {"mse": 0.3, "complexity": 5},
+            "data_split_results": {
+                "train": {"metrics": {"mse": 0.3, "complexity": 5}},
+            },
             "is_candidate": True,
         }, "", {}),
     ]]

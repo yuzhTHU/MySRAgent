@@ -5,9 +5,11 @@
 使用 Julia 后端的 SymbolicRegression.jl 进化搜索简洁的数学表达式。
 """
 import re
+import os
 import logging
 import numpy as np
 import nd2py as nd
+from pathlib import Path
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
@@ -176,7 +178,14 @@ class PySRTool(BaseTool):
 
     def _run_pysr(self, X, y, x_names, binary_ops, unary_ops, timeout, maxsize):
         """Run PySR (Julia-based symbolic regression)."""
-        import os
+        # ``juliapkg`` otherwise follows an active CONDA_PREFIX when this
+        # project's Python executable is symlinked into a virtualenv. That
+        # prefix may be system-owned, so use a writable per-user project.
+        if "PYTHON_JULIAPKG_PROJECT" not in os.environ:
+            cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+            julia_project = cache_root / "sr_agent" / "julia_env"
+            julia_project.mkdir(parents=True, exist_ok=True)
+            os.environ["PYTHON_JULIAPKG_PROJECT"] = str(julia_project)
         os.environ['PYTHON_JULIACALL_HANDLE_SIGNALS'] = 'yes'
 
         from pysr import PySRRegressor

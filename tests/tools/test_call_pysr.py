@@ -12,17 +12,25 @@ def make_tool(x: dict[str, np.ndarray], y: np.ndarray) -> PySRTool:
     return PySRTool(data=x | {"y": y}, target="y")
 
 
+def train_metrics(result: dict) -> dict:
+    return result["data_split_results"]["train"]["metrics"]
+
+
 class TestPySRTool:
     def test_format_result_reads_unified_pareto_metrics(self):
         rendered = PySRTool.format_result_dict({
             "formula": "x",
-            "metrics": {"mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1},
+            "data_split_results": {"train": {"metrics": {
+                "mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1,
+            }}},
             "is_candidate": True,
             "method": "PySR",
             "backend_complexity": 1,
             "all_formulas": [{
                 "formula": "x",
-                "metrics": {"mse": 0.0, "rmse": 0.0, "complexity": 1},
+                "data_split_results": {"train": {"metrics": {
+                    "mse": 0.0, "rmse": 0.0, "complexity": 1,
+                }}},
                 "is_candidate": True,
             }],
             "exceptions": [],
@@ -48,9 +56,9 @@ class TestPySRTool:
 
         assert result["formula"] == "2 * x + 1"
         assert result["all_formulas"][0]["formula"] == "2 * x + 1"
-        assert result["all_formulas"][0]["metrics"]["mse"] < 1e-12
-        assert result["metrics"]["mse"] < 1e-12
-        assert result["metrics"]["r2"] == 1.0
+        assert train_metrics(result["all_formulas"][0])["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
+        assert train_metrics(result)["r2"] == 1.0
         assert result["is_candidate"] is True
         assert result["exceptions"] == []
 
@@ -72,7 +80,7 @@ class TestPySRTool:
         )
 
         assert result["formula"] == "4 * x ** 2 + 0.5"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_restore_feature_names_does_not_rewrite_inserted_expressions(self, monkeypatch):
         x2 = np.linspace(0.0, 3.0, 12)
@@ -88,7 +96,7 @@ class TestPySRTool:
         result = tool.execute(binary_operators=["+"], unary_operators=[], x=["x2", "z"])
 
         assert result["formula"] == "x2 + z"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_execute_clamps_timeout_and_subsamples(self, monkeypatch):
         x = np.arange(20.0)
@@ -114,7 +122,7 @@ class TestPySRTool:
 
         assert seen == {"shape": (5, 1), "timeout": 120, "maxsize": 7}
         assert result["config"]["timeout"] == 120
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_execute_uses_gplearn_fallback_when_pysr_fails(self, monkeypatch):
         x = np.linspace(0.0, 5.0, 10)
@@ -134,7 +142,7 @@ class TestPySRTool:
 
         assert result["method"] == "gplearn"
         assert result["formula"] == "x + 2"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
         assert any("PySR failed" in item for item in result["exceptions"])
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
@@ -157,7 +165,7 @@ class TestPySRTool:
         monkeypatch.setattr(PySRTool, "_run_pysr", fake_run_pysr)
 
         result = tool.execute(binary_operators=["+", "*"], unary_operators=[], y='"omega"')
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
         assert result["is_candidate"] is True
 
     def test_transformed_target_is_used_for_final_evaluation(self, monkeypatch):
@@ -173,9 +181,9 @@ class TestPySRTool:
             binary_operators=["+"], unary_operators=[], x=["x"], y="log(y)"
         )
 
-        assert result["metrics"]["mse"] < 1e-12
-        assert result["metrics"]["complexity"] == 1
-        assert result["diagnostics"]
+        assert train_metrics(result)["mse"] < 1e-12
+        assert train_metrics(result)["complexity"] == 1
+        assert result["data_split_results"]["train"]["diagnostics"]
         assert result["is_candidate"] is False
 
     def test_metadata_exists(self):

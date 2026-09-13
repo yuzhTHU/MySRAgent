@@ -478,7 +478,7 @@ class SRAgent(FactoryMixin):
         selected_priority = float('inf')
         for K, results in enumerate(results_list, 1):
             for result in results:
-                if (priorities := self.sortby(result)) is not None and priorities[0] < selected_priority:
+                if (priorities := self.sortby(result.result)) is not None and priorities[0] < selected_priority:
                     selected_K = K
                     selected_priority = priorities[0]
         node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=selected_K)] = 'direct_parent'
@@ -713,14 +713,17 @@ class SRAgent(FactoryMixin):
         return f'(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × (L={L}/{self.max_refinement_depth}) × (K={self.local_sample_size})'
 
     def record_metric(self, record):
-        if not record:
+        if not isinstance(record, dict) or not record:
             return None, None
 
         metric_label = self.ranking_metric.replace('_', ' ').upper()
-        validation_metrics = record["data_split_results"].get("validation", {}).get("metrics", {})
+        split_results = record.get("data_split_results")
+        if not isinstance(split_results, dict):
+            return None, None
+        validation_metrics = split_results.get("validation", {}).get("metrics", {})
         if (metric_value := validation_metrics.get(self.ranking_metric)) is not None:
             return f"validation {metric_label}", metric_value
-        train_metrics = record["data_split_results"].get("train", {}).get("metrics", {})
+        train_metrics = split_results.get("train", {}).get("metrics", {})
         if (metric_value := train_metrics.get(self.ranking_metric)) is not None:
             return f"training {metric_label}", metric_value
         return None, None

@@ -27,9 +27,9 @@ class TestPropertyPredictorMetadata:
         assert d["type"] == "function"
         assert d["function"]["name"] == "predict_property"
 
-    def test_registered_in_base_tool(self):
+    def test_not_registered_while_unready(self):
         from sr_agent.tools.base_tool import BaseTool
-        assert "predict_property" in BaseTool.REGISTRY_DICT
+        assert "predict_property" not in BaseTool.REGISTRY_DICT
 
 
 class TestPropertyPredictorExecution:

@@ -33,23 +33,26 @@ def llm_judge_equivalence(
 
     messages = []
     messages.append({'role': 'system', 'content': (
-        f"You are judging symbolic-regression formulas."
-        f""
-        f"Decide whether the predicted formula is equivalent to the ground-truth formula over the given variable ranges."
-        f"Accept tiny numeric constant differences, for example 3.999999 may be treated as 4 and 0.00001 may be treated as 0."
-        f"Also accept domain-specific equivalence over the provided ranges, such as abs(a) == a if the ranges imply a >= 0."
-        f""
-        f"Return a JSON in this schema:"
-        f"{{'reason': 'brief analysis', 'equivalent': true/false}}"
+        "You are judging exact structural recovery in symbolic regression. "
+        "Two expressions are equivalent only if they represent the same mathematical "
+        "function throughout the specified continuous domain, allowing algebraic "
+        "rearrangements and small fitted-coefficient rounding errors. "
+        "First expand products and collect every repeated term carefully (two copies "
+        "of a*x add to 2*a*x); then compare function families and coefficients. "
+        "A numerically negligible extra term may be treated as coefficient rounding. "
+        "A polynomial or rational approximation to an exponential, logarithm, "
+        "trigonometric function, root, or other distinct function is NOT equivalent, "
+        "even if its sampled predictions are nearly identical. "
+        "Likewise, a low-error Taylor approximation is NOT equivalent. "
+        "Domain identities such as abs(a) = a for a >= 0 are allowed, but a finite "
+        "sample range is not grounds to accept a merely close approximation. "
+        "Judge mathematical structure, not numerical fit quality. "
+        "Return a JSON object with keys 'reason' (brief string) and 'equivalent' (boolean)."
     )})
     messages.append({'role': 'user', 'content': (
-        f"Ground truth:"
-        f"{f_true.to_str()}"
-        f""
-        f"Predicted:"
-        f"{f_pred.to_str()}"
-        f""
-        f"Variable ranges:"
+        f"Ground truth: {f_true.to_str()}\n"
+        f"Predicted: {f_pred.to_str()}\n"
+        f"Variable ranges:\n"
         f"{"\n".join(f"- {name}: [{lo}, {hi}]" for name, (lo, hi) in ranges.items())}"
     )})
     api = LLMAPI.create(llm_provider=llm_provider, llm_model=llm_model)
@@ -153,11 +156,11 @@ def get_symbolic_acc(
     wait_for_human: bool = False,
     return_details: bool = False,
 ) -> Dict[str, Any]:
-    """Check whether two formulas are numerically equivalent on ``X``.
+    """Check candidate recovery with numeric diagnostics and a structural judge.
 
-    The default policy is domain/numeric equivalence, not strict global symbolic
-    proof. It first compares ``f_pred`` and ``f_true`` on ``X``. If that fails,
-    it applies ``nsimplify`` to ``f_pred`` and compares again.
+    The numeric comparison on ``data`` is a diagnostic, not proof of symbolic
+    identity. With ``llm_judge=True``, the structural verdict decides the final
+    result (allowing small coefficient rounding and domain identities).
     """
     for var in (
         [var.name for var in f_true.iter_preorder() if isinstance(var, nd.Variable)] +
@@ -172,7 +175,7 @@ def get_symbolic_acc(
         else:
             raise ValueError(f"Variable '{var}' not found in data and is not recognized as a constant.")
     
-    def _symbolic_acc(y_true, y_pred):
+    def numeric_equivalence(y_true, y_pred):
         if not np.any(is_finite := np.isfinite(y_true)):
             return {'equivalent': False, 'reason': 'y_true is all non-finite'}
         if not np.all(np.isfinite(y_pred[is_finite])):
@@ -181,68 +184,84 @@ def get_symbolic_acc(
             return {'equivalent': True, 'reason': 'y_pred is close to y_true within tolerances'}
         else:
             return {'equivalent': False, 'reason': 'y_pred is not close to y_true within tolerances'}
-    
+
+    result = {'equivalent': None, 'reason': None}
+
+    # 直接判断是否数值等价
     if True:
         y_true = f_true.eval(data)
         y_pred = f_pred.eval(data)
-        result = _symbolic_acc(y_true, y_pred)
+        numeric_result = numeric_equivalence(y_true, y_pred)
 
-    if not result['equivalent']:
-        f_pred2 = f_pred.copy()
-        constants = {'PI': math.pi, 'E': math.e, 'sqrt(2)': math.sqrt(2), 'sqrt(3)': math.sqrt(3), 'sqrt(5)': math.sqrt(5)}
-        numbers = [num for num in f_pred2.iter_preorder() if isinstance(num, nd.Number)]
-        values = my_nsimplify([num.value for num in numbers], tolerance=nsimplify_tolerance, constants=constants)
+    # 尝试对数值常数进行 nsimplify，看看能否得到数值等价
+    if not numeric_result['equivalent']:
+        nsimplified_f_pred = f_pred.copy()
+        numbers = [num for num in nsimplified_f_pred.iter_preorder() if isinstance(num, nd.Number)]
+        values = my_nsimplify(
+            [num.value for num in numbers], 
+            tolerance=nsimplify_tolerance, 
+            constants={'PI': math.pi, 'E': math.e, 'sqrt(2)': math.sqrt(2), 'sqrt(3)': math.sqrt(3), 'sqrt(5)': math.sqrt(5)}
+        )
         for num, value in zip(numbers, values):
             value = nd.parse(value, {'PI': math.pi, 'E': math.e})
-            f_pred2 = f_pred2.replace(num, value)
-        _logger.debug(f"Applied nsimplify to f_pred. Original: {f_pred.to_str()}, Simplified: {f_pred2.to_str()}")
-        y_pred2 = f_pred2.eval(data)
-        result2 = _symbolic_acc(y_true, y_pred2)
-        result2['reason'] = f"nsimplified f_pred to obtain y_pred. {result2['reason']}"
-        if result2['equivalent']:
-            f_pred = f_pred2
-            y_pred = y_pred2
-            result = result2
+            nsimplified_f_pred = nsimplified_f_pred.replace(num, value)
+        _logger.debug(f"Applied nsimplify to f_pred. Original: {f_pred.to_str()}, Simplified: {nsimplified_f_pred.to_str()}")
+        nsimplified_y_pred = nsimplified_f_pred.eval(data)
+        nsimplified_numeric_result = numeric_equivalence(y_true, nsimplified_y_pred)
+        nsimplified_numeric_result['reason'] = f"nsimplified f_pred to obtain y_pred. {nsimplified_numeric_result['reason']}"
+        if nsimplified_numeric_result['equivalent']:
+            f_pred = nsimplified_f_pred
+            y_pred = nsimplified_y_pred
+            numeric_result = nsimplified_numeric_result
 
+    assert numeric_result['equivalent'] in {True, False}, f"numeric_result['equivalent'] must be True or False, got {numeric_result['equivalent']!r}"
+
+    # 尝试用 LLM 判断结构等价
     if llm_judge:
         var_ranges = {name: (np.nanmin(values), np.nanmax(values)) for name, values in data.items()}
-        result2 = llm_judge_equivalence(
+        llm_result = llm_judge_equivalence(
             f_pred=f_pred,
             f_true=f_true,
             ranges=var_ranges,
             llm_provider=llm_provider,
             llm_model=llm_model,
         )
-        if result['equivalent'] == result2['equivalent']:
-            result['reason'] += f"; LLM judgement agrees: {result2['reason']}"
+        if numeric_result['equivalent'] == llm_result['equivalent']:
+            result['equivalent'] = llm_result['equivalent']
+            result['reason'] = f"{numeric_result['reason']}; LLM judgement agrees: {llm_result['reason']}"
         elif wait_for_human:
             foo = lambda x: tag2ansi('[blue]NONE[reset]' if x is None else ('[green]EQUIVALENT[reset]' if x else '[red]NOT EQUIVALENT[reset]'))
             accept = input(
-                f"Numeric equivalent is {foo(result['equivalent'])}, "
-                f"while LLM judges the formulas {foo(result2['equivalent'])} since {result2['reason']}:\n"
+                f"Numeric equivalent is {foo(numeric_result['equivalent'])}, "
+                f"while LLM judges the formulas {foo(llm_result['equivalent'])} since {llm_result['reason']}:\n"
                 f"  f_true = {f_true.to_str()}\n"
                 f"  f_pred = {f_pred.to_str()}\n"
                 f"Accept LLM judgement? [y/N] "
             ).strip().lower() in {"y", "yes", "true", "1", ""}
             if accept:
-                result['equivalent'] = result2['equivalent']
-                result['reason'] += f"; accepted LLM judgement: {result2['equivalent']} ({result2['reason']})"
+                result['equivalent'] = llm_result['equivalent']
+                result['reason'] = f"{numeric_result['reason']}; but human accepted LLM judgement: {llm_result['equivalent']} ({llm_result['reason']})"
             else:
-                result['reason'] += f"; rejected LLM judgement: {result2['equivalent']} ({result2['reason']})"
+                result['equivalent'] = numeric_result['equivalent']
+                result['reason'] = f"{numeric_result['reason']}; and human rejected LLM judgement: {llm_result['equivalent']} ({llm_result['reason']})"
         else:
             foo = lambda x: tag2ansi('[blue]NONE[reset]' if x is None else ('[green]EQUIVALENT[reset]' if x else '[red]NOT EQUIVALENT[reset]'))
-            accept = result2['equivalent'] is not None
+            accept = llm_result['equivalent'] is not None
             _logger.warning(
-                f"Numeric equivalent is {foo(result['equivalent'])}, "
-                f"while LLM judges the formulas {foo(result2['equivalent'])} since {result2['reason']}:\n"
+                f"Numeric equivalent is {foo(numeric_result['equivalent'])}, "
+                f"while LLM judges the formulas {foo(llm_result['equivalent'])} since {llm_result['reason']}:\n"
                 f"  f_true = {f_true.to_str()}\n"
                 f"  f_pred = {f_pred.to_str()}\n"
-                f"{"Accept" if accept else "Reject"} LLM judgement without human review."
+                f"Automatically {'accept' if accept else 'reject'} LLM judgement without human review."
             )
             if accept:
-                result['equivalent'] = result2['equivalent']
-                result['reason'] += f"; accepted LLM judgement: {result2['equivalent']} ({result2['reason']})"
+                result['equivalent'] = llm_result['equivalent']
+                result['reason'] = f"{numeric_result['reason']}; automatically accepted LLM judgement: {llm_result['equivalent']} ({llm_result['reason']})"
             else:
-                result['reason'] += f"; rejected LLM judgement: {result2['equivalent']} ({result2['reason']})"
+                result['equivalent'] = numeric_result['equivalent']
+                result['reason'] = f"{numeric_result['reason']}; automatically rejected LLM judgement: {llm_result['equivalent']} ({llm_result['reason']})"
+    else:
+        result['equivalent'] = numeric_result['equivalent']
+        result['reason'] = numeric_result['reason']
 
     return result if return_details else result['equivalent']

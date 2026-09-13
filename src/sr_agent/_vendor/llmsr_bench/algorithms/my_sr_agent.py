@@ -23,7 +23,8 @@ def update_parser(parser):
     """更新 parser，添加多项式拟合相关参数"""
     default_tools = sorted(set(BaseTool.all_registered_names) - {
         'evaluate_code', 'workspace_code_executor', 'ask_human', 
-        'call_llm', 'workspace_shell', 'create_skill', 'edit_skill'
+        'call_llm', 'workspace_shell', 'create_skill', 'edit_skill',
+        'edit_tool', 'harmonic_interaction_fit',
     })
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")

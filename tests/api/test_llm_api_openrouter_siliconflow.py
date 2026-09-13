@@ -68,15 +68,38 @@ class _FakeOpenRouterCompletion:
 
 class _FakeOpenRouterClient:
     payloads: list[dict[str, Any]] = []
+    api_keys: list[str | None] = []
     message: dict[str, Any] = {"content": "ok"}
 
     def __init__(self, *args, **kwargs):
+        self.api_keys.append(kwargs.get("api_key"))
         self.chat = self
         self.completions = self
 
     def create(self, **payload):
         self.payloads.append(payload)
         return _FakeOpenRouterCompletion(self.message)
+
+
+class _RetryableOpenRouterError(Exception):
+    def __init__(self):
+        super().__init__("temporarily over the in-flight budget")
+        self.body = {
+            "error": {
+                "metadata": {"headers": {"Retry-After": "120"}},
+            }
+        }
+
+
+class _RetryingOpenRouterClient(_FakeOpenRouterClient):
+    attempts = 0
+
+    def create(self, **payload):
+        self.payloads.append(payload)
+        self.__class__.attempts += 1
+        if self.__class__.attempts == 1:
+            raise _RetryableOpenRouterError()
+        return _FakeOpenRouterCompletion({"content": "recovered"})
 
 
 class _FakeSiliconFlowResponse:
@@ -140,6 +163,77 @@ def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypat
     assert chunks == [("ready", [ToolCall("demo_tool", {"x": 1}, id="call_1", raw=_FakeOpenRouterClient.message["tool_calls"][0])], expected_message)]
     assert return_value["response_message"] == "ready"
     assert return_value["tool_calls"] == [ToolCall("demo_tool", {"x": 1}, id="call_1", raw=_FakeOpenRouterClient.message["tool_calls"][0])]
+
+
+def test_openrouter_honors_retry_after_and_recovers(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _RetryingOpenRouterClient)
+    sleeps = []
+    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+    _RetryingOpenRouterClient.payloads = []
+    _RetryingOpenRouterClient.attempts = 0
+
+    api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
+    chunks, _ = _consume(api([{"role": "user", "content": "retry"}]))
+
+    assert sleeps == [120.0]
+    assert chunks[0][0] == "recovered"
+
+
+def test_openrouter_empty_response_uses_same_retry_backoff(monkeypatch):
+    class EmptyThenValidClient(_FakeOpenRouterClient):
+        attempts = 0
+
+        def create(self, **payload):
+            self.__class__.attempts += 1
+            content = "" if self.__class__.attempts == 1 else "recovered"
+            return _FakeOpenRouterCompletion({"content": content})
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", EmptyThenValidClient)
+    sleeps = []
+    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+
+    api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
+    chunks, _ = _consume(api([{"role": "user", "content": "retry empty"}]))
+
+    assert sleeps == [1.0]
+    assert chunks[0][0] == "recovered"
+
+
+def test_openrouter_all_empty_responses_raise(monkeypatch):
+    import pytest
+
+    class AlwaysEmptyClient(_FakeOpenRouterClient):
+        attempts = 0
+
+        def create(self, **payload):
+            self.__class__.attempts += 1
+            return _FakeOpenRouterCompletion({"content": ""})
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", AlwaysEmptyClient)
+    sleeps = []
+    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+
+    api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        _consume(api([{"role": "user", "content": "retry empty"}]))
+
+    assert AlwaysEmptyClient.attempts == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_openrouter_uses_standard_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
+    _FakeOpenRouterClient.api_keys = []
+    _FakeOpenRouterClient.message = {"content": "ok"}
+
+    api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
+    _consume(api([{"role": "user", "content": "test key selection"}]))
+
+    assert _FakeOpenRouterClient.api_keys == ["test-key"]
 
 
 def test_openrouter_skips_malformed_native_tool_calls(monkeypatch):

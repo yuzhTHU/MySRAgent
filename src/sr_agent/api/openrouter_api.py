@@ -60,6 +60,30 @@ class OpenRouterAPI(LLMAPI):
             payload["tools"] = self.tool_description_json
             payload["tool_choice"] = "auto"
 
+        def get_tool_call(message, content):
+            if not self.tool_list:
+                tool_call = []
+            elif self.tool_parser:
+                tool_call = self.tool_parser.parse_response(content)
+            elif 'tool_calls' in message:
+                tool_call = self.normalize_openai_tool_calls(message['tool_calls'])
+                message['tool_calls'] = [call.raw for call in tool_call]
+            else:
+                tool_call = []
+            return tool_call
+
+        def get_usage(completion):
+            token_usage = {}
+            price_usage = {}
+            if usage := completion.usage:
+                token_usage["prompt"] = usage.prompt_tokens
+                token_usage["answer"] = usage.completion_tokens
+                total_tokens = getattr(usage, "total_tokens", usage.prompt_tokens + usage.completion_tokens)
+                if (other := total_tokens - usage.prompt_tokens - usage.completion_tokens) > 0:
+                    token_usage["others"] = other
+                price_usage['total'] = getattr(usage, "cost", 0)
+            return token_usage, price_usage
+
         # OpenRouter does not support `n` parameter now,
         # see https://github.com/OpenRouterTeam/openrouter-runner/issues/99
         details = []
@@ -72,45 +96,26 @@ class OpenRouterAPI(LLMAPI):
                     message = completion.choices[0].message.to_dict()
                     content = message['content'] or ""
                 except Exception as e:
-                    _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(e, with_traceback=False)}")
-                    time.sleep(1)
-                    continue
-
-                token_usage = {}
-                price_usage = {}
-                if usage := completion.usage:
-                    token_usage["prompt"] = usage.prompt_tokens
-                    token_usage["answer"] = usage.completion_tokens
-                    total_tokens = getattr(usage, "total_tokens", usage.prompt_tokens + usage.completion_tokens)
-                    if (other := total_tokens - usage.prompt_tokens - usage.completion_tokens) > 0:
-                        token_usage["others"] = other
-                    price_usage['total'] = getattr(usage, "cost", 0)
-
-                if not self.tool_list:
                     tool_call = []
-                elif self.tool_parser:
-                    tool_call = self.tool_parser.parse_response(content)
-                elif 'tool_calls' in message:
-                    tool_call = self.normalize_openai_tool_calls(message['tool_calls'])
-                    message['tool_calls'] = [call.raw for call in tool_call]
+                    retry_error = e
                 else:
-                    tool_call = []
-                
-                # Avoid yielding empty messages
-                if not (tool_call or content.strip()) and attempt < max_retry:
-                    _logger.trace(
-                        f"Received empty content and no tool calls from "
-                        f"OpenRouterAPI({self.model}), retrying... "
-                        f"(attempt {attempt}/{max_retry})"
-                    )
-                    time.sleep(1)
-                    continue
-                break
-            else:
-                _logger.warning(
-                    f"All {max_retry} retries returned empty responses from "
-                    f"OpenRouterAPI({self.model}), giving up for sample {idx}/{n}."
-                )
+                    tool_call = get_tool_call(message, content)
+                    if not (tool_call or content.strip()):
+                        retry_error = ValueError(f"OpenRouterAPI({self.model}) returned empty content and no usable tool calls.")
+                    else:
+                        retry_error = None
+                if retry_error is None:
+                    token_usage, price_usage = get_usage(completion)
+                    break
+                elif attempt < max_retry:
+                    _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(retry_error, with_traceback=False)}")
+                    delay = self._retry_delay(retry_error, attempt)
+                    _logger.info(f"Retrying OpenRouterAPI({self.model}) in {delay:g}s (attempt {attempt}/{max_retry}).")
+                    time.sleep(delay)
+                else:
+                    _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(retry_error, with_traceback=False)}")
+                    raise RuntimeError(f"OpenRouterAPI({self.model}) failed after {max_retry} attempts for sample {idx}/{n}.") from retry_error
+
             details.append({
                 "content": content,
                 "tool_call": tool_call,
@@ -135,3 +140,19 @@ class OpenRouterAPI(LLMAPI):
             "tool_calls": details[0]["tool_call"] if len(details) == 1 else [detail["tool_call"] for detail in details],
             "responses": [detail["response"] for detail in details],
         }
+
+    @staticmethod
+    def _retry_delay(error: Exception, attempt: int) -> float:
+        """Honor OpenRouter's retry hint, falling back to bounded backoff."""
+        headers = getattr(getattr(error, "response", None), "headers", None) or {}
+        retry_after = headers.get("retry-after") or headers.get("Retry-After")
+        if retry_after is None:
+            body = getattr(error, "body", None)
+            if isinstance(body, dict):
+                metadata = body.get("error", body).get("metadata", {})
+                retry_headers = metadata.get("headers", {}) if isinstance(metadata, dict) else {}
+                retry_after = retry_headers.get("Retry-After") or retry_headers.get("retry-after")
+        try:
+            return max(1.0, min(float(retry_after), 300.0))
+        except (TypeError, ValueError):
+            return min(float(2 ** (attempt - 1)), 30.0)
