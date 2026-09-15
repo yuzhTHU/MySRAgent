@@ -16,7 +16,8 @@ from scipy.optimize import minimize_scalar
 from .base_tool import BaseTool, ToolMetadata
 
 
-@BaseTool.register("harmonic_interaction_fit")
+# 这个工具太狭隘了，用处不大
+# @BaseTool.register("harmonic_interaction_fit")
 class HarmonicInteractionFitTool(BaseTool):
     metadata = ToolMetadata(name="harmonic_interaction_fit")
 

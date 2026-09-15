@@ -43,6 +43,7 @@ class SRAgentInteractive(SRAgent):
         restart_top_k: int = 1,
         max_workers: int = 0,
         validation_fraction: float = 0.2,
+        split_by: str = "ood",
         split_random_state: int = 42,
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
@@ -66,6 +67,7 @@ class SRAgentInteractive(SRAgent):
             restart_top_k: 重启时注入历史最佳结果数量。
             max_workers: 并行工作进程数（0 表示不并行）。
             validation_fraction: 验证集比例。
+            split_by: 验证集划分方式，可选 "random" 或 "ood"。
             split_random_state: 数据划分随机种子。
             ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
@@ -93,6 +95,7 @@ class SRAgentInteractive(SRAgent):
             restart_top_k=restart_top_k,
             max_workers=max_workers,
             validation_fraction=validation_fraction,
+            split_by=split_by,
             split_random_state=split_random_state,
             ranking_metric=ranking_metric,
             larger_is_better=larger_is_better,
@@ -143,6 +146,7 @@ class SRAgentInteractive(SRAgent):
                 "llm_provider": self.llm_provider,
                 "llm_model": self.llm_model,
                 "llm_max_tokens": self.llm_max_tokens,
+                "skill_manager": self.skill_manager,
             }
             self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
             self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)

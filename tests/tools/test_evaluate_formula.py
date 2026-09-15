@@ -23,8 +23,9 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("x1 * 2 + 3")
 
-        assert result["metrics"]["mse"] == 0.0
-        assert result["metrics"]["r2"] == 1.0
+        metrics = result["data_split_results"]["train"]["metrics"]
+        assert metrics["mse"] == 0.0
+        assert metrics["r2"] == 1.0
 
     def test_quadratic_formula(self):
         """测试二次公式：y = x1**2。"""
@@ -34,8 +35,9 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("x1**2")
 
-        assert result["metrics"]["mse"] == 0.0
-        assert result["metrics"]["r2"] == 1.0
+        metrics = result["data_split_results"]["train"]["metrics"]
+        assert metrics["mse"] == 0.0
+        assert metrics["r2"] == 1.0
 
     def test_trigonometric_formula(self):
         """测试三角函数公式：y = sin(x1)。"""
@@ -45,7 +47,7 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("sin(x1)")
 
-        assert result["metrics"]["mse"] < 1e-10
+        assert result["data_split_results"]["train"]["metrics"]["mse"] < 1e-10
 
     def test_poor_fit(self):
         """测试拟合不佳的情况。"""
@@ -55,8 +57,9 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("x1")  # 错误的公式
 
-        assert result["metrics"]["mse"] > 10000  # MSE 应该很大
-        assert result["metrics"]["r2"] < 0  # R² 应该为负（比预测均值还差）
+        metrics = result["data_split_results"]["train"]["metrics"]
+        assert metrics["mse"] > 10000  # MSE 应该很大
+        assert metrics["r2"] < 0  # R² 应该为负（比预测均值还差）
 
     def test_multiple_features(self):
         """测试多特征公式：y = x1 + x2。"""
@@ -69,7 +72,7 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("x1 + x2")
 
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_scalar_prediction_broadcasts_to_vector_target(self):
         x = np.arange(4.0)
@@ -77,7 +80,7 @@ class TestEvaluateTool:
 
         result = self.make_tool({"x": x}, y).execute("1")
 
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_scalar_target_broadcasts_to_vector_prediction(self):
         x = np.arange(4.0)
@@ -86,8 +89,9 @@ class TestEvaluateTool:
 
         result = tool.execute("0*x + 1", y="1")
 
-        assert result["metrics"]["mse"] == 0.0
-        assert result["diagnostics"]["error_profile"]["max_absolute_error"] == 0.0
+        train = result["data_split_results"]["train"]
+        assert train["metrics"]["mse"] == 0.0
+        assert train["diagnostics"]["error_profile"]["max_absolute_error"] == 0.0
 
     def test_invalid_formula(self):
         """测试无效公式。"""
@@ -110,7 +114,11 @@ class TestEvaluateTool:
         result = tool.execute("1.0 * x1", fit=True)
 
         # 拟合后应该能得到较好的结果
-        assert result["metrics"]["r2"] > 0.95
+        assert result["data_split_results"]["train"]["metrics"]["r2"] > 0.95
+        assert result["training_samples"] == 5
+        text = tool.format_result_dict(result)
+        assert text.splitlines()[2] == "    (Parameters are re-fitted on 5 train-set samples)"
+        assert "the reported fit is in-sample" not in text
 
     def test_output_structure(self):
         """测试输出结构完整性。"""
@@ -122,12 +130,13 @@ class TestEvaluateTool:
 
         # 检查必需的键
         assert "formula" in result
-        assert "metrics" in result
-        assert result["metrics"] is not None
-        assert "mse" in result["metrics"]
-        assert "rmse" in result["metrics"]
-        assert "mae" in result["metrics"]
-        assert "r2" in result["metrics"]
+        assert "data_split_results" in result
+        metrics = result["data_split_results"]["train"]["metrics"]
+        assert metrics is not None
+        assert "mse" in metrics
+        assert "rmse" in metrics
+        assert "mae" in metrics
+        assert "r2" in metrics
 
     def test_optional_residual_diagnostics(self):
         x1 = np.array([0.0, 1.0, 2.0, 3.0])
@@ -139,14 +148,14 @@ class TestEvaluateTool:
         concise = tool.execute("2*x1", show_diagnostics=False)
         detailed = tool.execute("2*x1", show_diagnostics=True)
 
-        assert default_result["diagnostics"]
-        assert "diagnostics" not in concise
-        diagnostics = detailed["diagnostics"]
+        assert default_result["data_split_results"]["train"]["diagnostics"]
+        assert "diagnostics" not in concise["data_split_results"]["train"]
+        diagnostics = detailed["data_split_results"]["train"]["diagnostics"]
         assert set(diagnostics) == {
             "error_profile", "worst_samples", "strongest_residual_correlations"
         }
         assert diagnostics["error_profile"]["max_absolute_error"] == 2.0
-        assert len(diagnostics["worst_samples"]) == 3
+        assert len(diagnostics["worst_samples"]) == 4
         assert diagnostics["worst_samples"][0]["index"] == 3
         correlation_names = {
             item["variable"] for item in diagnostics["strongest_residual_correlations"]
@@ -164,7 +173,7 @@ class TestEvaluateTool:
             "0.5*x",
             y="log(y)",
             show_diagnostics=True,
-        )["diagnostics"]
+        )["data_split_results"]["train"]["diagnostics"]
 
         names = {
             item["variable"] for item in diagnostics["strongest_residual_correlations"]
@@ -190,7 +199,7 @@ class TestEvaluateTool:
         tool = self.make_tool(X, y)
         result = tool.execute("x1 * 2 + x3")
 
-        assert result["metrics"]["r2"] > 0.9
+        assert result["data_split_results"]["train"]["metrics"]["r2"] > 0.9
 
 
 class TestSubmitFormulaTool:

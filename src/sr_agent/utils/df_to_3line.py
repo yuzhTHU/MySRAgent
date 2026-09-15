@@ -1,7 +1,7 @@
 import pandas as pd
 from .tag2ansi import tag2ansi
 
-def df_to_3line(df: pd.DataFrame):
+def df_to_3line(df: pd.DataFrame, float_format: str | None = None):
     idx = df.index
     if not isinstance(idx, pd.MultiIndex):
         idx = pd.MultiIndex.from_arrays([idx], names=df.index.names)
@@ -11,7 +11,13 @@ def df_to_3line(df: pd.DataFrame):
         ix = []
         for j, x in enumerate(key):
             ix.append(str(x) if prev is None or key[:j + 1] != prev[:j + 1] else "")
-        rows.append(ix + [str(x) for x in df.iloc[i]])
+        values = []
+        for column, value in df.iloc[i].items():
+            if float_format is not None and pd.api.types.is_float_dtype(df[column]):
+                values.append(format(value, float_format))
+            else:
+                values.append(str(value))
+        rows.append(ix + values)
         prev = key
 
     head = ["" if x is None else str(x) for x in idx.names] + [str(c) for c in df.columns]

@@ -15,11 +15,10 @@ class RelationshipAnalysisTool(BaseTool):
         self,
         variables: List[str] = None,
         y: str = None,
-        n_bins: int = 10,
+        n_bins: int = 5,
         pairwise: bool = False,
         binning: str = "quantile",
-        validation_fraction: float = 0.2,
-        n_repeats: int = 3,
+        n_folds: int = 5,
         collapse_model: str = "bins",
     ) -> Dict[str, Any]:
         """Analyze feature-target relationships, conditional distributions, and one-dimensional collapse.
@@ -30,15 +29,13 @@ class RelationshipAnalysisTool(BaseTool):
             n_bins: Number of bins for each feature's conditional target summary (2-100).
             pairwise: Whether to also return full pairwise Pearson and Spearman matrices.
             binning: Binning strategy: "quantile" or "equal_width".
-            validation_fraction: Fraction held out when estimating out-of-sample collapse (0.05-0.5).
-            n_repeats: Number of deterministic holdout repeats used for collapse stability (1-20).
-            collapse_model: One-dimensional probe: "bins", "spline", or "isotonic".
+            n_folds: Number of disjoint cross-validation folds (2-20). Default: 5.
+            collapse_model: One-dimensional predictor fitted on each training fold: "bins", "spline", or "isotonic".
         """
         data = self.context["data"]
         target_name = (y or self.context["target"]).strip().strip('"').strip("'")
         n_bins = max(2, min(int(n_bins), 100))
-        validation_fraction = min(max(float(validation_fraction), 0.05), 0.5)
-        n_repeats = min(max(int(n_repeats), 1), 20)
+        n_folds = max(2, min(int(n_folds), 20))
         if binning not in {"quantile", "equal_width"}:
             raise ValueError("binning must be 'quantile' or 'equal_width'")
         if collapse_model not in {"bins", "spline", "isotonic"}:
@@ -70,24 +67,12 @@ class RelationshipAnalysisTool(BaseTool):
         relationships = {}
         for name, values in arrays.items():
             try:
-                relationship = self._analyze_relationship(
-                    values, target, n_bins, binning,
-                    validation_fraction, n_repeats, collapse_model,
+                relationship, residual = self._analyze_relationship(
+                    values, target, n_bins, binning, n_folds, collapse_model,
                 )
 
-                # Check whether another variable still explains the cross-fitted residual.
-                finite = np.isfinite(values) & np.isfinite(target)
-                indices = np.flatnonzero(finite)
-                if len(indices) >= 10:
-                    prediction = np.full_like(target, np.nan, dtype=float)
-                    folds = np.array_split(np.random.default_rng(0).permutation(indices), 5)
-                    for test in folds:
-                        train = np.setdiff1d(indices, test, assume_unique=False)
-                        prediction[test] = self._fit_predict_1d(
-                            values[train], target[train], values[test],
-                            n_bins, binning, collapse_model,
-                        )
-                    residual = target - prediction
+                # Compute correlations of other variables with the cross-fitted residual.
+                if np.any(np.isfinite(residual)):
                     remaining = []
                     for other, other_values in arrays.items():
                         if other == name:
@@ -113,6 +98,12 @@ class RelationshipAnalysisTool(BaseTool):
             "target": target_name,
             "relationships": relationships,
             "exceptions": exceptions,
+            "analysis_settings": {
+                "n_bins": n_bins,
+                "binning": binning,
+                "n_folds": n_folds,
+                "collapse_model": collapse_model,
+            },
         }
         if pairwise:
             pairwise_arrays = {name: arrays[name] for name in relationships}
@@ -139,9 +130,10 @@ class RelationshipAnalysisTool(BaseTool):
 
     @classmethod
     def _analyze_relationship(
-        cls, x, y, n_bins, binning, validation_fraction, n_repeats, collapse_model,
+        cls, x, y, n_bins, binning, n_folds, collapse_model,
     ):
         finite = np.isfinite(x) & np.isfinite(y)
+        total_count = len(x)
         x, y = x[finite], y[finite]
         if not len(x):
             raise ValueError("no jointly finite samples")
@@ -165,6 +157,8 @@ class RelationshipAnalysisTool(BaseTool):
             xb, yb = x[mask], y[mask]
             y_mean = float(np.mean(yb))
             conditional_bins.append({
+                "bin_interval": [float(edges[index]), float(edges[index + 1])],
+                "upper_inclusive": index == len(edges) - 2,
                 "x_range": [float(np.min(xb)), float(np.max(xb))],
                 "sample_count": int(len(yb)),
                 "y_mean": y_mean,
@@ -172,49 +166,44 @@ class RelationshipAnalysisTool(BaseTool):
                 "y_range": [float(np.min(yb)), float(np.max(yb))],
             })
 
-        validation_scores = []
-        if len(x) >= 10 and np.var(y) > 0:
-            for repeat in range(n_repeats):
-                order = np.random.default_rng(repeat).permutation(len(x))
-                n_test = max(2, int(round(len(x) * validation_fraction)))
-                test, train = order[:n_test], order[n_test:]
-                if len(train) < 4:
+        fold_scores = []
+        prediction = np.full(len(x), np.nan, dtype=float)
+        if len(x) >= n_folds and np.var(y) > 0:
+            folds = np.array_split(np.random.default_rng(0).permutation(len(x)), n_folds)
+            for test in folds:
+                train_mask = np.ones(len(x), dtype=bool)
+                train_mask[test] = False
+                train = np.flatnonzero(train_mask)
+                if len(train) < 4 or len(test) < 2:
                     continue
                 try:
-                    prediction = cls._fit_predict_1d(
+                    predicted = cls._fit_predict_1d(
                         x[train], y[train], x[test], n_bins, binning, collapse_model
                     )
                     baseline = float(np.sum((y[test] - np.mean(y[train])) ** 2))
-                    if baseline > 0 and np.all(np.isfinite(prediction)):
-                        validation_scores.append(float(
-                            1 - np.sum((y[test] - prediction) ** 2) / baseline
+                    if baseline > 0 and np.all(np.isfinite(predicted)):
+                        prediction[test] = predicted
+                        fold_scores.append(float(
+                            1 - np.sum((y[test] - predicted) ** 2) / baseline
                         ))
                 except Exception:
                     continue
 
         pearson, spearman = cls.correlation_coefficients(x, y)
-        bin_means = np.asarray([item["y_mean"] for item in conditional_bins])
-        differences = np.diff(bin_means)
-        if len(differences) and np.all(differences >= 0):
-            shape = "increasing"
-        elif len(differences) and np.all(differences <= 0):
-            shape = "decreasing"
-        elif len(bin_means) >= 3 and 0 < int(np.argmin(bin_means)) < len(bin_means) - 1:
-            shape = "U-shaped"
-        elif len(bin_means) >= 3 and 0 < int(np.argmax(bin_means)) < len(bin_means) - 1:
-            shape = "inverted-U-shaped"
-        else:
-            shape = "non-monotonic or unclear"
+        residual = np.full(total_count, np.nan, dtype=float)
+        residual[finite] = y - prediction
         return {
             "pearson": pearson,
             "spearman": spearman,
+            "jointly_finite_sample_count": len(x),
+            "total_sample_count": total_count,
             "observed_variable_range": [float(np.min(x)), float(np.max(x))],
-            "one_variable_test_r2_mean": float(np.mean(validation_scores)) if validation_scores else float("nan"),
-            "one_variable_test_r2_std": float(np.std(validation_scores)) if validation_scores else float("nan"),
-            "one_variable_test_repeats": len(validation_scores),
-            "binned_shape": shape,
+            "observed_target_range": [float(np.min(y)), float(np.max(y))],
+            "one_variable_test_r2_mean": float(np.mean(fold_scores)) if fold_scores else float("nan"),
+            "one_variable_test_r2_std": float(np.std(fold_scores)) if fold_scores else float("nan"),
+            "one_variable_test_success_folds": len(fold_scores),
             "conditional_bins": conditional_bins,
-        }
+        }, residual
 
     @staticmethod
     def _fit_predict_1d(train_x, train_y, test_x, n_bins, binning, model):
@@ -250,60 +239,81 @@ class RelationshipAnalysisTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        lines = [f"Target: {result['target']}"]
+        def number(value):
+            if value == 0:
+                return "0"
+            return f"{value:#.3g}".removesuffix(".")
+
+        def interval(values):
+            return f"[{number(values[0])}, {number(values[1])}]"
+
+        lines = []
+        settings = result["analysis_settings"]
+        predictor = {
+            "bins": (
+                f"Randomly split data into n_folds={settings['n_folds']} parts, "
+                f"use {settings['n_folds'] - 1} parts for binning, and predict each "
+                "held-out value using the bin mean"
+            ),
+            "spline": (
+                f"Randomly split data into n_folds={settings['n_folds']} parts, "
+                f"use {settings['n_folds'] - 1} parts to fit a univariate smoothing "
+                "spline, and predict the remaining part"
+            ),
+            "isotonic": (
+                f"Randomly split data into n_folds={settings['n_folds']} parts, "
+                f"use {settings['n_folds'] - 1} parts to fit isotonic regression, "
+                "and predict the remaining part"
+            ),
+        }[settings["collapse_model"]]
+        duplicate_note = "; duplicate quantile cut points removed" if settings["binning"] == "quantile" else ""
         for name, relationship in result["relationships"].items():
-            lines.append(
-                f"Relationship of {name} to {result['target']}: Pearson linear correlation="
-                f"{relationship['pearson']:.4g}; Spearman rank correlation="
-                f"{relationship['spearman']:.4g}."
-            )
-            lines.append(
-                f"A flexible one-variable {relationship['one_variable_test_repeats']}-repeat held-out fit "
-                f"using only {name} achieved mean test R²="
-                f"{relationship['one_variable_test_r2_mean']:.4g} with R² standard deviation="
-                f"{relationship['one_variable_test_r2_std']:.3g} across those data splits. A high value "
-                f"means this flexible predictor can reproduce {result['target']} from {name} on the "
-                f"observed range {relationship['observed_variable_range']}; this score does not identify "
-                "the symbolic form and does not imply causality, necessity, or an independent contribution. "
-                "Do not add these R² scores across variables because variables may encode the same "
-                "information nonlinearly."
-            )
-            shape_hint = {
-                "U-shaped": "Try even transforms such as a square or absolute value as hypotheses.",
-                "inverted-U-shaped": "Try a negated even transform or another peaked nonlinear form as a hypothesis.",
-                "increasing": "Try simple monotone transforms as hypotheses.",
-                "decreasing": "Try inverse or decreasing monotone transforms as hypotheses.",
-            }.get(relationship["binned_shape"], "Inspect the bins before choosing a transform.")
-            lines.append(
-                f"Heuristic shape clue from binned target means: {relationship['binned_shape']} "
-                f"(sensitive to domain coverage and binning). {shape_hint}"
-            )
-            if strongest := relationship.get("strongest_residual_association_after_one_variable_fit"):
-                lines.append(
-                    f"In cross-fitted held-out predictions of {result['target']} from {name} alone, "
-                    "the remaining errors were "
-                    f"most associated with {strongest['variable']} (residual Pearson="
-                    f"{strongest['pearson']:.4g}, residual Spearman={strongest['spearman']:.4g}). "
-                    "This may indicate additional predictive information, not an independent causal effect; "
-                    f"first check whether it is derived from or redundant with {name}."
-                )
+            lines.extend([
+                f"{name} vs {result['target']} (Only jointly finite feature/target samples are used, "
+                f"{relationship['jointly_finite_sample_count']}/{relationship['total_sample_count']} finite samples):",
+                f"  Pearson linear correlation={number(relationship['pearson'])};",
+                f"  Spearman rank correlation={number(relationship['spearman'])};",
+                f"  {name} range={interval(relationship['observed_variable_range'])};",
+                f"  {result['target']} range={interval(relationship['observed_target_range'])};",
+                f"  Binning analysis (n_bins={settings['n_bins']}, "
+                f"method={settings['binning']}{duplicate_note}):",
+                f"    (Range of {name} | samples | {result['target']} mean | "
+                f"{result['target']} std | {result['target']} range)",
+            ])
             for item in relationship["conditional_bins"]:
-                lines.append(
-                    f"  For {name} in {item['x_range']} (n={item['sample_count']}), "
-                    f"{result['target']} mean={item['y_mean']:.4g}, standard deviation="
-                    f"{item['y_std']:.4g}, range={item['y_range']}."
-                )
+                lower, upper = item["bin_interval"]
+                if lower == upper:
+                    condition = f"{name} = {number(lower)}"
+                else:
+                    sign = "<=" if item["upper_inclusive"] else "<"
+                    condition = f"{number(lower)} <= {name} {sign} {number(upper)}"
+                lines.extend([
+                    f"    {condition} | {item['sample_count']} | "
+                    f"{number(item['y_mean'])} | {number(item['y_std'])} | "
+                    f"{interval(item['y_range'])}",
+                ])
+            lines.extend([
+                f"  One-variable held-out experiment ({predictor}):",
+                f"    R2 (mean)={number(relationship['one_variable_test_r2_mean'])}",
+                f"    R2 (std)={number(relationship['one_variable_test_r2_std'])}",
+                f"    Success folds={relationship['one_variable_test_success_folds']}/{settings['n_folds']}",
+            ])
+            if strongest := relationship.get("strongest_residual_association_after_one_variable_fit"):
+                lines.extend([
+                    "  Largest residual correlation among other analyzed variables "
+                    "(criterion=max(|Pearson|, |Spearman|)):",
+                    f"    variable={strongest['variable']}",
+                    f"    Pearson={number(strongest['pearson'])}",
+                    f"    Spearman={number(strongest['spearman'])}",
+                ])
         if matrix := result.get("pairwise_correlations"):
-            lines.append(
-                "Marginal pairwise linear/rank associations (not conditioned and not causal; near-zero "
-                "values do not rule out nonlinear dependence):"
-            )
+            lines.append("Pairwise correlations (Pearson linear; Spearman rank; pairwise finite samples):")
             for left in range(len(matrix["variables"])):
                 for right in range(left + 1, len(matrix["variables"])):
                     lines.append(
                         f"  {matrix['variables'][left]} ↔ {matrix['variables'][right]}: "
-                        f"Pearson={matrix['pearson'][left][right]:.4g}, "
-                        f"Spearman={matrix['spearman'][left][right]:.4g}."
+                        f"Pearson={number(matrix['pearson'][left][right])}, "
+                        f"Spearman={number(matrix['spearman'][left][right])}."
                     )
         if result["exceptions"]:
             lines.append("Exceptions:\n" + "\n".join(result["exceptions"]))

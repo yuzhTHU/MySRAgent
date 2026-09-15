@@ -45,7 +45,7 @@ class PySRTool(BaseTool):
         Args:
             binary_operators: List of binary operators for PySR to use. Choose from: "+", "-", "*", "/", "^".
                 Select operators you believe are relevant to the underlying formula.
-            unary_operators: List of unary operators for PySR to use. Choose from: "sin", "cos", "exp", "log", "sqrt", "square", "abs", "tanh", "sign". Select operators based on your hypothesis about the data.
+            unary_operators: List of unary operators for PySR to use. Choose from: "sin", "cos", "exp", "log", "sqrt", "square", "cube", "abs", "tanh", "sign". Select operators based on your hypothesis about the data.
             x: List of input feature names to use. If not specified, all features except target are used.
                 Expressions are also supported, e.g., ["sin(x1)", "(x1-x2)**2"].
             y: Target variable name. If not specified, the default target variable is used.
@@ -275,7 +275,8 @@ class PySRTool(BaseTool):
         so we only need to handle special functions and operators.
         """
         formula = formula.strip()
-        formula = re.sub(r'\bsquare\(([^)]+)\)', r'(\1)**2', formula)
+        formula = formula.replace("square(", "pow2(")
+        formula = formula.replace("cube(", "pow3(")
         formula = formula.replace("^", "**")
         return formula if formula else "0"
 

@@ -168,3 +168,6 @@ playground/
 
 # Local analysis notebooks & data
 /analysis/
+
+/.agent
+/.claude

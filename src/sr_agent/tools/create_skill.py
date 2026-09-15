@@ -9,7 +9,6 @@ from enum import Enum, auto
 from copy import deepcopy
 from typing import Any, Dict
 from logging import getLogger
-from ..skills import SkillRegistry
 from ..utils import bounded_value, parse_json_with_template
 from .base_tool import BaseTool, ToolMetadata
 
@@ -194,41 +193,41 @@ class CreateSkill(BaseTool):
 
     def _save_draft(self, draft: dict[str, Any], *, skill_type: str, force: bool) -> dict[str, Any]:
         name, description, content, tool_code, readonly = self._validate_draft(draft, skill_type)
-        registry = SkillRegistry(self.context.get("skills_dir"))
-        skill_dir = registry.skills_dir / name
-        existing_skill = next((skill for skill in registry.load_skills().values() if skill.path.parent.resolve() == skill_dir.resolve()), None)
-        existed = skill_dir.exists()
-        if existed and not force:
-            raise ValueError(f"Skill '{name}' already exists. Use force=True to replace it.")
-        if existed and existing_skill and existing_skill.readonly:
-            raise ValueError(f"Skill '{name}' is read-only and cannot be replaced.")
-        if existed and not skill_dir.is_dir():
-            raise ValueError(f"Skill path exists and is not a directory: {skill_dir}")
-        if not existed:
-            skill_dir.mkdir(parents=True, exist_ok=False)
-        else:
-            untouched = sorted(str(path.relative_to(skill_dir)) for path in skill_dir.rglob("*") if path.is_file() and path not in {skill_dir / "SKILL.md", skill_dir / "tool.py"})
-            suffix = f"; {', '.join(untouched)} were not modified" if untouched else ""
-            _logger.warning(f"Replaced SKILL.md and tool.py in skill '{name}'{suffix}.")
-        (skill_dir / "SKILL.md").write_text(
-            "---\n" + yaml.safe_dump({"name": name, "description": description, "readonly": readonly}, sort_keys=False, allow_unicode=True) + "---\n\n" + content + "\n",
-            encoding="utf-8",
+        assert "skill_manager" in self.context, "skill_manager must be provided in context."
+        manager = self.context["skill_manager"]
+        existed = name in manager.load_skills()
+        stored_readonly = readonly if skill_type == "instructions" else False
+        skill_content = (
+            "---\n"
+            + yaml.safe_dump(
+                {"name": name, "description": description, "readonly": stored_readonly},
+                sort_keys=False,
+                allow_unicode=True,
+            )
+            + "---\n\n"
+            + content
+            + "\n"
         )
+        skill = manager.set_skill(name, skill_content, force=force)
+        skill_dir = skill.skill_directory
         tool_path = skill_dir / "tool.py"
         if skill_type == "instructions":
             resolved = tool_path.resolve()
-            for name, tool_cls in list(BaseTool.REGISTRY_DICT.items()):
+            for tool_name, tool_cls in list(BaseTool.REGISTRY_DICT.items()):
                 if getattr(tool_cls, "source_path", None) == resolved:
-                    del BaseTool.REGISTRY_DICT[name]
+                    del BaseTool.REGISTRY_DICT[tool_name]
             tool_path.unlink(missing_ok=True)
             return {"success": True, "name": name, "skill_type": skill_type, "readonly": readonly}
-        tool_path.write_text(tool_code + "\n", encoding="utf-8")
+        manager.set_skill(name, tool_code + "\n", "tool.py", force=force)
         try:
             loaded = BaseTool.load_custom_tool(tool_path)
         except Exception:
             if not existed:
                 shutil.rmtree(skill_dir, ignore_errors=True)
             raise
+        if readonly:
+            final_content = skill_content.replace("readonly: false", "readonly: true", 1)
+            manager.set_skill(name, final_content, force=True)
         return {"success": True, "name": name, "skill_type": skill_type, "readonly": readonly, **loaded}
 
     @classmethod

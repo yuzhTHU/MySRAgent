@@ -501,7 +501,7 @@ class CodeExecutorTool(BaseTool):
            pass a strict AST whitelist; otherwise define and call your own functions.
 
         Args:
-            program: Python code string to execute.
+            program: Python code string to execute, starting with `import sys, json; data_dict = json.loads(sys.stdin.read())` to access input data.
             timeout_seconds: Wall-clock timeout in seconds. The effective value is capped.
             memory_limit_mb: Address-space memory limit in MB. The effective value is capped.
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
@@ -517,6 +517,7 @@ class CodeExecutorTool(BaseTool):
 
         # 准备 program
         program = self.extract_code(program)
+        # program = "import sys, json; data_dict = json.loads(sys.stdin.read())\n" + program
         if not (validation_result := SandBoxCodeExecutor.validate_code(program))['is_safe']:
             raise Exception(f"Code security check failed since: {validation_result['error_msg']}")
 

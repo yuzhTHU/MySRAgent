@@ -159,12 +159,17 @@ class EvaluateCodeTool(BaseTool):
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
         text = cls.format_evaluation_result(result, title="Evaluated code-defined model")
+        marker = "Formula Complexity="
+        if text.count(marker) > 1:
+            raise ValueError(
+                f"Expected at most one '{marker}' field in formatted evaluation output, "
+                f"but found {text.count(marker)}."
+            )
+        text = text.replace(marker, "Code Complexity=")
         return (
             text + "\n" +
-            "(Note: The formula field is a human-readable model description supplied by the code, "
-            "not necessarily a parseable symbolic expression. "
-            "Complexity for this code-defined model is measured as source-code character count, "
-            "so it is not directly comparable to symbolic formula node complexity.)"
+            "(Note: The Code Complexity is measured as source-code character count, so it is not "
+            "directly comparable to Formula Complexity defined as the symbolic formula node count.)"
         )
 
     @classmethod

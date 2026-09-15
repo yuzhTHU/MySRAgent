@@ -23,7 +23,7 @@ def test_recovers_polynomial_plus_sinusoidal_interaction():
     assert result["data_split_results"]["validation"]["metrics"]["mse"] < 1e-9
     assert abs(result["fit_configuration"]["frequency"] - 0.567) < 1e-5
     assert "sin" in result["formula"]
-    assert BaseTool.create("harmonic_interaction_fit", create_instance=False) is HarmonicInteractionFitTool
+    assert "harmonic_interaction_fit" not in BaseTool.all_registered_names
 
 
 def test_rejects_constant_oscillator():

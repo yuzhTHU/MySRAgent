@@ -7,12 +7,32 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sr_agent.skills import SkillRegistry
+from sr_agent.skills import SkillManager
 from sr_agent.tools.create_skill import CreateSkill
 from sr_agent.tools.edit_skill import EditSkill
 from sr_agent.tools.edit_tool import EditTool
 from sr_agent.tools.read_skill import ReadSkill
 from sr_agent.tools.base_tool import BaseTool
+from sr_agent.tools.workspace_shell import WorkspaceShellTool
+
+
+def _test_manager(custom_directory: Path) -> SkillManager:
+    return SkillManager(
+        built_in_directory=custom_directory.parent / "empty-built-in-skills",
+        custom_directory=custom_directory,
+    )
+
+
+def _discover_and_load_tools(custom_directory: Path) -> list[dict]:
+    classes = BaseTool.discover_custom_tools(_test_manager(custom_directory))
+    return [
+        {
+            "tool_name": tool_cls.metadata.name,
+            "path": str(tool_cls.source_path),
+            "class_name": tool_cls.__name__,
+        }
+        for tool_cls in classes
+    ]
 
 
 def _write_skill(skills_dir: Path, name: str, content: str, *, readonly: bool = False) -> Path:
@@ -61,7 +81,7 @@ def _create_authored_skill(
     draft = _draft(**draft_kwargs)
     draft["skill_type"] = skill_type
     tool = CreateSkill(
-        skills_dir=skills_dir,
+        skill_manager=_test_manager(skills_dir),
         skill_authoring_callback=lambda messages: draft,
     )
     return tool.execute(request="Create a reusable test skill.", force=force)
@@ -72,6 +92,7 @@ class _SkillCreatorHarness:
 
     def __init__(self, *, skills_dir: Path):
         self.skills_dir = skills_dir
+        self.skill_manager = _test_manager(skills_dir)
 
     def execute(
         self,
@@ -93,7 +114,7 @@ class _SkillCreatorHarness:
         response["draft"]["description"] = description
         response["skill_type"] = tool_type
         creator = CreateSkill(
-            skills_dir=self.skills_dir,
+            skill_manager=self.skill_manager,
             skill_authoring_callback=lambda messages: response,
         )
         return creator.execute(request="Create a custom tool skill.", force=force)
@@ -106,6 +127,50 @@ def _restore_tool_registry():
     yield
     BaseTool.REGISTRY_DICT.clear()
     BaseTool.REGISTRY_DICT.update(snapshot)
+
+
+class TestSkillManager:
+    def test_directories_are_paths_and_tool_docs_are_runtime_skills(self, tmp_path):
+        registry = _test_manager(tmp_path / "custom")
+        assert all(isinstance(path, Path) for path in registry.skill_directories.values())
+        assert isinstance(WorkspaceShellTool.get_doc(), dict)
+
+        registry.register_tool_docs([WorkspaceShellTool])
+
+        skill = registry.get_skill("workspace-shell")
+        assert skill.readonly is True
+        assert skill.skill_directory.parent == registry.skill_directories["runtime"]
+        assert "# Workspace Shell" in registry.read_skill("workspace-shell")
+
+    def test_discovers_tool_skills_across_all_managed_directories(self, tmp_path):
+        built_in = tmp_path / "built-in"
+        custom = tmp_path / "custom"
+        _write_skill(built_in, "built-in-tool", "# Built-in")
+        _write_skill(custom, "custom-tool", "# Custom")
+        manager = SkillManager(built_in_directory=built_in, custom_directory=custom)
+        manager.register_tool_docs([WorkspaceShellTool])
+        for name in ("built-in-tool", "custom-tool", "workspace-shell"):
+            (manager.get_skill(name).skill_directory / "tool.py").write_text("# tool\n")
+
+        assert {skill.name for skill in manager.discover_tool_skills()} == {
+            "built-in-tool", "custom-tool", "workspace-shell",
+        }
+
+    def test_set_skill_requires_force_and_never_overwrites_readonly(self, tmp_path):
+        registry = _test_manager(tmp_path / "custom")
+        original = "---\nname: editable\ndescription: old\nreadonly: false\n---\n\nOld\n"
+        replacement = original.replace("old", "new").replace("Old", "New")
+        registry.set_skill("editable", original)
+
+        with pytest.raises(ValueError, match="force=True"):
+            registry.set_skill("editable", replacement)
+        registry.set_skill("editable", replacement, force=True)
+        assert "New" in registry.read_skill("editable")
+
+        readonly = replacement.replace("readonly: false", "readonly: true")
+        registry.set_skill("editable", readonly, force=True)
+        with pytest.raises(ValueError, match="read-only"):
+            registry.set_skill("editable", original, force=True)
 
 
 class TestCreateSkillTool:
@@ -144,7 +209,7 @@ class ExampleProposer(BaseTool):
             captured["messages"] = messages
             return _draft()
         tool = CreateSkill(
-            skills_dir=tmp_path / "skills", skill_authoring_callback=author,
+            skill_manager=_test_manager(tmp_path / "skills"), skill_authoring_callback=author,
             messages=[
                 {"role": "system", "content": "System context"},
                 {"role": "assistant", "content": "I will call create_skill now."},
@@ -161,7 +226,7 @@ class TestReadSkillTool:
     def test_execute_returns_wrapped_skill_content(self, tmp_path: Path):
         _write_skill(tmp_path / "skills", "readable-skill", "# Readable Skill\n\nRead me.")
 
-        tool = ReadSkill(skills_dir=tmp_path / "skills")
+        tool = ReadSkill(skill_manager=_test_manager(tmp_path / "skills"))
         result = tool.execute(name="readable-skill")
 
         assert result["content"].startswith('<skill_content name="readable-skill">')
@@ -176,7 +241,7 @@ class TestReadSkillTool:
             "# Callable Skill\n\nRead me through BaseTool.",
         )
 
-        result = ReadSkill(skills_dir=tmp_path / "skills")(name="callable-skill")
+        result = ReadSkill(skill_manager=_test_manager(tmp_path / "skills"))(name="callable-skill")
 
         assert result.ok is True
         assert set(result.result) == {"content"}
@@ -185,7 +250,7 @@ class TestReadSkillTool:
         assert "# Callable Skill" in result.result_str
 
     def test_execute_rejects_missing_skill(self, tmp_path: Path):
-        tool = ReadSkill(skills_dir=tmp_path / "skills")
+        tool = ReadSkill(skill_manager=_test_manager(tmp_path / "skills"))
 
         with pytest.raises(ValueError, match="not found"):
             tool.execute(name="missing-skill")
@@ -195,7 +260,7 @@ class TestEditSkillTool:
     def test_execute_applies_search_replace_patch(self, tmp_path: Path):
         _write_skill(tmp_path / "skills", "editable-skill", "# Editable Skill\n\nOld text.\n")
 
-        tool = EditSkill(skills_dir=tmp_path / "skills")
+        tool = EditSkill(skill_manager=_test_manager(tmp_path / "skills"))
         result = tool.execute(
             name="editable-skill",
             patch=(
@@ -217,7 +282,7 @@ class TestEditSkillTool:
         assert "Old text." not in content
 
     def test_execute_rejects_missing_skill(self, tmp_path: Path):
-        tool = EditSkill(skills_dir=tmp_path / "skills")
+        tool = EditSkill(skill_manager=_test_manager(tmp_path / "skills"))
 
         with pytest.raises(ValueError, match="does not exist"):
             tool.execute(
@@ -239,7 +304,7 @@ class TestEditSkillTool:
             readonly=True,
         )
 
-        tool = EditSkill(skills_dir=tmp_path / "skills")
+        tool = EditSkill(skill_manager=_test_manager(tmp_path / "skills"))
         with pytest.raises(ValueError, match="read-only"):
             tool.execute(
                 name="readonly-skill",
@@ -259,7 +324,7 @@ class TestEditSkillTool:
             "# Ambiguous Skill\n\nSame.\nSame.\n",
         )
 
-        tool = EditSkill(skills_dir=tmp_path / "skills")
+        tool = EditSkill(skill_manager=_test_manager(tmp_path / "skills"))
         result = tool.execute(
             name="ambiguous-skill",
             patch=(
@@ -277,7 +342,7 @@ class TestEditSkillTool:
     def test_execute_rejects_missing_search_marker(self, tmp_path: Path):
         _write_skill(tmp_path / "skills", "marker-skill", "# Marker Skill\n\nOld text.\n")
 
-        tool = EditSkill(skills_dir=tmp_path / "skills")
+        tool = EditSkill(skill_manager=_test_manager(tmp_path / "skills"))
         with pytest.raises(ValueError, match="Expected '<<<<<<< SEARCH'"):
             tool.execute(
                 name="marker-skill",
@@ -498,7 +563,7 @@ class TripleValue(BaseTool):
             content="# Triple Skill",
             tool_code=self.TOOL_CODE,
         )
-        edit = EditTool(skills_dir=tmp_path / "skills")
+        edit = EditTool(skill_manager=_test_manager(tmp_path / "skills"))
         patch = (
             "<<<<<<< SEARCH\n"
             "value * 3}\n"
@@ -533,7 +598,7 @@ class TripleValue(BaseTool):
                 ]
             ),
         )
-        edit = EditTool(skills_dir=tmp_path / "skills")
+        edit = EditTool(skill_manager=_test_manager(tmp_path / "skills"))
         patch = (
             "<<<<<<< SEARCH\n"
             "# placeholder\n"
@@ -560,7 +625,7 @@ class TripleValue(BaseTool):
         tool_path = tmp_path / "skills" / "triple-skill" / "tool.py"
 
         with pytest.raises(ValueError, match="BaseTool subclass"):
-            EditTool(skills_dir=tmp_path / "skills").execute(
+            EditTool(skill_manager=_test_manager(tmp_path / "skills")).execute(
                 name="triple-skill",
                 tool_patch=(
                     "<<<<<<< SEARCH\n"
@@ -593,7 +658,7 @@ class FileTool(BaseTool):
             content="# File Skill",
             tool_code=code,
         )
-        read = ReadSkill(skills_dir=tmp_path / "skills")
+        read = ReadSkill(skill_manager=_test_manager(tmp_path / "skills"))
         result = read.execute(name="file-skill", file_path="tool.py", show_tree=True)
         assert result["file_path"] == "tool.py"
         assert "FileTool" in result["file_content"]
@@ -618,13 +683,13 @@ class TravTool(BaseTool):
             content="# Trav Skill",
             tool_code=code,
         )
-        read = ReadSkill(skills_dir=tmp_path / "skills")
+        read = ReadSkill(skill_manager=_test_manager(tmp_path / "skills"))
         with pytest.raises(ValueError, match="stay inside"):
             read.execute(name="trav-skill", file_path="../other.md")
 
 
-class TestDiscoverCustomTools:
-    """Auto-discovery: tools saved by create_skill are picked up later."""
+class TestDiscoverToolSkills:
+    """Tool-bearing skills are discovered and loaded independently."""
 
     def _write_saved_tool(self, tmp_path, name, reg_name, expr):
         """Write a saved custom tool file directly, as a prior session would."""
@@ -644,47 +709,71 @@ class TestDiscoverCustomTools:
 
     def test_discover_registers_saved_tools(self, tmp_path):
         self._write_saved_tool(tmp_path, "square-skill", "square_it", "x * x")
-        # BaseTool.load_tool_classes() now does NOT auto-discover per call; we
-        # invoke the classmethod directly against the temp skills dir.
-        loaded = BaseTool.discover_custom_tools(tmp_path / "skills")
+        loaded = _discover_and_load_tools(tmp_path / "skills")
         assert len(loaded) == 1
         assert loaded[0]["tool_name"] == "square_it"
         assert "square_it" in BaseTool.REGISTRY_DICT
 
+    def test_repeated_agents_do_not_duplicate_discovered_tool_classes(self, tmp_path, monkeypatch):
+        import importlib
+
+        sr_agent_module = importlib.import_module("sr_agent.sr_agent")
+        custom_directory = tmp_path / "skills"
+        self._write_saved_tool(tmp_path, "square-skill", "square_it", "x * x")
+        monkeypatch.setattr(
+            sr_agent_module,
+            "SkillManager",
+            lambda: _test_manager(custom_directory),
+        )
+
+        agents = [
+            sr_agent_module.SRAgent(
+                llm_provider="unused",
+                llm_model="unused",
+                tools=["read_skill", "square_it"],
+                save_path=str(tmp_path / f"agent-{index}"),
+            )
+            for index in range(2)
+        ]
+
+        for agent in agents:
+            names = [tool_cls.metadata.name for tool_cls in agent.tool_cls_list]
+            assert names.count("square_it") == 1
+
     def test_discover_reloads_registered_tools(self, tmp_path):
         self._write_saved_tool(tmp_path, "cube-skill", "cube_it", "x ** 3")
-        BaseTool.discover_custom_tools(tmp_path / "skills")
-        second = BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
+        second = _discover_and_load_tools(tmp_path / "skills")
         assert [item["tool_name"] for item in second] == ["cube_it"]
         assert "cube_it" in BaseTool.REGISTRY_DICT
 
     def test_discover_reloads_modified_tool(self, tmp_path):
         self._write_saved_tool(tmp_path, "power-skill", "power_it", "x ** 2")
-        BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
         self._write_saved_tool(tmp_path, "power-skill", "power_it", "x ** 4")
 
-        loaded = BaseTool.discover_custom_tools(tmp_path / "skills")
+        loaded = _discover_and_load_tools(tmp_path / "skills")
 
         assert [item["tool_name"] for item in loaded] == ["power_it"]
         assert BaseTool.create("power_it").execute(x=3)["result"] == 81
 
     def test_discover_replaces_old_name_when_metadata_name_changes(self, tmp_path):
         self._write_saved_tool(tmp_path, "rename-skill", "old_name", "x + 1")
-        BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
         self._write_saved_tool(tmp_path, "rename-skill", "new_name", "x + 1")
 
-        BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
 
         assert "old_name" not in BaseTool.REGISTRY_DICT
         assert "new_name" in BaseTool.REGISTRY_DICT
 
     def test_discover_broken_update_disables_old_tool(self, tmp_path):
         self._write_saved_tool(tmp_path, "fragile-skill", "fragile_tool", "x + 1")
-        BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
         tool_path = tmp_path / "skills" / "fragile-skill" / "tool.py"
         tool_path.write_text("broken python {", encoding="utf-8")
 
-        loaded = BaseTool.discover_custom_tools(tmp_path / "skills")
+        loaded = _discover_and_load_tools(tmp_path / "skills")
 
         assert loaded == []
         assert "fragile_tool" not in BaseTool.REGISTRY_DICT
@@ -693,17 +782,17 @@ class TestDiscoverCustomTools:
         self._write_saved_tool(tmp_path, "a-skill", "shared_tool", "x + 1")
         self._write_saved_tool(tmp_path, "b-skill", "shared_tool", "x + 2")
 
-        loaded = BaseTool.discover_custom_tools(tmp_path / "skills")
+        loaded = _discover_and_load_tools(tmp_path / "skills")
 
         assert [item["tool_name"] for item in loaded] == ["shared_tool"]
         assert BaseTool.create("shared_tool").execute(x=1)["result"] == 2
 
     def test_discover_does_not_unregister_deleted_tool_file(self, tmp_path):
         self._write_saved_tool(tmp_path, "deleted-skill", "deleted_tool", "x + 1")
-        BaseTool.discover_custom_tools(tmp_path / "skills")
+        _discover_and_load_tools(tmp_path / "skills")
         (tmp_path / "skills" / "deleted-skill" / "tool.py").unlink()
 
-        loaded = BaseTool.discover_custom_tools(tmp_path / "skills")
+        loaded = _discover_and_load_tools(tmp_path / "skills")
 
         assert loaded == []
         assert "deleted_tool" in BaseTool.REGISTRY_DICT
@@ -714,7 +803,7 @@ class TestDiscoverCustomTools:
         bad = skills / "bad-skill"
         bad.mkdir(parents=True, exist_ok=True)
         (bad / "tool.py").write_text("def this_is_not_a_valid_tool():\n    pass\n", encoding="utf-8")
-        loaded = BaseTool.discover_custom_tools(skills)
+        loaded = _discover_and_load_tools(skills)
         assert [d["tool_name"] for d in loaded] == ["ok_tool"]
         assert "ok_tool" in BaseTool.REGISTRY_DICT
 

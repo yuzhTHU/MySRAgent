@@ -120,6 +120,22 @@ class WorkspaceShellTool(BaseTool):
     DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024
     MAX_OUTPUT_LIMIT_BYTES = 1024 * 1024
 
+    @classmethod
+    def get_doc(cls) -> dict[str, str]:
+        return {
+            "name": "workspace-shell",
+            "description": "Use workspace_shell's restricted commands and workspace safely.",
+            "content": (
+                "# Workspace Shell\n\n"
+                "Paths must be relative to the workspace. Supported commands: `ls`, `cat`, "
+                "`head`, `tail`, `wc`, `grep`, `sort`, `cut`, `cp`, `mv`, `rm`, `mkdir`, "
+                "`gzip`, `gunzip`, `unzip`, and extracting with `tar`. Commands may be joined "
+                "with `|`. These are restricted command implementations, not full Unix tools; "
+                "absolute paths, `..`, shell expansion, redirection, background processes, and "
+                "unlisted commands are unavailable."
+            ),
+        }
+
     def execute(
         self,
         command: str,

@@ -55,9 +55,3 @@ __all__ = [
     "AskHumanTool",
     "WorkspaceShellTool",
 ]
-
-
-# SRAgent is self-evolving: after every built-in BaseTool subclass above has been
-# registered, auto-load any custom tools saved under the skills directory so they
-# are available to later sessions without an explicit load step.
-BaseTool.discover_custom_tools()

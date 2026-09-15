@@ -4,7 +4,6 @@
 提供符号回归 Agent 的基础框架，包括主循环 Pipeline 和工具调用机制。
 """
 from __future__ import annotations
-import uuid
 import json
 import heapq
 import logging
@@ -14,15 +13,14 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from joblib import Parallel, delayed
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from .api.llm_api import LLMAPI
 from .parser import BaseParser
 from .api.core import ToolCall
+from .skills import SkillManager
 from .tools import BaseTool, ToolCallResult
 from .utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
-from .utils.logger import setup_logging
-from .utils import render_python, render_markdown, tag2ansi
+from .utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
 from .web import SearchRecordWriter
 
 _logger = logging.getLogger(f'sr_agent.{__name__}')
@@ -64,6 +62,7 @@ class SRAgent(FactoryMixin):
         llm_max_tokens: int = 4096,
         max_workers: int = 0,
         validation_fraction: float = 0.2,
+        split_by: str = "ood",
         split_random_state: int = 42,
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
@@ -85,6 +84,8 @@ class SRAgent(FactoryMixin):
             llm_max_tokens: 每次 LLM 响应的最大 token 数。
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
             validation_fraction: 验证集比例；验证集结果会展示给 Agent。设为 0 可关闭。
+            split_by: 验证集划分方式。"random" 表示随机划分；"ood" 表示优先按 t、
+                其次按 T 排序，并将取值较高的区间作为验证集。
             split_random_state: 数据划分的随机种子。
             ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
@@ -99,6 +100,10 @@ class SRAgent(FactoryMixin):
 
         tool_cls_list = []
         for tool_cls in BaseTool.load_tool_classes(tools):
+            # Custom tools are rediscovered and reloaded from this Agent's
+            # SkillManager below. Exclude stale process-global class objects.
+            if getattr(tool_cls, "source_path", None) is not None:
+                continue
             if (name := tool_cls.metadata.name) in self.excluded_tools:
                 _logger.info(f"Excluding tool {name} from the agent's toolset.")
             else:
@@ -117,13 +122,19 @@ class SRAgent(FactoryMixin):
         self.max_workers = max_workers
         if not 0 <= validation_fraction < 1:
             raise ValueError("validation_fraction must be in [0, 1).")
+        if split_by not in {"random", "ood"}:
+            raise ValueError("split_by must be either 'random' or 'ood'.")
         self.validation_fraction = validation_fraction
+        self.split_by = split_by
         self.split_random_state = split_random_state
         self.ranking_metric = ranking_metric
         self.larger_is_better = larger_is_better
 
         # 关键组件
         self.tool_cls_list = tool_cls_list
+        self.skill_manager = SkillManager()
+        self.skill_manager.register_tool_docs(self.tool_cls_list)
+        self.tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
         self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表
@@ -177,6 +188,7 @@ class SRAgent(FactoryMixin):
             "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
             "llm_max_tokens": self.llm_max_tokens,
+            "skill_manager": self.skill_manager,
         }
         self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
         self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
@@ -240,16 +252,16 @@ class SRAgent(FactoryMixin):
                         results_list = self.get_results(response_list, R=R, L=L, C=C)
                         self.named_timer.add('get_results')
 
-                        # Step 4: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
+                        # Step 4: 更新 top-k 最优结果
+                        topk_records = self.update_topk(topk_records, response_list, results_list, R=R, L=L, C=C)
+                        self.named_timer.add('update_topk')
+
+                        # Step 5: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
                         buffer, node_parents = self.update_buffer(
                             buffer, response_list, results_list,
                             topk_records, node_parents, prompt, usage, R, L, C,
                         )
                         self.named_timer.add('update_buffer')
-
-                        # Step 5: 更新 top-k 最优结果
-                        topk_records = self.update_topk(topk_records, response_list, results_list, R=R, L=L, C=C)
-                        self.named_timer.add('update_topk')
 
                         # Step 6: 打印本轮日志
                         self.log_info(response_list, topk_records, R=R, L=L, C=C)
@@ -292,16 +304,31 @@ class SRAgent(FactoryMixin):
             raise ValueError(f"All X and y arrays must have the same length, got lengths={sorted(lengths)}.")
         n_samples = next(iter(lengths))
         n_validation = int(round(n_samples * self.validation_fraction))
-        if self.validation_fraction > 0 and n_validation == 0:
+        if self.validation_fraction == 0:
+            n_train = n_samples # 当不使用 validation_fraction 时, 训练集就是验证集
+            n_validation = n_samples
+        elif n_validation == 0:
             n_validation = 1
-        if n_validation >= n_samples:
-            raise ValueError(
-                f"Dataset has {n_samples} samples, but requested {n_validation} validation samples; "
-                "at least one training sample is required."
-            )
-        indices = np.random.default_rng(self.split_random_state).permutation(n_samples)
-        validation_indices = indices[:n_validation]
-        train_indices = indices[n_validation:]
+            n_train = n_samples - n_validation
+            _logger.warning(f"Validation fraction {self.validation_fraction} is too small for {n_samples} samples; using 1 validation sample.")
+        elif n_validation >= n_samples:
+            n_validation = n_samples - 1
+            n_train = n_samples - n_validation
+            _logger.warning(f"Validation fraction {self.validation_fraction} is too large for {n_samples} samples; using {n_samples - 1} validation samples.")
+        else:
+            n_train = n_samples - n_validation
+
+        if self.split_by == "random":
+            indices = np.random.default_rng(self.split_random_state).permutation(n_samples)
+            train_indices = indices[:n_train]
+            validation_indices = indices[-n_validation:]
+        else:
+            split_variable = "t" if "t" in X else "T" if "T" in X else list(X.keys())[0]
+            split_values = arrays[split_variable]
+            _logger.debug(f"Splitting data by '{split_variable}' values: {split_values}")
+            indices = np.argsort(split_values, kind="stable")
+            train_indices = indices[:n_train]
+            validation_indices = indices[-n_validation:]
 
         def select(selected):
             return {name: value[selected] for name, value in arrays.items()}
@@ -336,10 +363,10 @@ class SRAgent(FactoryMixin):
                 f"You have at most {self.max_refinement_depth} refinement rounds in each conversation branch. "
                 f"Plan tool use within this budget: use early rounds for targeted exploration, keep concrete "
                 f"candidate formulas as the budget shrinks, and avoid open-ended searches near the end. "
-                f"At the final refinement round (L = {self.max_refinement_depth}), stop exploration and submit the best available "
-                f"target formula using the most appropriate final-answer mechanism available; do not wait "
-                f"for another reminder after the final round. "
-                f"{mse_goal}"
+                f"If possible, try calling multiple tools in each round. "
+                f"At the final refinement round (L={self.max_refinement_depth}), stop exploration and submit the best available "
+                f"target formula using the most appropriate final-answer mechanism available; do not wait for another reminder after the final round. "
+                f"Please start by analyzing the data to understand the relationship between features and target."
             )
         })
 
@@ -352,28 +379,39 @@ class SRAgent(FactoryMixin):
 
         # 如果有历史最优结果，注入作为参考上下文
         if restart_records:
-            user_content += (
-                "\n--- Previously Explored Formulas (from best to worst) ---\n"
-                "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
-            )
-            for priority, complexity, sequence, record in restart_records:
+            previous_formulas = []
+            for idx, (priority, complexity, sequence, record) in enumerate(restart_records):
                 formula = record.get('formula', 'N/A')
-                mse = record['data_split_results']['train']['metrics'].get('mse', float('inf'))
-                r2 = record['data_split_results']['train']['metrics'].get('r2', None)
-                r2_str = f", R²={r2:.6g}" if r2 is not None else ""
-                user_content += f"  • Formula: {formula}\n    MSE={mse:.6g}{r2_str}\n\n"
-            user_content += "---\n\n"
+                result = record['data_split_results']
+                previous_formulas.append(
+                    f"{idx}. Formula: {formula}\n"
+                    f"    (Train | Validation)\n"
+                    f"    R2={result['train']['metrics']['r2']:.6g} | {result['validation']['metrics']['r2']:.6g}\n"
+                    f"    MSE={result['train']['metrics']['mse']:.6g} | {result['validation']['metrics']['mse']:.6g}\n"
+                )
+            if (best_mse := restart_records[0][-1]['data_split_results']['train']['metrics']['mse']) > 0:
+                goal = f"find a formula with MSE < {best_mse * 0.1:.3g} (10x better than the previous best MSE)"
+            else:
+                goal = "find a simpler formula that also achieves MSE = 0"
             user_content += (
-                "Based on the above results, analyze why the previous best formulas may not be perfect, "
-                "and try a different approach or structure to achieve a lower MSE."
+                f"\n---\n\n"
+                f"Previously Explored Formulas (from best to worst):\n"
+                f"{'\n'.join(previous_formulas)}\n\n"
+                f"Use these as inspiration. Try to improve upon them or find simpler alternatives.\n"
+                f"\n---\n\n"
+                f"Based on the above results, {goal}."
             )
         else:
-            user_content += "Please start by analyzing the data to understand the relationship between features and target."
+            user_content += (
+                "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
+            )
 
         initial_prompt.append({
             "role": "user",
             "content": user_content
         })
+        process_message = self.build_process_message([], L=0)
+        initial_prompt.append(process_message)
         return initial_prompt
 
     def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
@@ -511,11 +549,16 @@ class SRAgent(FactoryMixin):
             buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
         else:
             _logger.warning("Skipping empty LLM response (no content nor tool calls).")
+        process_message = self.build_process_message(topk_records, L)
+        buffer.append(process_message)
+        return buffer, node_parents
+
+    def build_process_message(self, topk_records, L):
         # 将当前搜索进度加入 buffer
-        remaining_rounds = self.max_refinement_depth - L
+        remaining_rounds = self.max_refinement_depth - L - 1
         progress_line = (
-            f"Current progress: refinement round L={L}/{self.max_refinement_depth}. "
-            f"After this response, {remaining_rounds} refinement round(s) remain in this branch."
+            f"Current progress: refinement round L={L+1}/{self.max_refinement_depth}. "
+            f"From now on, {remaining_rounds} refinement round(s) remain in this branch."
         )
         if remaining_rounds > 1:
             policy = (
@@ -534,33 +577,19 @@ class SRAgent(FactoryMixin):
                 "your best available target formula now using the final-answer mechanism available in "
                 "this environment, with a brief justification if text is required."
             )
-        pareto_front_str = []
-        for idx, item in enumerate(pareto_front := self.get_pareto_front(topk_records), 1):
-            if len(str(item['formula'])) <= 160:
-                item_formula = item['formula']
-            else:
-                item_formula = str(item['formula'])[:160-len('...')] + '...'
-            metric_label, metric_value = self.record_metric(item)
-            complexity = item["data_split_results"]["train"]["metrics"].get("complexity", float("inf"))
-            pareto_front_str.append(
-                f"{idx}. "
-                f"{metric_label}={metric_value:.6g}, "
-                f"complexity={complexity}, "
-                f"formula={item_formula}"
-            )
-        if pareto_front_str:
-            pareto_front_str = '\n'.join(pareto_front_str)
-        else:
-            pareto_front_str = "(No Pareto front yet, call tools that can return candidate formulas to populate it.)"
-        buffer.append({
+        pareto_front_str = format_pareto_front(
+            self.get_pareto_front(topk_records),
+            concise=True,
+            formula_max_length=160,
+        )
+        return {
             "role": "user", "content": (
                 f"[Iteration status]\n"
                 f"{progress_line} {policy}\n\n"
                 f"[Current Pareto Front]\n"
                 f"{pareto_front_str}"
             )
-        })
-        return buffer, node_parents
+        }
 
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""

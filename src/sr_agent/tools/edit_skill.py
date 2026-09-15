@@ -1,8 +1,5 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-from pathlib import Path
-from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
-from ..skills import SkillRegistry
 from .base_tool import BaseTool, ToolMetadata
 
 
@@ -38,17 +35,16 @@ class EditSkill(BaseTool):
         """
         name = name.strip()
         replacements = self._parse_patch(patch)
-
-        skills_dir = self.context.get("skills_dir") # 仅供调试使用，一般用不到
-        registry = SkillRegistry(skills_dir)
-        if name not in registry.load_skills():
+        assert "skill_manager" in self.context, "skill_manager must be provided in context."
+        manager = self.context["skill_manager"]
+        if name not in manager.load_skills():
             raise ValueError(f"Skill '{name}' does not exist and cannot be edited.")
-        elif (skill := registry.get_skills(name)).readonly:
+        elif (skill := manager.get_skill(name)).readonly:
             raise ValueError(f"Skill '{name}' is read-only and cannot be edited.")
         else:
-            old_content = skill.path.read_text(encoding="utf-8")
+            old_content = manager.read_skill(name)
             new_content, exceptions = self._apply_replacements(old_content, replacements)
-            skill.path.write_text(new_content, encoding="utf-8")
+            manager.set_skill(name, new_content, force=True)
             return {
                 "skill": name,
                 "requested_replacements": len(replacements),

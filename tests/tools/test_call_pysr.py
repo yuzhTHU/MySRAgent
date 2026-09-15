@@ -17,9 +17,37 @@ def train_metrics(result: dict) -> dict:
 
 
 class TestPySRTool:
+    def test_clean_nested_square_and_cube_for_nd2py(self):
+        tool = make_tool({"x": np.linspace(1.0, 2.0, 10)}, np.ones(10))
+        cleaned = tool._clean_pysr_formula("square(x1 + cube(square(x1)))", ["x1"])
+        assert cleaned == "pow2(x1 + pow3(pow2(x1)))"
+        restored = tool._restore_feature_names(cleaned, ["x1"], ["x"])
+        parsed = tool.parse_formula(restored)
+        x = np.linspace(1.0, 2.0, 10)
+        np.testing.assert_allclose(
+            parsed.eval({"x": x}).flatten(), (x + (x**2)**3)**2
+        )
+
+    def test_execute_accepts_pysr_square_and_cube_candidates(self, monkeypatch):
+        x = np.linspace(0.5, 2.0, 20)
+        y = (x + x**3) ** 2
+        tool = make_tool({"x": x}, y)
+
+        def fake_run_pysr(self, X, y_fit, x_names, binary_ops, unary_ops, timeout, maxsize):
+            raw = "square(x1 + cube(x1))"
+            cleaned = self._clean_pysr_formula(raw, x_names)
+            return cleaned, [{"formula": cleaned, "loss": 0.0, "complexity": 5}], 5
+
+        monkeypatch.setattr(PySRTool, "_run_pysr", fake_run_pysr)
+        result = tool.execute(binary_operators=["+", "*"], unary_operators=["square", "cube"])
+        assert train_metrics(result)["mse"] < 1e-12
+        assert train_metrics(result["all_formulas"][0])["mse"] < 1e-12
+        assert result["exceptions"] == []
+
     def test_format_result_reads_unified_pareto_metrics(self):
         rendered = PySRTool.format_result_dict({
             "formula": "x",
+            "target_expression": "y",
             "data_split_results": {"train": {"metrics": {
                 "mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1,
             }}},
@@ -38,7 +66,8 @@ class TestPySRTool:
         })
 
         assert "RMSE=0" in rendered
-        assert "not proof" in rendered
+        assert "Best formula found:\n    y = x" in rendered
+        assert "not eligible for submission" not in rendered
         assert "complexity=1" in rendered
 
     def test_execute_restores_feature_names_before_evaluation(self, monkeypatch):

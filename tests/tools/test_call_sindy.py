@@ -12,6 +12,14 @@ def make_tool(x: dict[str, np.ndarray], y: np.ndarray) -> SINDyTool:
     return SINDyTool(data=x | {"y": y}, target="y")
 
 
+def train_result(result):
+    return result["data_split_results"]["train"]
+
+
+def train_metrics(result):
+    return train_result(result)["metrics"]
+
+
 class TestSINDyTool:
     def test_execute_restores_feature_names_before_evaluation(self, monkeypatch):
         x = np.linspace(-2.0, 2.0, 20)
@@ -27,8 +35,8 @@ class TestSINDyTool:
         result = tool.execute(poly_degree=1)
 
         assert result["formula"] == "2 * x + 1"
-        assert result["metrics"]["mse"] < 1e-12
-        assert result["metrics"]["r2"] == 1.0
+        assert train_metrics(result)["mse"] < 1e-12
+        assert train_metrics(result)["r2"] == 1.0
         assert result["is_candidate"] is True
         assert result["exceptions"] == []
 
@@ -46,7 +54,7 @@ class TestSINDyTool:
         result = tool.execute(x=["x**2"], poly_degree=1)
 
         assert result["formula"] == "4 * x ** 2 + 0.5"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_restore_feature_names_does_not_rewrite_inserted_expressions(self, monkeypatch):
         x2 = np.linspace(0.0, 3.0, 12)
@@ -62,7 +70,7 @@ class TestSINDyTool:
         result = tool.execute(x=["x2", "z"])
 
         assert result["formula"] == "x2 + z"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_execute_normalizes_square_in_final_formula(self, monkeypatch):
         x = np.linspace(-2.0, 2.0, 20)
@@ -78,7 +86,7 @@ class TestSINDyTool:
         result = tool.execute(x=["x", "z"])
 
         assert result["formula"] == "(x - z) ** 2"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_execute_normalizes_nested_square_in_final_formula(self, monkeypatch):
         x = np.linspace(-2.0, 2.0, 20)
@@ -93,7 +101,7 @@ class TestSINDyTool:
         result = tool.execute(x=["x"])
 
         assert result["formula"] == "sin(x) ** 2"
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_execute_clamps_config_and_subsamples(self, monkeypatch):
         x = np.arange(20.0)
@@ -126,7 +134,7 @@ class TestSINDyTool:
         assert result["config"]["poly_degree"] == 5
         assert result["config"]["threshold"] == 0.01
         assert result["config"]["max_samples"] == 5
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
 
     def test_sindy_failure_returns_inf_metrics(self, monkeypatch):
         x = np.linspace(0.0, 5.0, 10)
@@ -141,21 +149,26 @@ class TestSINDyTool:
         result = tool.execute()
 
         assert result["formula"] == "(None)"
-        assert result["metrics"]["mse"] == float("inf")
+        assert train_metrics(result)["mse"] == float("inf")
         assert result["is_candidate"] is False
         assert any("SINDy fitting failed" in item for item in result["exceptions"])
 
     def test_format_result_uses_method_from_config(self):
         rendered = SINDyTool.format_result_dict({
             "formula": "x",
-            "metrics": {"mse": 0.0, "rmse": 0.0, "r2": 1.0, "complexity": 1},
+            "target_expression": "y",
+            "data_split_results": {
+                "train": {
+                    "metrics": {"mse": 0.0, "rmse": 0.0, "mae": 0.0, "r2": 1.0, "complexity": 1},
+                },
+            },
             "is_candidate": True,
             "config": {"method": "SINDy", "poly_degree": 2, "include_trig": False, "threshold": 0.1},
             "exceptions": [],
         })
 
         assert "polynomial degree up to 2" in rendered
-        assert "not proof" in rendered
+        assert "coefficient sparsity threshold=0.1" in rendered
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
         x = np.arange(5.0)
@@ -184,7 +197,7 @@ class TestSINDyTool:
         monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
 
         result = tool.execute(y='"omega"')
-        assert result["metrics"]["mse"] < 1e-12
+        assert train_metrics(result)["mse"] < 1e-12
         assert result["is_candidate"] is True
 
     def test_transformed_target_is_used_for_final_evaluation(self, monkeypatch):
@@ -198,9 +211,9 @@ class TestSINDyTool:
         monkeypatch.setattr(SINDyTool, "_run_sindy", fake_run_sindy)
         result = tool.execute(x=["x"], y="log(y)")
 
-        assert result["metrics"]["mse"] < 1e-12
-        assert result["metrics"]["complexity"] == 1
-        assert result["diagnostics"]
+        assert train_metrics(result)["mse"] < 1e-12
+        assert train_metrics(result)["complexity"] == 1
+        assert train_result(result)["diagnostics"]
         assert result["is_candidate"] is False
 
     def test_metadata_exists(self):

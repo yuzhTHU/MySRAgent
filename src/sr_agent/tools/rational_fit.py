@@ -22,7 +22,6 @@ class RationalFitTool(BaseTool):
         validation_fraction: float = 0.2,
         top_k: int = 5,
         complexity_penalty: float = 1e-12,
-        n_stability_subsets: int = 5,
         show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Fit a rational expression P(x) / Q(x) by linearized least squares with Q's constant fixed to one.
@@ -38,7 +37,6 @@ class RationalFitTool(BaseTool):
             validation_fraction: Deterministic holdout fraction used to rank degree combinations (0.05-0.5).
             top_k: Number of degree-grid candidates to return (1-20).
             complexity_penalty: Penalty per fitted coefficient added to validation RMSE after target-scale normalization.
-            n_stability_subsets: Number of deterministic 80% subsets used to measure selected-model stability (1-20).
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context["data"]
@@ -55,10 +53,9 @@ class RationalFitTool(BaseTool):
         validation_fraction = min(max(float(validation_fraction), 0.05), 0.5)
         top_k = min(max(int(top_k), 1), 20)
         complexity_penalty = max(float(complexity_penalty), 0.0)
-        n_stability_subsets = min(max(int(n_stability_subsets), 1), 20)
         eq_y = self.parse_formula(target_name)
         target = np.asarray(eq_y.eval(data), dtype=float).flatten()
-        symbols, exceptions = [], []
+        symbols, valid_x, exceptions = [], [], []
         for expression in x:
             try:
                 symbol = self.parse_formula(expression)
@@ -66,6 +63,7 @@ class RationalFitTool(BaseTool):
                 if value.shape != target.shape:
                     raise ValueError("shape mismatch")
                 symbols.append(symbol)
+                valid_x.append(expression)
             except Exception as exc:
                 exceptions.append(f"Failed to compute '{expression}': {exc}")
         if not symbols:
@@ -116,26 +114,12 @@ class RationalFitTool(BaseTool):
             selected_model, target, eq_y, finite_indices, finite_indices,
             show_diagnostics=show_diagnostics,
         )
-        stability_rmse = []
-        for repeat in range(n_stability_subsets):
-            order = np.random.default_rng(repeat).permutation(finite_indices)
-            cut = max(2, int(0.8 * len(order)))
-            subset_train, subset_validation = order[:cut], order[cut:]
-            if not len(subset_validation):
-                continue
-            try:
-                subset_model = self._fit_model(
-                    helper, symbols, allowed, data, target, subset_train,
-                    selected["numerator_degree"], selected["denominator_degree"],
-                )
-                subset_result = self._score_model(
-                    subset_model, target, eq_y, subset_train, subset_validation,
-                    show_diagnostics=False,
-                )
-                stability_rmse.append(subset_result["validation_rmse"])
-            except Exception as exc:
-                exceptions.append(f"Stability subset {repeat + 1} failed: {exc}")
-
+        diagnostics = final["evaluation"]["data_split_results"]["train"].get("diagnostics")
+        if diagnostics:
+            for expression, symbol in zip(valid_x, symbols):
+                values = np.asarray(symbol.eval(data), dtype=float).flatten()
+                for sample in diagnostics["worst_samples"]:
+                    sample["row"][expression] = float(values[sample["index"]])
         alternatives = []
         for candidate in candidates:
             if (
@@ -154,6 +138,7 @@ class RationalFitTool(BaseTool):
             if len(alternatives) >= top_k:
                 break
         return final["evaluation"] | {
+            "analyzed_input_expressions": valid_x,
             "data_split_results": final["evaluation"]["data_split_results"] | {
                 "train": final["evaluation"]["data_split_results"]["train"] | {
                     "metrics": final["evaluation"]["data_split_results"]["train"]["metrics"] | {
@@ -167,12 +152,13 @@ class RationalFitTool(BaseTool):
             },
             "alternatives": alternatives,
             "denominator_safety_on_observed_samples": final["denominator_diagnostics"],
-            "heldout_rmse_across_subsamples": {
-                "number_of_subsamples": len(stability_rmse),
-                "mean_rmse": float(np.mean(stability_rmse)) if stability_rmse else float("nan"),
-                "rmse_std": float(np.std(stability_rmse)) if stability_rmse else float("nan"),
+            "linearized_design_matrix": {
+                "rows": final["matrix_rows"],
+                "columns": final["complexity"],
+                "rank": final["matrix_rank"],
+                "column_labels": final["matrix_column_labels"],
             },
-            "exceptions": exceptions + ([] if final["matrix_rank"] == final["complexity"] else ["Linearized design matrix is rank deficient."]),
+            "exceptions": exceptions,
         }
 
     def _fit_model(self, helper, symbols, allowed, data, target, fit_indices, p_degree, q_degree):
@@ -190,6 +176,7 @@ class RationalFitTool(BaseTool):
             "p_terms": p_terms, "q_terms": q_terms, "p_matrix": p_matrix, "q_matrix": q_matrix,
             "p_coef": coefficients[:len(p_terms)], "q_coef": coefficients[len(p_terms):],
             "rank": int(rank),
+            "rows": int(len(usable)),
             "complexity": int(design.shape[1]),
         }
 
@@ -216,10 +203,23 @@ class RationalFitTool(BaseTool):
             f" + ({float(coef):.12g}) * ({term.to_str()})"
             for coef, term in zip(model["q_coef"], model["q_terms"]) if coef != 0
         )
+        denominator_expression = self.parse_formula(denominator_formula).to_str()
+        target_label = y_symbol.to_str()
+
+        def factor_label(expression: str) -> str:
+            return expression if expression.isidentifier() else f"({expression})"
+
+        matrix_column_labels = [term.to_str() for term in model["p_terms"]] + [
+            f"-{factor_label(target_label)}*{factor_label(term.to_str())}"
+            for term in model["q_terms"]
+        ]
         formula = f"({numerator}) / ({denominator_formula})"
         formula_symbol = self.parse_formula(formula)
-        abs_den = np.abs(denominator[np.isfinite(denominator)])
-        quantiles = np.quantile(abs_den, [0, 0.01]).tolist() if len(abs_den) else [float("nan")] * 2
+        finite_denominator = denominator[np.isfinite(denominator)]
+        abs_den = np.abs(finite_denominator)
+        denominator_min = float(np.min(finite_denominator)) if finite_denominator.size else float("nan")
+        denominator_max = float(np.max(finite_denominator)) if finite_denominator.size else float("nan")
+        thresholds = (1e-8, 1e-6, 1e-4, 1e-2)
         validation_metrics = self.calculate_metrics(
             formula_symbol, target[validation], prediction[validation]
         )
@@ -232,31 +232,26 @@ class RationalFitTool(BaseTool):
             "validation_rmse": validation_metrics["rmse"],
             "evaluation": validation_evaluation,
             "complexity": model["complexity"], "matrix_rank": model["rank"],
+            "matrix_rows": model["rows"],
+            "matrix_column_labels": matrix_column_labels,
             "valid_sample_ratio": float(np.mean(np.isfinite(prediction))),
             "denominator_diagnostics": {
-                "minimum_absolute_denominator": float(quantiles[0]),
-                "first_percentile_absolute_denominator": float(quantiles[1]),
+                "formula": denominator_expression,
+                "minimum": denominator_min,
+                "maximum": denominator_max,
+                "crosses_zero": bool(denominator_min <= 0 <= denominator_max),
+                "finite_samples": int(finite_denominator.size),
+                "total_samples": int(denominator.size),
+                "near_zero_counts": {
+                    threshold: int(np.count_nonzero(abs_den < threshold))
+                    for threshold in thresholds
+                },
             },
         }
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
-        degrees = result["selected_polynomial_degrees"]
-        safety = result["denominator_safety_on_observed_samples"]
-        stability = result["heldout_rmse_across_subsamples"]
-        lines = [
-            cls.format_evaluation_result(result, title="Best fitted rational formula"),
-            f"Selected structure: numerator polynomial degree {degrees['numerator_degree']}; "
-            f"denominator polynomial degree {degrees['denominator_degree']}.",
-            f"Denominator safety on observed samples: minimum |denominator|="
-            f"{safety['minimum_absolute_denominator']:.6g}; 1st percentile="
-            f"{safety['first_percentile_absolute_denominator']:.6g}. "
-            "Values near zero indicate a possible pole; this check does not guarantee safety outside "
-            "the observed input range.",
-            f"Held-out RMSE across {stability['number_of_subsamples']} repeated fits on resampled data subsets: "
-            f"mean RMSE={stability['mean_rmse']:.6g}, RMSE standard deviation="
-            f"{stability['rmse_std']:.3g} (a large standard deviation means performance depends on the split).",
-        ]
+        lines = [cls.format_evaluation_result(result, title="Best fitted rational formula")]
         if result["alternatives"]:
             lines.append("Simpler non-dominated alternatives (validation error versus complexity):")
             for alternative in result["alternatives"]:
@@ -265,10 +260,33 @@ class RationalFitTool(BaseTool):
                     f"{alternative['validation_rmse']:.6g}, formula complexity="
                     f"{alternative['formula_complexity']}."
                 )
-        if result["exceptions"]:
-            lines.append("Exceptions: " + "; ".join(result["exceptions"]))
-        lines.append(
-            "Eligible for submission (default target predicted without using the target as an input): "
-            f"{result['is_candidate']}."
-        )
+        exception_lines = []
+        matrix = result["linearized_design_matrix"]
+        if matrix["rank"] < matrix["columns"]:
+            labels = ", ".join(matrix["column_labels"])
+            exception_lines.extend([
+                (1, "Linearized design matrix is rank deficient."),
+                (2, f"Rank[{labels}] = {matrix['rank']} < {matrix['columns']}."),
+            ])
+        denominator = result["denominator_safety_on_observed_samples"]
+        if denominator["crosses_zero"]:
+            minimum = f"{denominator['minimum']:#.3g}".removesuffix(".")
+            maximum = f"{denominator['maximum']:#.3g}".removesuffix(".")
+            exception_lines.append(
+                (1, f"Denominator ({denominator['formula']}) crosses or reaches zero "
+                    f"on training samples: range=[{minimum}, {maximum}].")
+            )
+            n_finite = denominator["finite_samples"]
+            for threshold, count in denominator["near_zero_counts"].items():
+                fraction = count / n_finite if n_finite else float("nan")
+                displayed_percent = f"{100 * fraction:#.3g}".removesuffix(".")
+                threshold_label = f"1e-{int(round(-np.log10(threshold)))}"
+                exception_lines.append(
+                    (2, f"fraction(|denominator| < {threshold_label})="
+                     f"{count}/{n_finite} ({displayed_percent}%).")
+                )
+        exception_lines.extend((1, message) for message in result["exceptions"])
+        if exception_lines:
+            lines.append("Exception:")
+            lines.extend(f"{'    ' * depth}{message}" for depth, message in exception_lines)
         return "\n".join(lines)

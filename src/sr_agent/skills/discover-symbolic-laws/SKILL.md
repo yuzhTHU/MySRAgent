@@ -1,6 +1,6 @@
 ---
 name: discover-symbolic-laws
-description: Discover compact symbolic-regression formulas from tabular numerical data by diagnosing scale, domain, nonlinear relevance, singularities, invariants, one-dimensional shape, separability, transformed linearity, residual structure, numerical sensitivity, outliers, and recognizable constants before broad symbolic search. Use when variables are anonymized, direct guesses fail, predictive accuracy has not produced a simple law, or an agent must choose transformations and discovery tools from numerical evidence.
+description: Use this skill when solving a symbolic-regression problem from tabular numerical data, especially when direct formula guesses fail, predictive accuracy has not yielded a compact law, or numerical evidence is needed to choose transformations and discovery tools.
 ---
 
 # Discover Symbolic Laws
@@ -58,12 +58,12 @@ Call:
 
 ```text
 relationship_analysis(
-  variables=["x1", "x2", "x1/x2"], y="y", n_bins=10,
-  validation_fraction=0.2, n_repeats=3, collapse_model="bins"
+  variables=["x1", "x2", "x1/x2"], y="y", n_bins=5,
+  n_folds=5, collapse_model="bins"
 )
 ```
 
-Use feature-target Pearson/Spearman values, conditional target bins, held-out collapse, and stability to select a coordinate. Enable `pairwise=true` only when predictor-predictor relationships matter; its output grows quadratically.
+Use feature-target Pearson/Spearman values, conditional target bins, and five-fold held-out bin-mean prediction scores to compare candidate coordinates. Enable `pairwise=true` only when predictor-predictor relationships matter; its output grows quadratically.
 
 Treat high in-sample but weak held-out collapse as overfitting. Try `collapse_model="spline"` for a smooth nonmonotone curve and `"isotonic"` for a monotone probe. These are structural probes, not final formulas.
 
@@ -96,11 +96,11 @@ y*product(xi**pi), residual/g(xi), residual*g(xi)
 Use:
 
 ```text
-constant_fit(eq="y*x2/x1", use_eq_as_y=true)
+statistics_analysis(variables=["y*x1", "y*x1/x2", "y*x2/x1"])
 relationship_analysis(variables=["x1/(x3*x4)"], y="y*x2")
 ```
 
-Prefer low robust dispersion and stable constants across subsets. Do not accept an invariant merely because its ordinary mean is large relative to its standard deviation.
+`statistics_analysis` can inspect several proposed invariants in one call. Compare their finite-sample coverage, range, median, variance, and spread; a stable mean alone does not establish an invariant.
 
 ### 5. Linearize the selected hypothesis
 
@@ -141,9 +141,8 @@ When errors concentrate near a zero or pole, distinguish a missing singular fact
 ### 7. Recover exact structure
 
 - Snap exponents only when subset stability, snap distance, and full-data degradation all support it.
-- Fit the final scale with `constant_fit(eq="structural_expression", y="y")`.
-- Accept a named constant only when the tool marks the replacement acceptable; compare the simplest and most precise representations.
-- Refit the remaining scalar after structural snapping.
+- When a proposed formula already contains numerical constants, use `constant_fit(eq="proposed_formula", y="y")` to compare nearby simple replacements at each numeric position.
+- Inspect the Pareto front of R2 and Constant-Complexity; `constant_fit` does not fit a missing scalar or search for structure. Evaluate the selected replacement as a complete formula before submission.
 - Prefer fewer operations when errors are indistinguishable.
 
 ### 8. Validate and submit

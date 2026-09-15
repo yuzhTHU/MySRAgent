@@ -33,7 +33,10 @@ class TestStatisticsToolMetadata:
                 },
                 "near_zero_threshold": {
                     "type": "number",
-                    "description": "Absolute-value threshold used to count near-zero samples.",
+                    "description": (
+                        "First absolute-value threshold used to count near-zero samples.\n"
+                        "The output also reports thresholds 1e-6 and 1e-4."
+                    ),
                     "default": 1e-8,
                 },
             },
@@ -92,8 +95,19 @@ class TestStatisticsToolExecution:
 
         assert result.ok is True
         assert set(result.result["statistics"].keys()) == {"x1"}
-        assert "Variable or expression: 'x1'" in result.result_str
+        assert "x1 (finite samples=4/4; finite ratio=100%):" in result.result_str
         assert result.meta_data["tool"] == "statistics_analysis"
+
+    def test_multiple_invariant_expressions_include_nearly_constant_one(self):
+        x = np.linspace(1, 2, 10)
+        call = StatisticsTool(
+            data={"x1": x, "x2": 2 * x, "y": 3 / x}, target="y"
+        )(variables=["y*x1", "y*x1/x2"])
+        assert call.ok is True
+        assert call.result["exceptions"] == []
+        assert list(call.result["statistics"]) == ["y*x1", "y*x1/x2"]
+        assert call.result["statistics"]["y*x1"]["distribution"]["n_bins"] == 1
+        assert "near-constant values combined" in call.result_str
 
 
 class TestStatisticsToolStats:
@@ -118,6 +132,9 @@ class TestStatisticsToolStats:
         assert stats["positive_ratio"] == 1.0
         assert stats["near_zero_ratio"] == 0.0
         assert stats["near_zero_threshold"] == 1e-8
+        assert (stats["n_negative"], stats["n_zero"], stats["n_positive"], stats["n_near_zero"]) == (0, 0, 4, 0)
+        assert (stats["n_pos_inf"], stats["n_neg_inf"], stats["n_nan"]) == (0, 0, 0)
+        assert [item["threshold"] for item in stats["near_zero_fractions"]] == [1e-8, 1e-6, 1e-4]
         assert sum(item["count"] for item in stats["distribution"]["bins"]) == 4
 
     def test_execute_returns_sign_ratios_and_distribution_without_correlations(self):
@@ -157,20 +174,24 @@ class TestStatisticsToolFormatting:
         stat = tool.get_stats(np.array([-1.0, 0.0, 1.0, 4.0]), n_bins=2, near_zero_threshold=0.01)
         formatted = StatisticsTool.format_result_dict({"statistics": {"x1": stat}, "exceptions": []})
 
-        assert "Variable or expression: 'x1'" in formatted
-        assert "4 finite values out of 4 total samples" in formatted
-        assert "finite value ratio: 100.0%" in formatted
-        assert "minimum=-1" in formatted and "maximum=4" in formatted
-        assert "mean=1" in formatted and "median=0.5" in formatted
-        assert "variance=3.5" in formatted and "standard deviation=1.87083" in formatted
-        assert "first quartile (25%)=-0.25" in formatted
-        assert "third quartile (75%)=1.75" in formatted
-        assert "negative value ratio: 25.0%" in formatted
-        assert "exact-zero value ratio: 25.0%" in formatted
-        assert "positive value ratio: 50.0%" in formatted
-        assert "absolute value <= 0.01" in formatted
-        assert "Equal-width histogram: 2 bins" in formatted
-        assert "sample count=3 (75.0% of finite values)" in formatted
+        assert "x1 (finite samples=4/4; finite ratio=100%):" in formatted
+        assert "  Fractions:" in formatted
+        assert "Inf=0/4 (0%)" in formatted
+        assert "Negative inf=0/4 (0%)" in formatted
+        assert "NaN=0/4 (0%)" in formatted
+        assert "Negative=1/4 (25.0%);" in formatted
+        assert "Zero=1/4 (25.0%);" in formatted
+        assert "Positive=2/4 (50.0%);" in formatted
+        assert "Statistics (computed on 4 finite values):" in formatted
+        assert "Range=[-1.00, 4.00]" in formatted
+        assert "Mean=1.00;" in formatted and "Median=0.500;" in formatted
+        assert "Variance=3.50;" in formatted and "Std=1.87 (ddof=0);" in formatted
+        assert "Q1 (25%)=-0.250;" in formatted and "Q3 (75%)=1.75;" in formatted
+        assert "fraction(|x1| <= 1.00e-02)=1/4 (25.0%);" in formatted
+        assert "fraction(|x1| <= 1.00e-06)=1/4 (25.0%);" in formatted
+        assert "fraction(|x1| <= 1.00e-04)=1/4 (25.0%);" in formatted
+        assert "Equal-width histogram (n_bins=2; finite values only" in formatted
+        assert "[-1.00, 1.50) | 3 | 75.0%" in formatted
 
     def test_format_result_dict_formats_multiple_variables_in_order(self):
         tool = StatisticsTool(data={})
@@ -181,13 +202,29 @@ class TestStatisticsToolFormatting:
 
         formatted = StatisticsTool.format_result_dict(result)
 
-        assert formatted.index("Variable or expression: 'x1'") < formatted.index("Variable or expression: 'y'")
+        assert formatted.index("x1 (finite samples=") < formatted.index("y (finite samples=")
 
     def test_format_result_dict_includes_every_get_stats_field(self):
         tool = StatisticsTool(data={})
         stat = tool.get_stats(np.array([1.0, 2.0, np.nan]), n_bins=2)
         formatted = tool.format_result_dict({"statistics": {"x": stat}, "exceptions": []})
 
-        assert "2 finite values out of 3 total samples" in formatted
-        assert "50.0% of finite values" in formatted
-        assert "Bin 1:" in formatted and "Bin 2:" in formatted
+        assert "x (finite samples=2/3; finite ratio=66.7%):" in formatted
+        assert "NaN=1/3 (33.3%)" in formatted
+        assert "| 1 | 50.0%" in formatted
+        assert "(Range | samples | fraction of finite samples)" in formatted
+        assert "[1.00, 1.50)" in formatted and "[1.50, 2.00]" in formatted
+
+    def test_nonfinite_and_sign_fractions_use_total_sample_denominator(self):
+        x = np.array([np.inf, -np.inf, np.nan, -1.0, 0.0, 1.0])
+        result = StatisticsTool(data={"x": x})(variables=["x"])
+        assert result.ok
+        stat = result.result["statistics"]["x"]
+        assert (stat["n_pos_inf"], stat["n_neg_inf"], stat["n_nan"]) == (1, 1, 1)
+        assert "Inf=1/6 (16.7%)" in result.result_str
+        assert "Negative inf=1/6 (16.7%)" in result.result_str
+        assert "NaN=1/6 (16.7%)" in result.result_str
+        assert "Negative=1/6 (16.7%);" in result.result_str
+        assert "Zero=1/6 (16.7%);" in result.result_str
+        assert "Positive=1/6 (16.7%);" in result.result_str
+        assert "fraction(|x| <= 1.00e-08)=1/3 (33.3%);" in result.result_str

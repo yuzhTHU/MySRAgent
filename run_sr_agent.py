@@ -55,6 +55,9 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
     parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
     parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
+    parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
+    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
+    parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
     return parser
@@ -142,6 +145,9 @@ def main(args: argparse.Namespace) -> dict:
         tool_parser=args.tool_parser,
         save_path=args.save_path,
         max_workers=args.max_workers,
+        validation_fraction=args.validation_fraction,
+        split_by=args.split_by,
+        split_random_state=args.split_random_state,
     )
 
     result = {

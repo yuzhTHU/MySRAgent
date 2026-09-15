@@ -29,9 +29,25 @@ class TestEvaluateCodeTool:
         )
 
         assert result["formula"] == "2.0 * x1 + 1.0"
-        assert result["metrics"]["mse"] == 0.0
-        assert result["metrics"]["r2"] == 1.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["r2"] == 1.0
         assert result["is_candidate"] is True
+        text = EvaluateCodeTool.format_result_dict(result)
+        assert "Code Complexity=" in text
+        assert "Formula Complexity=" not in text
+        assert text.endswith(
+            "(Note: The Code Complexity is measured as source-code character count, so it is not "
+            "directly comparable to Formula Complexity defined as the symbolic formula node count.)"
+        )
+
+    def test_format_rejects_multiple_formula_complexity_fields(self, monkeypatch):
+        monkeypatch.setattr(
+            EvaluateCodeTool,
+            "format_evaluation_result",
+            classmethod(lambda cls, result, title: "Formula Complexity=1; Formula Complexity=2;"),
+        )
+        with pytest.raises(ValueError, match="Expected at most one.*but found 2"):
+            EvaluateCodeTool.format_result_dict({})
 
     def test_imports_are_allowed(self):
         X = {"x1": np.array([1.0, 2.0, 3.0])}
@@ -50,7 +66,7 @@ class TestEvaluateCodeTool:
         )
 
         assert result["formula"] == "x1**2"
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_default_model_string(self):
         X = {"x1": np.array([1.0, 2.0])}
@@ -63,7 +79,7 @@ class TestEvaluateCodeTool:
 
         assert result["formula"].startswith("('scale', 2.0)")
         assert "fallback to `str(model)`" in result["formula"]
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_target_leakage_is_not_candidate(self):
         X = {"x1": np.array([1.0, 2.0])}
@@ -74,7 +90,7 @@ class TestEvaluateCodeTool:
             predict_code="def predict(data, model):\n    return data['y']",
         )
 
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
         assert result["is_candidate"] is False
 
     def test_non_default_target_is_not_candidate(self):
@@ -94,7 +110,7 @@ class TestEvaluateCodeTool:
             y="z",
         )
 
-        assert result["metrics"]["mse"] == 0.0
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
         assert result["is_candidate"] is False
 
     def test_numpy_is_available(self):
@@ -109,7 +125,7 @@ class TestEvaluateCodeTool:
             predict_code="def predict(data, model):\n    return np.sin(data['x1'])",
         )
 
-        assert result["metrics"]["mse"] < 1e-12
+        assert result["data_split_results"]["train"]["metrics"]["mse"] < 1e-12
 
     def test_invalid_code_returns_tool_error(self):
         tool = self.make_tool({"x1": np.array([1.0])}, np.array([1.0]))

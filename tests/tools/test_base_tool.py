@@ -252,7 +252,31 @@ class TestBaseToolExportAndCall:
         assert "error" in result.result
         assert "RuntimeError" in result.result_str
         assert "boom" in result.result_str
+        assert "\x1b" not in result.result_str
+        assert "Traceback" not in result.result_str
+        assert result.result_str == (
+            "Error executing unit_error_tool:\n"
+            "    RuntimeError: boom"
+        )
         assert result.meta_data["tool"] == "unit_error_tool"
+
+    def test_call_removes_ansi_sequences_before_truncating(self, monkeypatch):
+        monkeypatch.setattr(
+            UnitSampleTool,
+            "format_result_dict",
+            classmethod(
+                lambda cls, result: (
+                    "\x1b[31mred\x1b[0m "
+                    "\x1b]8;;https://example.com\x07link\x1b]8;;\x07"
+                )
+            ),
+        )
+        monkeypatch.setattr(UnitSampleTool, "MAX_RESULT_STR_LENGTH", 8)
+
+        result = UnitSampleTool()(required_text="hello")
+
+        assert result.result_str == "red link"
+        assert "\x1b" not in result.result_str
 
     def test_call_does_not_catch_tool_run_abort(self):
         with pytest.raises(ToolRunAbort, match="stop now"):
@@ -274,6 +298,18 @@ class TestBaseToolExportAndCall:
 
 
 class TestBaseToolEvaluate:
+    def test_formula_constants_are_serialized_with_eight_significant_digits(self):
+        x = np.arange(1.0, 5.0)
+        tool = UnitSampleTool(data={"x": x, "y": 2 * x}, target="y")
+
+        result = tool.evaluate(
+            f=nd.parse("1.0582314356281874*x + 1.0029397100063842"),
+            y=nd.parse("y"),
+            show_diagnostics=False,
+        )
+
+        assert result["formula"] == "1.0582314 * x + 1.0029397"
+
     def test_evaluates_required_symbols_and_computes_formula_complexity(self):
         tool = UnitSampleTool(
             data={"x": np.arange(1.0, 5.0), "y": 2 * np.arange(1.0, 5.0)},
@@ -283,7 +319,8 @@ class TestBaseToolEvaluate:
         y = nd.parse("y")
 
         result = tool.evaluate(f=f, y=y)
-        metrics = result["metrics"]
+        train_result = result["data_split_results"]["train"]
+        metrics = train_result["metrics"]
 
         assert metrics["rmse"] == 0.0
         assert metrics["complexity"] == len(f)
@@ -291,7 +328,7 @@ class TestBaseToolEvaluate:
         assert metrics["bic"] == float("-inf")
         assert result["formula"] == f.to_str()
         assert result["is_candidate"] is True
-        assert result["diagnostics"]
+        assert train_result["diagnostics"]
 
     def test_calculate_metrics_reuses_external_predictions(self):
         f = nd.parse("missing_prediction")
@@ -317,7 +354,7 @@ class TestBaseToolEvaluate:
         f = nd.parse("2*x")
         y = nd.parse("y")
 
-        metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["metrics"]
+        metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["data_split_results"]["train"]["metrics"]
         residuals = f.eval(tool.context["data"]) - y_values
         ss_res = float(np.sum(residuals**2))
         expected_log_likelihood = -len(x) / 2 * (
@@ -335,3 +372,101 @@ class TestBaseToolEvaluate:
                 f="x",
                 y=nd.parse("y"),
             )
+
+    def test_formatted_evaluation_uses_equation_and_conditional_ineligibility_notes(self):
+        x = np.arange(1.0, 6.0)
+        tool = UnitSampleTool(data={"x": x, "y": 2 * x, "z": x}, target="y")
+        eligible = tool.evaluate(f=nd.parse("2*x"), y=nd.parse("y"))
+        wrong_lhs = tool.evaluate(f=nd.parse("x"), y=nd.parse("z"))
+        target_leak = tool.evaluate(f=nd.parse("y + x"), y=nd.parse("y"))
+
+        eligible_text = tool.format_evaluation_result(eligible, title="Best fitted rational formula")
+        wrong_lhs_text = tool.format_evaluation_result(wrong_lhs, title="Best fitted rational formula")
+        target_leak_text = tool.format_evaluation_result(target_leak, title="Best fitted rational formula")
+        assert "Best fitted rational formula:\n    y = " in eligible_text
+        assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | N/A;" in eligible_text
+        assert "Error extremes (Top-10 sorted by |residual|):\n    (x | z | y | residual)" in eligible_text
+        assert "not eligible for submission" not in eligible_text
+        assert "the left-hand side of the equation is not y" in wrong_lhs_text
+        assert "the right-hand side of the equation depends on y" in target_leak_text
+
+    def test_formatted_evaluation_includes_independent_validation_when_supplied(self):
+        x = np.arange(1.0, 6.0)
+        tool = UnitSampleTool(
+            data={"x": x, "y": 2 * x},
+            evaluation_data={"x": x + 5, "y": 2 * (x + 5)},
+            target="y",
+        )
+        evaluation = tool.evaluate(f=nd.parse("2*x"), y=nd.parse("y"))
+        text = tool.format_evaluation_result(evaluation)
+        assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | 0.00;\n    MAE=0.00 | 0.00;\n    R2=1.00 | 1.00;" in text
+
+    def test_formatted_evaluation_uses_eight_significant_digits_for_formula_only(self):
+        result = {
+            "formula": "0.123456789012 * x",
+            "target_expression": "y",
+            "data_split_results": {
+                "train": {
+                    "metrics": {"rmse": 0.123456, "mae": 1.4, "r2": -107.015, "complexity": 16},
+                    "diagnostics": {
+                        "worst_samples": [
+                            {
+                                "row": {"x": 5.348730564},
+                                "y_true": 0.2041338086,
+                                "y_pred": -36.56052103,
+                            },
+                            {
+                                "row": {"x": 1.4},
+                                "y_true": 1,
+                                "y_pred": 2,
+                            },
+                        ],
+                        "strongest_residual_correlations": [{
+                            "variable": "x", "pearson": -0.003459, "spearman": 0.01807,
+                        }],
+                    },
+                },
+            },
+        }
+        text = UnitSampleTool.format_evaluation_result(result)
+        assert result["formula"] == "0.123456789012 * x"
+        assert "y = 0.12345679 * x" in text
+        assert "RMSE=0.123 | N/A;" in text
+        assert "MAE=1.40 | N/A;" in text
+        assert "R2=-107 | N/A;" in text
+        assert "Formula Complexity=16.0;" in text
+        assert "5.35 | 0.204 | -36.8" in text
+        assert "1.40 | 1.00 | 1.00" in text
+        assert "Pearson(residual, x)=-0.00346;" in text
+        assert "Spearman(residual, x)=0.0181;" in text
+
+    def test_formula_display_preserves_exact_symbolic_constants(self):
+        result = {
+            "formula": "1.234567891e-6*x + x**(Number(4)/Number(3)) + pi",
+            "target_expression": "y",
+            "data_split_results": {
+                "train": {
+                    "metrics": {"rmse": 0, "mae": 0, "r2": 1, "complexity": 10},
+                },
+            },
+        }
+
+        text = UnitSampleTool.format_evaluation_result(result)
+
+        assert "1.2345679e-06 * x" in text
+        assert "x ** (4 / 3)" in text
+        assert "+ pi" in text
+
+    def test_free_form_formula_description_is_preserved_when_not_parseable(self):
+        result = {
+            "formula": "piecewise model: branch A, then branch B",
+            "data_split_results": {
+                "train": {
+                    "metrics": {"rmse": 0, "mae": 0, "r2": 1, "complexity": 10},
+                },
+            },
+        }
+
+        text = UnitSampleTool.format_evaluation_result(result)
+
+        assert "LHS = piecewise model: branch A, then branch B" in text

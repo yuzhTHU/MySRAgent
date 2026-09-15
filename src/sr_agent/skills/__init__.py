@@ -1,1 +1,1 @@
-from .skill_registry import SkillRegistry, Skill
+from .skill_manager import Skill, SkillManager

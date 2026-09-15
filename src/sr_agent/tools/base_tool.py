@@ -4,6 +4,7 @@
 所有工具都应继承自 BaseTool，并提供统一的接口。
 """
 from __future__ import annotations
+import re
 import time
 import warnings
 import numpy as np
@@ -16,10 +17,16 @@ from docstring_parser import DocstringStyle, parse
 from abc import ABC, abstractmethod
 from types import NoneType, UnionType
 from inspect import Parameter, signature
-from typing import Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
 from ..utils import FactoryMixin, log_exception
+if TYPE_CHECKING:
+    from ..skills import SkillManager
 
 _logger = getLogger(f'sr_agent.{__name__}')
+
+_ANSI_ESCAPE_RE = re.compile(
+    r"(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[@-_])"
+)
 
 
 @dataclass
@@ -74,6 +81,7 @@ class BaseTool(ABC, FactoryMixin):
     metadata: ToolMetadata = None
     MAX_FORMULA_LENGTH = 10000
     MAX_RESULT_STR_LENGTH = 64 * 1024
+    FORMULA_DISPLAY_NUMBER_FORMAT = ".8g"
 
     def __init_subclass__(cls, **kwargs):
         """在子类定义时自动设置元数据"""
@@ -88,6 +96,11 @@ class BaseTool(ABC, FactoryMixin):
     def __init__(self, **context):
         """ context 中传入一些工具执行时需要的上下文信息，如数据、模型等，这些信息不适合放在 execute 的参数列表中让 LLM 生成 """
         self.context = context
+
+    @classmethod
+    def get_doc(cls) -> dict[str, str] | None:
+        """Return optional documentation to expose as a runtime skill."""
+        return None
 
     @abstractmethod
     def execute(self) -> Dict[str, Any]:
@@ -123,7 +136,7 @@ class BaseTool(ABC, FactoryMixin):
             if not isinstance(result, dict):
                 _logger.critical(f"Tool {self.metadata.name} execute() should return a dict, but got {type(result)}, please check the implementation.")
             result_str = self.format_result_dict(result)
-            result_str = self.truncate_result_str(result_str)
+            result_str = self.truncate_result_str(_ANSI_ESCAPE_RE.sub("", str(result_str)))
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
@@ -133,14 +146,18 @@ class BaseTool(ABC, FactoryMixin):
         except ToolRunAbort:
             raise
         except Exception as e:
-            error_msg = f"Error executing {self.metadata.name}: {log_exception(e)}"
-            error_msg = self.truncate_result_str(error_msg)
+            _logger.error(f"Error executing {self.metadata.name}: {log_exception(e)}")
+            exception_message = str(e).strip() or repr(e)
+            error_msg = (
+                f"Error executing {self.metadata.name}:\n"
+                f"    {type(e).__name__}: {exception_message}"
+            )
+            error_msg = self.truncate_result_str(_ANSI_ESCAPE_RE.sub("", error_msg))
             meta_data = {
                 "timestamp": start_time,
                 "execution_time": time.time() - start_time, 
                 "tool": self.metadata.name
             }
-            _logger.error(error_msg)
             return ToolCallResult(ok=False, result={'error': error_msg}, result_str=error_msg, meta_data=meta_data)
 
     @classmethod
@@ -274,22 +291,17 @@ class BaseTool(ABC, FactoryMixin):
             raise
 
     @classmethod
-    def discover_custom_tools(cls, skills_dir: str | None = None) -> list[dict]:
-        """Auto-load custom tools saved under a skills dir into the registry.
-
-        SRAgent is self-evolving: tools created by create_skill in an earlier
-        session appear in later sessions automatically.
-        """
-        from ..skills.skill_registry import SkillRegistry
-
-        skills_dir = (SkillRegistry(skills_dir).skills_dir).resolve()
-        loaded: list[dict] = []
-        for tool_path in sorted(skills_dir.glob("*/tool.py")):
+    def discover_custom_tools(cls, skill_manager: SkillManager) -> list[type["BaseTool"]]:
+        # 将 skill_manager 中发现的自定义工具注册到 BaseTool，并返回 tool class list
+        custom_tool_cls_list = []
+        for skill in skill_manager.discover_tool_skills():
+            tool_path = skill.skill_directory / "tool.py"
             try:
-                loaded.append(cls.load_custom_tool(tool_path))
-            except Exception as exc:  # noqa: BLE001 - a broken custom tool must not block discovery
-                _logger.warning(f"Skipping custom tool {tool_path}: {exc}")
-        return loaded
+                loaded = cls.load_custom_tool(tool_path)
+                custom_tool_cls_list.append(cls.REGISTRY_DICT[loaded["tool_name"]])
+            except Exception as e:
+                _logger.warning(f"Skipping custom tool {tool_path}: {log_exception(e)}")
+        return custom_tool_cls_list
 
     @classmethod
     def to_dict(cls) -> dict:
@@ -542,6 +554,7 @@ class BaseTool(ABC, FactoryMixin):
                     y_pred=np.asarray(y_pred),
                     data=data,
                     target_expression=y.to_str(),
+                    max_samples=10,
                 )
             else:
                 data_split_results['train'].pop('diagnostics')
@@ -565,10 +578,20 @@ class BaseTool(ABC, FactoryMixin):
 
         target = self.context["target"]
         var_names = {var.name for var in f.iter_preorder() if isinstance(var, nd.Variable)}
-        is_candidate = (y.to_str() == target) and (target not in var_names)
+        ineligibility_reasons = []
+        if y.to_str() != target:
+            ineligibility_reasons.append(
+                f"the left-hand side of the equation is not {target}"
+            )
+        if target in var_names:
+            ineligibility_reasons.append(
+                f"the right-hand side of the equation depends on {target}"
+            )
         evaluation = {
-            "formula": f.to_str(),
-            "is_candidate": is_candidate,
+            "formula": f.to_str(number_format='.8g'),
+            "target_expression": y.to_str(number_format='.8g'),
+            "is_candidate": not ineligibility_reasons,
+            "candidate_ineligibility_reasons": ineligibility_reasons,
             "data_split_results": data_split_results,
         }
         return evaluation
@@ -601,7 +624,9 @@ class BaseTool(ABC, FactoryMixin):
             data_split_results.pop('validation')
         return {
             "formula": formula,
+            "target_expression": self.context["target"],
             "is_candidate": False,
+            "candidate_ineligibility_reasons": ["no valid formula was produced"],
             "data_split_results": data_split_results,
         }
 
@@ -611,20 +636,46 @@ class BaseTool(ABC, FactoryMixin):
         split_results = result["data_split_results"]
         train_result = split_results["train"]
         metrics = train_result["metrics"]
-        lines = [
-            f"{title}: {result['formula']}",
-            f"Training-set fit quality: RMSE={metrics.get('rmse', float('nan')):.6g}, "
-            f"MAE={metrics.get('mae', float('nan')):.6g}, "
-            f"R²={metrics.get('r2', float('nan')):.6g}, "
-            f"formula complexity={metrics.get('complexity', '?')}.",
-        ]
-        if validation_result := split_results.get("validation"):
-            validation_metrics = validation_result["metrics"]
-            lines.append(
-                f"Validation-set performance: RMSE={validation_metrics.get('rmse', float('nan')):.6g}, "
-                f"MAE={validation_metrics.get('mae', float('nan')):.6g}, "
-                f"R²={validation_metrics.get('r2', float('nan')):.6g}."
+        lhs = result.get("target_expression", "LHS")
+        formula = result["formula"]
+        try:
+            formula = nd.parse(formula).to_str(
+                number_format=cls.FORMULA_DISPLAY_NUMBER_FORMAT
             )
+        except Exception:
+            # Some tools use a free-form model description instead of an
+            # nd2py expression. Preserve those descriptions verbatim.
+            pass
+        lines = [
+            f"{title}:",
+            f"    {lhs} = {formula}",
+        ]
+        for reason in result.get("candidate_ineligibility_reasons", []):
+            lines.append(f"    (Note: this formula is not eligible for submission since {reason}.)")
+        validation_result = split_results.get("validation")
+        validation_metrics = validation_result["metrics"] if validation_result else None
+
+        def three_significant_digits(value: Any) -> str:
+            if isinstance(value, (int, float, np.number)):
+                return format(value, "#.3g").removesuffix(".")
+            return str(value)
+
+        def metric_pair(name: str) -> str:
+            train_value = three_significant_digits(metrics.get(name, float("nan")))
+            validation_value = (
+                three_significant_digits(validation_metrics.get(name, float("nan")))
+                if validation_metrics else "N/A"
+            )
+            return f"{train_value} | {validation_value}"
+
+        lines.extend([
+            "Fit quality (Train-set | Validation-set):",
+            f"    RMSE={metric_pair('rmse')};",
+            f"    MAE={metric_pair('mae')};",
+            f"    R2={metric_pair('r2')};",
+            f"    Formula Complexity={three_significant_digits(metrics.get('complexity', '?'))};",
+        ])
+        if validation_metrics:
             train_rmse = metrics.get("rmse", float("nan"))
             validation_rmse = validation_metrics.get("rmse", float("nan"))
             if (np.isfinite(train_rmse) and np.isfinite(validation_rmse)
@@ -634,32 +685,28 @@ class BaseTool(ABC, FactoryMixin):
                     "the candidate may be overfitting or the validation domain may differ."
                 )
         if diagnostics := train_result.get("diagnostics"):
-            profile = diagnostics.get("error_profile", {})
-            lines.append(
-                f"Error extremes: 95th-percentile absolute error="
-                f"{profile.get('p95_absolute_error', float('nan')):.6g}; maximum absolute error="
-                f"{profile.get('max_absolute_error', float('nan')):.6g}; median signed residual="
-                f"{profile.get('median_signed_residual', float('nan')):.6g}."
-            )
+            samples = diagnostics.get("worst_samples", [])[:10]
+            if samples:
+                input_names = result.get("analyzed_input_expressions") or [
+                    name for name in samples[0]["row"] if name != lhs
+                ]
+                lines.extend([
+                    "Error extremes (Top-10 sorted by |residual|):",
+                    f"    ({' | '.join([*input_names, lhs, 'residual'])})",
+                ])
+                for sample in samples:
+                    values = [sample["row"].get(name, float("nan")) for name in input_names]
+                    values.extend([sample["y_true"], sample["y_pred"] - sample["y_true"]])
+                    lines.append("    " + " | ".join(three_significant_digits(value) for value in values))
             if correlations := diagnostics.get("strongest_residual_correlations"):
                 strongest = correlations[0]
-                lines.append(
-                    f"Strongest remaining residual association: {strongest['variable']} "
-                    f"(residual Pearson={strongest['pearson']:.4g}, residual Spearman="
-                    f"{strongest['spearman']:.4g}). This can suggest missing structure, but very small "
-                    "absolute residuals may make the correlation practically irrelevant."
-                )
-        if validation_diagnostics := split_results.get("validation", {}).get("diagnostics"):
-            profile = validation_diagnostics.get("error_profile", {})
-            lines.append(
-                f"Validation residual profile: 95th-percentile absolute error="
-                f"{profile.get('p95_absolute_error', float('nan')):.6g}; maximum absolute error="
-                f"{profile.get('max_absolute_error', float('nan')):.6g}."
-            )
-        lines.append(
-            "Eligible for submission (default target predicted without using the target as an input): "
-            f"{result['is_candidate']}. This is an interface check, not proof that the formula is correct."
-        )
+                lines.extend([
+                    "Largest residual correlation among other analyzed variables "
+                    "(criterion=max(|Pearson|, |Spearman|)):",
+                    f"    variable={strongest['variable']}",
+                    f"    Pearson(residual, {strongest['variable']})={three_significant_digits(strongest['pearson'])};",
+                    f"    Spearman(residual, {strongest['variable']})={three_significant_digits(strongest['spearman'])};",
+                ])
         return "\n".join(lines)
 
     @classmethod
@@ -673,8 +720,12 @@ class BaseTool(ABC, FactoryMixin):
         max_correlations: int = 5,
     ) -> Dict[str, Any]:
         """Return compact, high-signal diagnostics for prediction residuals."""
-        y_true = np.asarray(y_true, dtype=float).flatten()
-        y_pred = np.asarray(y_pred, dtype=float).flatten()
+        y_true, y_pred = np.broadcast_arrays(
+            np.asarray(y_true, dtype=float),
+            np.asarray(y_pred, dtype=float),
+        )
+        y_true = y_true.flatten()
+        y_pred = y_pred.flatten()
         residual = y_pred - y_true
         absolute_error = np.abs(residual)
         finite_error = np.isfinite(residual)

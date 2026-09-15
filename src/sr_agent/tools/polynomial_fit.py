@@ -22,6 +22,7 @@ class PolynomialFitTool(BaseTool):
         interaction_blacklist: List[Tuple[str, str]] = None,
         interaction_whitelist: List[Tuple[str, str]] = None,
         include_bias: bool = True,
+        simplify: bool = True,
         show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Execute polynomial fit.
@@ -41,6 +42,9 @@ class PolynomialFitTool(BaseTool):
                 By default, all pairs are allowed (unless in blacklist).
                 If specified, only interactions in the whitelist are generated.
             include_bias: Whether to include bias/intercept term.
+            simplify: Whether to conservatively remove monomials whose fitted
+                contributions are negligible on the training samples, then refit
+                the remaining coefficients. Enabled by default.
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context["data"]
@@ -143,8 +147,34 @@ class PolynomialFitTool(BaseTool):
             t_stats = np.full(n_params, np.nan)
             p_values = np.full(n_params, np.nan)
 
+        original_coefficients = np.asarray(coefficients, dtype=float)
+        simplification = {
+            "enabled": bool(simplify),
+            "original_term_count": len(terms),
+            "retained_term_count": len(terms),
+            "removed_terms": [],
+        }
+        if simplify:
+            terms, coefficients, removed_terms = self._simplify_terms(
+                design_matrix=design_matrix,
+                target=data_y,
+                terms=terms,
+                coefficients=original_coefficients,
+            )
+            simplification.update({
+                "retained_term_count": len(terms),
+                "removed_terms": removed_terms,
+            })
+
         # 构建多项式
-        polynomial_parts = [float(coef) * term for coef, term in zip(coefficients, terms) if coef != 0]
+        polynomial_parts = []
+        for coef, term in zip(coefficients, terms):
+            if coef == 0:
+                continue
+            if term.to_str() == "1":
+                polynomial_parts.append(nd.Number(float(coef)))
+            else:
+                polynomial_parts.append(float(coef) * term)
         polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else nd.parse("0")
 
         evaluation = self.evaluate(
@@ -160,22 +190,82 @@ class PolynomialFitTool(BaseTool):
                 "maximum_degree": max_degree,
                 "interactions_included": include_interactions,
                 "bias_included": include_bias,
+                "simplification_enabled": bool(simplify),
             },
+            "simplification": simplification,
             "exceptions": exceptions
         }
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
         text = cls.format_evaluation_result(result, title="Best fitted polynomial")
-        config = result["fit_configuration"]
-        text += (
-            f"\nFit configuration: inputs={config['input_features']}; maximum degree="
-            f"{config['maximum_degree']}; interactions included={config['interactions_included']}; "
-            f"constant bias included={config['bias_included']}."
-        )
         if result["exceptions"]:
             text += "\nFit warnings: " + "; ".join(result["exceptions"])
         return text
+
+    @staticmethod
+    def _simplify_terms(
+        design_matrix: np.ndarray,
+        target: np.ndarray,
+        terms: List[nd.Symbol],
+        coefficients: np.ndarray,
+    ) -> Tuple[List[nd.Symbol], np.ndarray, List[Dict[str, Any]]]:
+        """Remove negligible fitted contributions and refit the retained terms.
+
+        Raw coefficient magnitudes are not comparable when monomials have
+        different scales.  We therefore threshold each fitted contribution
+        ``coefficient * monomial(samples)`` using both its RMS and maximum
+        absolute value.  A proposed removal is accepted only when refitting the
+        retained terms changes training RMSE by no more than a small fraction of
+        the target RMS.  Repeating this step mirrors conservative sequentially
+        thresholded least squares while guarding against material fit loss.
+        """
+        active = np.arange(design_matrix.shape[1])
+        coefficients = np.asarray(coefficients, dtype=float)
+        target = np.asarray(target, dtype=float).flatten()
+        target_rms = float(np.sqrt(np.mean(np.square(target))))
+        scale = max(target_rms, np.finfo(float).eps)
+        accepted_rmse_increase = 1e-6 * scale
+        removed: List[Dict[str, Any]] = []
+
+        for _ in range(design_matrix.shape[1]):
+            active_matrix = design_matrix[:, active]
+            contributions = active_matrix * coefficients
+            contribution_rms = np.sqrt(np.mean(np.square(contributions), axis=0))
+            contribution_max = np.max(np.abs(contributions), axis=0)
+            negligible = (contribution_rms <= 1e-6 * scale) & (contribution_max <= 1e-5 * scale)
+            if not np.any(negligible):
+                break
+
+            keep = ~negligible
+            if not np.any(keep):
+                keep[int(np.argmax(contribution_rms))] = True
+                negligible = ~keep
+            if not np.any(negligible):
+                break
+
+            old_prediction = active_matrix @ coefficients
+            old_rmse = float(np.sqrt(np.mean(np.square(target - old_prediction))))
+            proposed_active = active[keep]
+            proposed_coefficients = np.linalg.lstsq(
+                design_matrix[:, proposed_active], target, rcond=None
+            )[0]
+            new_prediction = design_matrix[:, proposed_active] @ proposed_coefficients
+            new_rmse = float(np.sqrt(np.mean(np.square(target - new_prediction))))
+            if new_rmse > old_rmse + accepted_rmse_increase:
+                break
+
+            for local_index in np.flatnonzero(negligible):
+                removed.append({
+                    "term": terms[int(active[local_index])].to_str(),
+                    "coefficient": float(coefficients[local_index]),
+                    "contribution_rms": float(contribution_rms[local_index]),
+                    "maximum_absolute_contribution": float(contribution_max[local_index]),
+                })
+            active = proposed_active
+            coefficients = proposed_coefficients
+
+        return [terms[int(index)] for index in active], coefficients, removed
 
     def _get_allowed_interactions(
         self,

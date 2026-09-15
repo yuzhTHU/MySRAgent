@@ -57,13 +57,19 @@ class EvaluateTool(BaseTool):
         return {
             **evaluation,
             "parameters_optimized": fit,
+            "training_samples": int(y_true.size),
         }
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
         text = cls.format_evaluation_result(result, title="Evaluated formula")
         if result.get("parameters_optimized"):
-            text += "\nNumeric parameters were optimized on these same samples; the reported fit is in-sample."
+            lines = text.splitlines()
+            lines.insert(
+                2,
+                f"    (Parameters are re-fitted on {result['training_samples']} train-set samples)",
+            )
+            text = "\n".join(lines)
         return text
 
 @BaseTool.register('submit_formula')

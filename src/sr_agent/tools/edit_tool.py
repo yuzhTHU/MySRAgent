@@ -1,7 +1,5 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 from typing import Any, Dict, List, Tuple
-
-from ..skills import SkillRegistry
 from .base_tool import BaseTool, ToolMetadata
 
 
@@ -36,13 +34,14 @@ class EditTool(BaseTool):
                 complete SKILL.md file. ``name`` is the skill directory name,
                 not the tool's metadata.name.
         """
-        registry = SkillRegistry(self.context.get("skills_dir"))
-        skill = registry.get_skills(name.strip())
+        assert "skill_manager" in self.context, "skill_manager must be provided in context."
+        manager = self.context["skill_manager"]
+        skill = manager.get_skill(name.strip())
         if skill.readonly:
             raise ValueError(f"Skill '{name}' is read-only and cannot be edited.")
-        tool_path = skill.path.parent / "tool.py"
-        old_tool = tool_path.read_text(encoding="utf-8")
-        old_skill = skill.path.read_text(encoding="utf-8")
+        tool_path = skill.skill_directory / "tool.py"
+        old_tool = manager.read_skill(name, "tool.py")
+        old_skill = manager.read_skill(name)
         new_tool, warnings = self._apply_replacements(old_tool, self._parse_patch(tool_patch))
         new_skill = old_skill
         if skill_patch.strip():
@@ -51,10 +50,10 @@ class EditTool(BaseTool):
         if warnings:
             return {"success": False, "skill": name, "warnings": warnings, "tool_name": None}
 
-        tool_path.write_text(new_tool, encoding="utf-8")
+        manager.set_skill(name, new_tool, "tool.py", force=True)
         loaded = BaseTool.load_custom_tool(tool_path)
         if new_skill != old_skill:
-            skill.path.write_text(new_skill, encoding="utf-8")
+            manager.set_skill(name, new_skill, force=True)
         return {"success": True, "skill": name, "warnings": [], **loaded}
 
     def _parse_patch(self, patch: str) -> List[Tuple[str, str]]:
