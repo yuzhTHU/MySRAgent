@@ -66,6 +66,7 @@ class SRAgent(FactoryMixin):
         split_random_state: int = 42,
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
+        force_initial_diagnostics: bool = False,
     ):
         """初始化 Agent。
 
@@ -89,6 +90,8 @@ class SRAgent(FactoryMixin):
             split_random_state: 数据划分的随机种子。
             ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
+            force_initial_diagnostics: 是否在每个对话分支的 L=1 请求 LLM 前，强制执行
+                statistics_analysis、relationship_analysis 和读取 discover-symbolic-laws skill。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
@@ -129,12 +132,25 @@ class SRAgent(FactoryMixin):
         self.split_random_state = split_random_state
         self.ranking_metric = ranking_metric
         self.larger_is_better = larger_is_better
+        self.force_initial_diagnostics = force_initial_diagnostics
 
         # 关键组件
         self.tool_cls_list = tool_cls_list
         self.skill_manager = SkillManager()
         self.skill_manager.register_tool_docs(self.tool_cls_list)
         self.tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
+        if self.force_initial_diagnostics:
+            required_tools = {"statistics_analysis", "relationship_analysis", "read_skill"}
+            enabled_tools = {tool_cls.metadata.name for tool_cls in self.tool_cls_list}
+            if missing_tools := required_tools - enabled_tools:
+                raise ValueError(
+                    "force_initial_diagnostics requires these enabled tools: "
+                    + ", ".join(sorted(missing_tools))
+                )
+            if "discover-symbolic-laws" not in self.skill_manager.load_skills():
+                raise ValueError(
+                    "force_initial_diagnostics requires the 'discover-symbolic-laws' skill."
+                )
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
         self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表
@@ -416,6 +432,10 @@ class SRAgent(FactoryMixin):
 
     def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
+        if self.force_initial_diagnostics and L == 1:
+            # Persist the evidence in the branch buffer so later refinement
+            # rounds retain the diagnostics and skill instructions.
+            buffer.append(self.run_initial_diagnostics(R=R, L=L, C=C))
         prompt = deepcopy(buffer)
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
@@ -437,6 +457,41 @@ class SRAgent(FactoryMixin):
             logs.append(log)
         _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
         return prompt
+
+    def run_initial_diagnostics(self, R: int, L: int, C: int) -> Dict[str, str]:
+        """Run the mandatory branch-opening diagnostics and format them for the LLM."""
+        calls = [
+            ToolCall(name="statistics_analysis", params={}),
+            ToolCall(name="relationship_analysis", params={}),
+            ToolCall(
+                name="read_skill",
+                params={"name": "discover-symbolic-laws"},
+            ),
+        ]
+        results = self.execute_action(calls)
+        self.record_tool_calls(calls, results, R=R, L=L, C=C, forced=True)
+        failures = [
+            f"{call.name}: {result.result_str}"
+            for call, result in zip(calls, results)
+            if not result.ok
+        ]
+        if failures:
+            raise RuntimeError(
+                "Required initial diagnostic tool call(s) failed:\n" + "\n".join(failures)
+            )
+        sections = [
+            f"## {call.name}\n{result.result_str}"
+            for call, result in zip(calls, results)
+        ]
+        return {
+            "role": "user",
+            "content": (
+                "[Required initial diagnostics]\n"
+                "The framework ran these mandatory tools before your first response in this branch. "
+                "Use their evidence and the skill instructions to plan the search.\n\n"
+                + "\n\n".join(sections)
+            ),
+        }
     
     def request_llm(self, prompt: List[Dict[str, Any]], R: int, L: int, C: int):
         """请求 LLM 得到 Content 和 Tool Calls。"""
@@ -475,21 +530,34 @@ class SRAgent(FactoryMixin):
         all_results_for_log = '\n'.join(str(result) for result in all_results or [])
         all_results_for_log = '\n        '.join(['', *all_results_for_log.splitlines()]) if '\n' in all_results_for_log else all_results_for_log
         _logger.debug(f"Action result: {all_results_for_log}")
-        # 记录工具调用结果
-        if self.save_path is not None:
-            with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
-                for tool_call, result in zip(all_tool_calls, all_results):
-                    json.dump({
-                        "progress": self.format_progress(R, L, C),
-                        'name': tool_call.name, 
-                        'params': tool_call.params,
-                        "ok": result.ok, 
-                        "result": result.result, 
-                        "result_str": result.result_str, 
-                        "meta_data": result.meta_data,
-                    }, f)
-                    f.write('\n')
+        self.record_tool_calls(all_tool_calls, all_results, R=R, L=L, C=C)
         return results_list
+
+    def record_tool_calls(
+        self,
+        tool_calls: List[ToolCall],
+        results: List[ToolCallResult],
+        R: int,
+        L: int,
+        C: int,
+        forced: bool = False,
+    ) -> None:
+        """Persist tool calls from either the LLM or framework-enforced diagnostics."""
+        if self.save_path is None:
+            return
+        with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
+            for tool_call, result in zip(tool_calls, results):
+                json.dump({
+                    "progress": self.format_progress(R, L, C),
+                    "forced": forced,
+                    'name': tool_call.name,
+                    'params': tool_call.params,
+                    "ok": result.ok,
+                    "result": result.result,
+                    "result_str": result.result_str,
+                    "meta_data": result.meta_data,
+                }, f)
+                f.write('\n')
     
     def update_buffer(
         self,

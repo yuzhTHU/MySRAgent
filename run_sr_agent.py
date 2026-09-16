@@ -58,6 +58,12 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
     parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
     parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
+    parser.add_argument(
+        "--force_initial_diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws.",
+    )
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
     return parser
@@ -148,6 +154,7 @@ def main(args: argparse.Namespace) -> dict:
         validation_fraction=args.validation_fraction,
         split_by=args.split_by,
         split_random_state=args.split_random_state,
+        force_initial_diagnostics=args.force_initial_diagnostics,
     )
 
     result = {

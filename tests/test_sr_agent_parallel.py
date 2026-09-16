@@ -8,6 +8,8 @@ from sr_agent.api.core import ToolCall
 from sr_agent.sr_agent import SRAgent
 from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
 from sr_agent.tools.read_skill import ReadSkill
+from sr_agent.tools.relationship_analysis import RelationshipAnalysisTool
+from sr_agent.tools.statistics_analysis import StatisticsTool
 
 
 @BaseTool.register("unit_parallel_tool")
@@ -132,6 +134,67 @@ def test_build_initial_prompt_includes_refinement_budget_rule(tmp_path):
     assert "at most 7 refinement rounds" in system_content
     assert "At the final refinement round (L=7)" in system_content
     assert "final-answer mechanism" in system_content
+
+
+def test_force_initial_diagnostics_runs_and_injects_results(tmp_path):
+    agent = SRAgent(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=["statistics_analysis", "relationship_analysis", "read_skill"],
+        save_path=str(tmp_path),
+        force_initial_diagnostics=True,
+    )
+    data = {
+        "x": np.arange(1.0, 11.0),
+        "y": 2 * np.arange(1.0, 11.0),
+    }
+    context = {
+        "data": data,
+        "target": "y",
+        "skill_manager": agent.skill_manager,
+    }
+    agent.tools = [
+        StatisticsTool(**context),
+        RelationshipAnalysisTool(**context),
+        ReadSkill(**context),
+    ]
+
+    buffer = [{"role": "user", "content": "Find y=f(x)."}]
+    prompt = agent.build_prompt(buffer, R=1, L=1, C=1)
+
+    diagnostic_message = prompt[-1]["content"]
+    assert prompt[-1]["role"] == "user"
+    assert "[Required initial diagnostics]" in diagnostic_message
+    assert "## statistics_analysis" in diagnostic_message
+    assert "## relationship_analysis" in diagnostic_message
+    assert "## read_skill" in diagnostic_message
+    assert "<skill_content name=\"discover-symbolic-laws\">" in diagnostic_message
+    assert buffer[-1] == prompt[-1]
+    assert agent.tools_counter.named_count == {
+        "statistics_analysis": 1,
+        "relationship_analysis": 1,
+        "read_skill": 1,
+    }
+    records = [json.loads(line) for line in (tmp_path / "tool_calls.jsonl").read_text().splitlines()]
+    assert [record["name"] for record in records] == [
+        "statistics_analysis", "relationship_analysis", "read_skill",
+    ]
+    assert all(record["forced"] is True for record in records)
+
+
+def test_force_initial_diagnostics_requires_all_tools(tmp_path):
+    try:
+        SRAgent(
+            llm_provider="unused",
+            llm_model="unused",
+            tools=["statistics_analysis", "read_skill"],
+            save_path=str(tmp_path),
+            force_initial_diagnostics=True,
+        )
+    except ValueError as exc:
+        assert "relationship_analysis" in str(exc)
+    else:
+        raise AssertionError("Expected missing required diagnostic tool validation to fail")
 
 
 def test_split_data_keeps_validation_and_test_out_of_training_context(tmp_path):

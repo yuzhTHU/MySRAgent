@@ -41,6 +41,12 @@ def update_parser(parser):
     parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
     parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
     parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
+    parser.add_argument(
+        "--force_initial_diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws.",
+    )
     return parser
 
 
@@ -76,6 +82,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     for sym, desc, prop in zip(task.symbols, task.symbol_descs, task.symbol_properties):
         kind = {'O': "Output", 'V': "Input Variable"}.get(prop, "Unknown")
         problem_description.append(f"{sym} ({kind}): {desc}")
+    # problem_description.append("(Note: The formula MUST utilize all input variables!)")
     problem_description = "\n".join(problem_description)
     _logger.note(f"Problem Description:\n{problem_description}")
 
@@ -101,6 +108,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         validation_fraction=args.validation_fraction,
         split_by=args.split_by,
         split_random_state=args.split_random_state,
+        force_initial_diagnostics=args.force_initial_diagnostics,
     )
     result = {
         "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
