@@ -659,6 +659,17 @@ class SRAgent(FactoryMixin):
             )
         }
 
+    def push_candidate(self, record, topk_records):
+        priorities = self.sortby(record)
+        if priorities is None:
+            _logger.warning(
+                "Skipping candidate with missing or non-finite ranking metrics: "
+                f"{record.get('formula')!r}"
+            )
+            return
+        sequence = len(topk_records) # 相同 priority 和 complexity 时按照 sequence 排序 (越小越重要)
+        heapq.heappush(topk_records, (*priorities, sequence, record))
+
     def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
         """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
         for K in range(1, len(response_list) + 1):
@@ -672,8 +683,7 @@ class SRAgent(FactoryMixin):
                         "data_split_results": res.result["data_split_results"],
                         "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
-                    sequence = len(topk_records) # 相同 priority 和 complexity 时按照 sequence 排序 (越小越重要)
-                    heapq.heappush(topk_records, (*self.sortby(record), sequence, record))
+                    self.push_candidate(record, topk_records)
                     # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
                     for formula_dict in res.result.get('all_formulas', []):
                         assert self.ranking_metric in formula_dict["data_split_results"]["train"]["metrics"], f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
@@ -682,8 +692,7 @@ class SRAgent(FactoryMixin):
                             "data_split_results": formula_dict["data_split_results"],
                             "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                         }
-                        sequence = len(topk_records)
-                        heapq.heappush(topk_records, (*self.sortby(record), sequence, record))
+                        self.push_candidate(record, topk_records)
         return topk_records
     
     def log_info(self, response_list, topk_records, R: int, L: int, C: int):
@@ -826,12 +835,29 @@ class SRAgent(FactoryMixin):
         return None, None
 
     def sortby(self, record):
+        """ 未经审核的修改 """
         _, metric_value = self.record_metric(record)
         if metric_value is None:
             return None
+
+        split_results = record.get('data_split_results', {})
+        train_metrics = split_results.get('train', {}).get('metrics', {})
+        validation_metrics = split_results.get('validation', {}).get('metrics', {})
+        metric_values = [train_metrics.get(self.ranking_metric)]
+        if self.ranking_metric in validation_metrics:
+            metric_values.append(validation_metrics[self.ranking_metric])
+        complexity = train_metrics.get('complexity', float('inf'))
+        try:
+            finite_values = [float(value) for value in metric_values]
+            finite_complexity = float(complexity)
+        except (TypeError, ValueError):
+            return None
+        if any(not np.isfinite(value) for value in finite_values) or not np.isfinite(finite_complexity):
+            return None
+
         return (
-            -metric_value if self.larger_is_better else metric_value,
-            record['data_split_results']['train']['metrics'].get('complexity', float('inf')),
+            -float(metric_value) if self.larger_is_better else float(metric_value),
+            finite_complexity,
         )
 
     def get_pareto_front(self, topk_records):

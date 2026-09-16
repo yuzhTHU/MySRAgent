@@ -61,6 +61,18 @@ class TestEvaluateTool:
         assert metrics["mse"] > 10000  # MSE 应该很大
         assert metrics["r2"] < 0  # R² 应该为负（比预测均值还差）
 
+    def test_non_finite_predictions_are_not_candidates(self):
+        X = {"x1": np.array([1.0, 2.0, 3.0])}
+        y = np.array([1.0, 2.0, 3.0])
+
+        result = self.make_tool(X, y).execute("log(-1 * x1)")
+
+        assert np.isnan(result["data_split_results"]["train"]["metrics"]["mse"])
+        assert result["is_candidate"] is False
+        assert result["candidate_ineligibility_reasons"] == [
+            "the formula does not produce a finite MSE on the train set"
+        ]
+
     def test_multiple_features(self):
         """测试多特征公式：y = x1 + x2。"""
         X = {

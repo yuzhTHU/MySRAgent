@@ -431,3 +431,36 @@ def test_update_topk_records_pareto_front(tmp_path):
     record = json.loads(lines[-1])
     assert record["coord"] == {"R": 1, "C": 1, "L": 1}
     assert [item["formula"] for item in record["pareto_front"]] == ["x + y", "x"]
+
+
+def test_update_topk_rejects_non_finite_candidate_metrics(tmp_path):
+    agent = make_agent(tmp_path)
+    response_list = [
+        ("", [
+            ToolCall(name="evaluate_formula", params={"f": "1.966*P*log(0.0423/P)"}),
+            ToolCall(name="evaluate_formula", params={"f": "P"}),
+        ], {}),
+    ]
+    results_list = [[
+        ToolCallResult(True, {
+            "formula": "7.2768821 * P * log(-111.24893 / P)",
+            "data_split_results": {
+                "train": {"metrics": {"mse": float("nan"), "complexity": 8}},
+                "validation": {"metrics": {"mse": float("nan"), "complexity": 8}},
+            },
+            "is_candidate": True,
+        }, "", {}),
+        ToolCallResult(True, {
+            "formula": "P",
+            "data_split_results": {
+                "train": {"metrics": {"mse": 0.2, "complexity": 1}},
+                "validation": {"metrics": {"mse": 0.3, "complexity": 1}},
+            },
+            "is_candidate": True,
+        }, "", {}),
+    ]]
+
+    topk_records = agent.update_topk([], response_list, results_list, R=1, L=1, C=1)
+
+    assert [entry[-1]["formula"] for entry in topk_records] == ["P"]
+    assert [item["formula"] for item in agent.get_pareto_front(topk_records)] == ["P"]

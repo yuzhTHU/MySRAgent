@@ -587,6 +587,12 @@ class BaseTool(ABC, FactoryMixin):
             ineligibility_reasons.append(
                 f"the right-hand side of the equation depends on {target}"
             )
+        for split_name, split_result in data_split_results.items():
+            metrics = split_result.get("metrics") or {}
+            if not np.isfinite(metrics.get("mse", float("nan"))):
+                ineligibility_reasons.append(
+                    f"the formula does not produce a finite MSE on the {split_name} set"
+                )
         evaluation = {
             "formula": f.to_str(number_format='.8g'),
             "target_expression": y.to_str(number_format='.8g'),
