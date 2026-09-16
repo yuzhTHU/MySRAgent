@@ -132,7 +132,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         result["money_usage"] = agent.money_counter.count
         result["tools_usage"] = agent.tools_counter.named_count
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k != 'pareto_front'])
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k not in ['pareto_front', 'topk_records']])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"

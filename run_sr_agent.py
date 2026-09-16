@@ -182,7 +182,7 @@ def main(args: argparse.Namespace) -> dict:
         result["money_usage"] = agent.money_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
         result["tools_usage"] = agent.tools_counter.to_str(mode='count', mode_of_detail='count', mode_of_percent='by_count')
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k != 'pareto_front'])
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k not in ['pareto_front', 'topk_records']])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"

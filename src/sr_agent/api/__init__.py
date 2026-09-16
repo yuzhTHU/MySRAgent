@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .gemini_api import GeminiAPI
     from .deepseek_api import DeepSeekAPI
     from .openrouter_api import OpenRouterAPI
+    from .lmstudio_api import LMStudioAPI
     from .siliconflow_api import SiliconFlowAPI
 __getattr__, __dir__, __all__ = setup_lazy_imports(__name__, {
     # 可选引入 .openai.OpenAIPI, 但需要通过 pip install nd2py[all] 来安装可选依赖, 下同
@@ -18,5 +19,6 @@ __getattr__, __dir__, __all__ = setup_lazy_imports(__name__, {
     "GeminiAPI": (".gemini_api", "all"),
     "DeepSeekAPI": (".deepseek_api", "all"),
     "OpenRouterAPI": (".openrouter_api", "all"),
+    "LMStudioAPI": (".lmstudio_api", "all"),
     "SiliconFlowAPI": (".siliconflow_api", "all"),
 })

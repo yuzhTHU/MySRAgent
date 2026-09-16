@@ -40,6 +40,9 @@ class LLMAPI(ToolCallMixin):
             if llm_provider.lower() == "openrouter":
                 from .openrouter_api import OpenRouterAPI
                 return OpenRouterAPI(**kwargs)
+            if llm_provider.lower() == "lmstudio":
+                from .lmstudio_api import LMStudioAPI
+                return LMStudioAPI(**kwargs)
             if llm_provider.lower() == "openai":
                 from .openai_api import OpenAIAPI
                 return OpenAIAPI(**kwargs)
@@ -73,6 +76,9 @@ class LLMAPI(ToolCallMixin):
             from .openrouter_api import OpenRouterAPI
             if llm_model in OpenRouterAPI.supported_models:
                 return OpenRouterAPI(**kwargs)
+            from .lmstudio_api import LMStudioAPI
+            if llm_model in LMStudioAPI.supported_models:
+                return LMStudioAPI(**kwargs)
             raise ValueError(f"Unsupported model: {llm_model}.")
 
         _logger.warning("No llm_provider or llm_model specified, returning base LLMAPI.")

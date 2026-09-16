@@ -23,7 +23,9 @@ class OpenRouterAPI(LLMAPI):
         "google/gemini-3.1-flash-lite-preview",
         "~anthropic/claude-sonnet-latest",
         "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-pro-0813",
         "deepseek/deepseek-v4-flash",
+        "openai/gpt-oss-120b",
         "qwen/qwen3.6-max-preview",
         "qwen/qwen3.6-plus",
         "z-ai/glm-5-turbo",
@@ -52,6 +54,16 @@ class OpenRouterAPI(LLMAPI):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if self.model == "openai/gpt-oss-120b":
+            # Keep benchmark inference reproducible across OpenRouter calls. The
+            # default router otherwise mixes providers with different weight
+            # quantizations (for example bf16 and fp8) in one experiment.
+            payload["extra_body"] = {
+                "provider": {
+                    "order": ["AkashML"],
+                    "allow_fallbacks": False,
+                }
+            }
         if not self.tool_list:
             pass
         elif self.tool_parser:

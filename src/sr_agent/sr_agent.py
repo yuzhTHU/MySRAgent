@@ -278,21 +278,21 @@ class SRAgent(FactoryMixin):
 
             _logger.note(f"Finished all iterations. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
         
         except FitEarlyStop as e:
             _logger.note(f"Early stopping triggered by perfect solution. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
 
         except KeyboardInterrupt as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
             raise
 
         except Exception as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
             raise
 
     def _split_data(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray]):
