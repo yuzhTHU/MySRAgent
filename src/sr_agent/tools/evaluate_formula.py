@@ -7,6 +7,7 @@ import numpy as np
 import nd2py as nd
 from typing import Dict, Any
 from .base_tool import BaseTool, ToolMetadata
+from ..utils.constant_optimizer import fit_constants
 
 
 @BaseTool.register('evaluate_formula')
@@ -47,7 +48,7 @@ class EvaluateTool(BaseTool):
                 fit = True # If there are unknown variables, we must fit the formula to data.
         
         if fit:
-            nd.BFGSFit(eq_f).fit(data, y_true)
+            eq_f = fit_constants(eq_f, data, y_true)
 
         evaluation = self.evaluate(
             f=eq_f,

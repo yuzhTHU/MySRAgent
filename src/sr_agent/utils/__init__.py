@@ -20,6 +20,7 @@ from .format_confusion_matrix import format_confusion_matrix
 from .parse_json_with_template import parse_json_with_template
 from .model_store import get_default, download_model, upload_model
 from .format_pareto_front import format_pareto_front
+from .constant_optimizer import ConstantOptimizerConfig, fit_constants
 
 # 引入可选依赖的子模块
 if TYPE_CHECKING:
