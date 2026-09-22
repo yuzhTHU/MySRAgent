@@ -26,6 +26,21 @@ def test_constant_result_broadcasts_to_batch():
     np.testing.assert_allclose(result.predict(np.zeros((3, 1))), [4.25] * 3)
 
 
+def test_real_part_wrapper_is_removed_for_real_benchmark_inputs():
+    result = fe._build_result({'expression': '2*exp(re(x1))', 'train_nmse': 0}, ['y', 'x'])
+    assert 're(' not in result.expression
+    np.testing.assert_allclose(result.predict(np.array([[0], [1]])), [2, 2*np.e])
+
+
+def test_sympy_function_names_are_normalized_for_nd2py():
+    result = fe._build_result({'expression': 'atan(x1) + Abs(x1) + Max(0, x1)',
+                               'train_nmse': 0}, ['y', 'x'])
+    assert 'arctan(' in result.expression
+    assert 'abs(' in result.expression
+    assert 'max(' in result.expression
+    assert not any(name in result.expression for name in ('atan(', 'Abs(', 'Max('))
+
+
 def test_signed_rational_power_matches_upstream_semantics():
     result = fe._build_result({'expression': 'x1**(1/3)',
         'prediction_expression': '_RealPow(x1, 1/3)', 'train_nmse': 0}, ['y', 'x'])

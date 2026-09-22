@@ -56,19 +56,37 @@ def llm_judge_equivalence(
         f"{"\n".join(f"- {name}: [{lo}, {hi}]" for name, (lo, hi) in ranges.items())}"
     )})
     api = LLMAPI.create(llm_provider=llm_provider, llm_model=llm_model)
+    total_usage = {'token': {}, 'price': {}}
+
+    def merge_usage(usage):
+        for group in ('token', 'price'):
+            for key, value in (usage or {}).get(group, {}).items():
+                total_usage[group][key] = total_usage[group].get(key, 0) + value
+
     for _ in range(max_retry):
         content = ""
+        response = None
+        usage_merged = False
         try:
-            for content, _, _ in api(messages, n=1, max_tokens=1024, temperature=0.0):
+            # Reasoning models may consume most of a 1k budget before emitting
+            # the required JSON, yielding an otherwise successful empty answer.
+            response = api(messages, n=1, max_tokens=4096, temperature=0.0)
+            for content, _, _ in response:
                 pass
+            merge_usage(response.usage)
+            usage_merged = True
             _logger.debug(f"Response: {content!r}")
-            return parse_json_with_template(content, {'reason': str, 'equivalent': bool})
+            parsed = parse_json_with_template(content, {'reason': str, 'equivalent': bool})
+            parsed['usage'] = total_usage
+            return parsed
         except Exception as e:
+            if response is not None and not usage_merged and getattr(response, 'returned', None):
+                merge_usage(response.usage)
             _logger.trace(f"Failed to parse LLM response: [{type(e).__name__}]{str(e)}. Response was: {content}")
             time.sleep(retry_timeout)
     else:
         _logger.warning(f"Failed to parse LLM response after {max_retry} attempts.")
-        return {'equivalent': None, 'reason': f"Failed to parse LLM response after {max_retry} attempts."}
+        return {'equivalent': None, 'reason': f"Failed to parse LLM response after {max_retry} attempts.", 'usage': total_usage}
 
 
 def my_nsimplify(
@@ -226,6 +244,11 @@ def get_symbolic_acc(
             llm_provider=llm_provider,
             llm_model=llm_model,
         )
+        result['llm_usage'] = llm_result.get('usage', {'token': {}, 'price': {}})
+        result['llm_judgement'] = {
+            'equivalent': llm_result.get('equivalent'),
+            'reason': llm_result.get('reason'),
+        }
         if numeric_result['equivalent'] == llm_result['equivalent']:
             result['equivalent'] = llm_result['equivalent']
             result['reason'] = f"{numeric_result['reason']}; LLM judgement agrees: {llm_result['reason']}"

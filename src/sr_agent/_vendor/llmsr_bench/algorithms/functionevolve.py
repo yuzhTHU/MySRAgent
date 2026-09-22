@@ -18,10 +18,12 @@ Artifacts are saved under save_path/functionevolve/<task>-<unique suffix>.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import functools
 import json
 import os
 from pathlib import Path
+import re
 import re
 import signal
 import subprocess
@@ -53,8 +55,10 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument('--functionevolve_python', default=sys.executable)
     parser.add_argument('--functionevolve_optimizer', default='Structure',
                         choices=['Structure', 'DE', 'CMA-ES', 'L-BFGS-B', 'least_squares'])
-    parser.add_argument('--functionevolve_reasoning', choices=['enabled', 'disabled'],
-                        default='enabled', help='OpenRouter reasoning setting for all agents.')
+    parser.add_argument('--functionevolve_reasoning', choices=['enabled', 'disabled', 'low'],
+                        default='enabled', help='OpenRouter reasoning setting for all agents; low sets effort=low.')
+    parser.add_argument('--functionevolve_resume', action='store_true',
+                        help='Resume the newest existing task checkpoint under save_path.')
     for name, default in _DEFAULTS.items():
         parser.add_argument(f'--functionevolve_{name}', type=type(default), default=default)
     return parser
@@ -75,7 +79,10 @@ def _build_result(result: dict, symbols: list[str]):
     if not result.get('expression') or not np.isfinite(result.get('train_nmse', np.inf)):
         raise RuntimeError('FunctionEvolve returned no finite fitted candidate.')
     names = [f'x{i + 1}' for i in range(len(symbols) - 1)]
-    variables = [sp.Symbol(name) for name in names]
+    # Benchmark inputs are real-valued.  The upstream simplifier may emit
+    # re(x1) when symbols lack assumptions; real symbols reduce that wrapper
+    # before returning an expression to nd2py, which has no ``re`` callable.
+    variables = [sp.Symbol(name, real=True) for name in names]
     local = dict(zip(names, variables))
     local['_RealPow'] = sp.Function('_RealPow')
     expr = sp.sympify(result['expression'], locals=local)
@@ -95,8 +102,13 @@ def _build_result(result: dict, symbols: list[str]):
             values = np.asarray(func(*(X[:, i] for i in range(len(variables)))), dtype=float)
         return np.broadcast_to(values, (len(X),)).copy()
 
-    expr = expr.xreplace({var: sp.Symbol(name) for var, name in zip(variables, symbols[1:])})
-    return SRResult(predict=predict, expression=str(expr))
+    expr = expr.xreplace({var: sp.Symbol(name, real=True) for var, name in zip(variables, symbols[1:])})
+    expression = str(expr)
+    # nd2py uses NumPy-style inverse-trig names and lower-case abs/min/max.
+    for source, target in {'asin': 'arcsin', 'acos': 'arccos', 'atan': 'arctan',
+                           'Abs': 'abs', 'Min': 'min', 'Max': 'max'}.items():
+        expression = re.sub(rf'\b{source}(?=\()', target, expression)
+    return SRResult(predict=predict, expression=expression)
 
 
 def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
@@ -131,13 +143,17 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     config.update(model=getattr(args, 'llm_model', 'qwen/qwen3.6-27b'),
                   optimizer=getattr(args, 'functionevolve_optimizer', 'Structure'),
                   reasoning=getattr(args, 'functionevolve_reasoning', 'enabled'),
+                  resume=getattr(args, 'functionevolve_resume', False),
                   seed=getattr(args, 'seed', -1), verbose=getattr(args, 'verbose', False))
     if config['seed'] >= 0:
         env['PYTHONHASHSEED'] = str(config['seed'])
     root = Path(getattr(args, 'save_path', None) or _ROOT / 'logs/functionevolve') / 'functionevolve'
     root.mkdir(parents=True, exist_ok=True)
     prefix = re.sub(r'[^\w.-]', '_', task.name)[:80] + '-'
-    work = Path(tempfile.mkdtemp(prefix=prefix, dir=root)).resolve()
+    existing = sorted(root.glob(prefix + '*'), key=lambda path: path.stat().st_mtime, reverse=True)
+    resumable = next((path for path in existing if (path / 'checkpoint.json').is_file()), None)
+    work = resumable.resolve() if config['resume'] and resumable else Path(
+        tempfile.mkdtemp(prefix=prefix, dir=root)).resolve()
     np.savez(work / 'train.npz', X=X, y=y)
     (work / 'request.json').write_text(json.dumps(dict(config=config, name=task.name,
         symbols=list(task.symbols), descriptions=list(task.symbol_descs),
@@ -176,6 +192,7 @@ def _worker(repo: Path, work: Path):
     from src.mutator import LLMMutator
     from src.llm_client import build_openai_client, LLMUsageLogger
     from src.search import TreeSearch
+    from src.checkpoint import load_checkpoint
     from src.optimizer.base import parse_expr, detect_rational_constrained, make_safe_expr
     import random
     import sympy as sp
@@ -200,14 +217,22 @@ def _worker(repo: Path, work: Path):
                temperature=cfg['temperature'])
     search = None
     try:
+        if cfg.get('resume') and (work / 'search.txt').is_file():
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            for name in ('search.txt', 'diagnostics.log'):
+                source = work / name
+                if source.is_file():
+                    source.replace(work / f'{source.stem}.pre_resume_{stamp}{source.suffix}')
         generator = create_generator(**llm)
         selector = create_selector(**llm)
         mutator = LLMMutator(api_client=build_openai_client(llm['model'], llm['base_url'],
             api_key=llm['api_key']), model=llm['model'], max_tokens=cfg['max_tokens'],
             max_retries=cfg['max_retries'], usage_logger=usage, temperature=cfg['temperature'])
+        reasoning = ({'effort': 'low'} if cfg['reasoning'] == 'low'
+                     else {'enabled': cfg['reasoning'] == 'enabled'})
         for agent in (generator, selector, mutator):
             agent.api.chat.completions.create = functools.partial(agent.api.chat.completions.create,
-                extra_body={'reasoning': {'enabled': cfg['reasoning'] == 'enabled'},
+                extra_body={'reasoning': reasoning,
                             'usage': {'include': True}})
             # The upstream budget is total tokens. OpenRouter caps completion tokens.
             original = agent.api.chat.completions.create
@@ -228,6 +253,8 @@ def _worker(repo: Path, work: Path):
             overfit_min_depth=cfg['overfit_min_depth'], log_path=str(work / 'search.txt'), verbose=cfg['verbose'],
             checkpoint_path=str(work / 'checkpoint.json'),
             diagnostic_log_path=str(work / 'diagnostics.log'))
+        if cfg.get('resume') and (work / 'checkpoint.json').is_file():
+            search.load_checkpoint_state(load_checkpoint(work / 'checkpoint.json'))
         search.initialize_seeds()
         search.run()
         result = search.get_best_result()
