@@ -315,7 +315,7 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
         }
         _logger.warning(f"[{problem.equation_idx}] Symbolic accuracy check failed: {log_exception(e)}")
 
-    return {
+    benchmark_result = {
         "equation_id": problem.equation_idx,
         "dataset_identifier": problem.dataset_identifier,
         "gt_expression": problem.gt_expression.to_str(),
@@ -328,6 +328,9 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
         "symbolic_acc": symbolic_acc['equivalent'],
         "symbolic_acc_detail": symbolic_acc['reason'],
     }
+    if result.metadata:
+        benchmark_result.update(result.metadata)
+    return benchmark_result
 
 
 def log_result(result: Dict):

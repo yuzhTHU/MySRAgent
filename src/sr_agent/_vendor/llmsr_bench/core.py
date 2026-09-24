@@ -41,6 +41,7 @@ class SRResult:
     """
     predict: Callable[[np.ndarray], np.ndarray]  # 输入 X(n, d) → y_pred(n,)
     expression: Optional[str] = None  # 发现的公式字符串 (可选, 用于记录)
+    metadata: Optional[Dict] = None  # 算法侧运行元数据（耗时、token、credits 等）
 
 
 @dataclass

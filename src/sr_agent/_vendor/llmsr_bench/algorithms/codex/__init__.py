@@ -27,6 +27,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 _README_TEMPLATE_PATH = _PACKAGE_DIR / "readme_template.md"
 _CALL_TOOL_TEMPLATE_PATH = _PACKAGE_DIR / "call_tool_template.py"
 
+# ChatGPT/Codex credit rates published by OpenAI, in credits per 1M tokens.
+# Source (checked 2026-09-22): https://learn.chatgpt.com/docs/pricing
+_CREDIT_RATES_PER_MILLION = {
+    "gpt-5.5": {"input": 125.0, "cached_input": 12.5, "output": 750.0},
+}
+
 os.environ.setdefault("HF_HOME", "/tmp/sr_agent_hf_home")
 os.environ.setdefault("HF_DATASETS_CACHE", "/tmp/sr_agent_hf_datasets")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/sr_agent_mplconfig")
@@ -95,7 +101,8 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
     # 后处理
     result = load_result_json(artifacts["result_path"])
-    result['token_usage'] = latest_usage_from_codex_events(artifacts["event_path"])
+    result['token_usage'] = latest_usage_from_codex_events(artifacts["event_path"], retries=10, retry_delay=0.2)
+    result['credit_usage'] = estimate_credit_usage(args.codex_model, result['token_usage'])
     result['tool_call_count'] = count_jsonl(artifacts["tool_call_log_path"])
     result['end_time'] = (end_time := datetime.now()).isoformat()
     result['duration_seconds'] = (end_time - artifacts["start_time"]).total_seconds()
@@ -104,11 +111,12 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     elif expression := best_formula_from_tool_calls(artifacts["tool_call_log_path"]):
         result['discovered_expression'] = expression
         result['notes'] = (result.get('notes') or '') + "\nFallback: selected the lowest-mse formula from tool-call records."
-    elif status != 0:
-        raise RuntimeError(f"Codex exited with status {status} and did not write discovered_expression. See {artifacts['event_path']}")
-    else:
-        raise ValueError(f"Codex did not discover an expression. See {artifacts['event_path']} for details.")
+    # Persist accounting even when the run failed to produce a formula.
     artifacts["result_path"].write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=True) + "\n", encoding="utf-8")
+    if not expression and status != 0:
+        raise RuntimeError(f"Codex exited with status {status} and did not write discovered_expression. See {artifacts['event_path']}")
+    elif not expression:
+        raise ValueError(f"Codex did not discover an expression. See {artifacts['event_path']} for details.")
 
     # 返回
     f = nd.parse(expression.strip().replace("^", "**").replace("np.", "").replace("math.", ""))
@@ -131,7 +139,12 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         pred_data |= constants # 将常数也加入数据字典，供表达式求值使用
         return f.eval(pred_data).flatten()
     
-    return SRResult(predict=predict, expression=expression)
+    return SRResult(predict=predict, expression=expression, metadata={
+        "duration_seconds": result.get("duration_seconds"),
+        "token_usage": result.get("token_usage"),
+        "credit_usage": result.get("credit_usage"),
+        "tool_call_count": result.get("tool_call_count"),
+    })
 
 
 def export_task(args: argparse.Namespace, task: SEDTask) -> dict[str, Path]:
@@ -555,7 +568,11 @@ def run_codex_command(command: list[str], artifacts, args: argparse.Namespace, t
     return int(process.returncode or 0)
 
 
-def latest_usage_from_codex_events(event_path: Path) -> dict[str, Any] | None:
+def latest_usage_from_codex_events(
+    event_path: Path,
+    retries: int = 0,
+    retry_delay: float = 0.0,
+) -> dict[str, Any] | None:
 
     def find_usage(value: Any) -> dict[str, Any] | None:
         if isinstance(value, dict):
@@ -592,21 +609,54 @@ def latest_usage_from_codex_events(event_path: Path) -> dict[str, Any] | None:
     if not thread_id:
         return None
     codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
-    try:
-        for rollout in codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"):
-            for line in rollout.read_text(encoding="utf-8", errors="replace").splitlines():
-                if not line.strip() or not line.strip().startswith("{"):
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = event.get("payload") or {}
-                if event.get("type") == "event_msg" and payload.get("type") == "token_count":
-                    usage = (payload.get("info") or {}).get("total_token_usage")
-    except OSError:
-        pass
+    for attempt in range(retries + 1):
+        try:
+            for rollout in codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"):
+                for line in rollout.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if not line.strip() or not line.strip().startswith("{"):
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    payload = event.get("payload") or {}
+                    if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+                        usage = (payload.get("info") or {}).get("total_token_usage")
+        except OSError:
+            pass
+        if usage is not None or attempt == retries:
+            break
+        time.sleep(retry_delay)
     return usage
+
+
+def estimate_credit_usage(model: str, usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Estimate Codex credits from cumulative token usage using the published rate card."""
+    if not usage or model not in _CREDIT_RATES_PER_MILLION:
+        return None
+    input_tokens = int(usage.get("input_tokens") or 0)
+    cached_input_tokens = int(usage.get("cached_input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    uncached_input_tokens = max(0, input_tokens - cached_input_tokens)
+    rates = _CREDIT_RATES_PER_MILLION[model]
+    components = {
+        "uncached_input": uncached_input_tokens * rates["input"] / 1_000_000,
+        "cached_input": cached_input_tokens * rates["cached_input"] / 1_000_000,
+        "output": output_tokens * rates["output"] / 1_000_000,
+    }
+    return {
+        "model": model,
+        "estimated_credits": sum(components.values()),
+        "components": components,
+        "billable_tokens": {
+            "uncached_input_tokens": uncached_input_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "output_tokens": output_tokens,
+        },
+        "rates_per_million_tokens": rates,
+        "rate_source": "https://learn.chatgpt.com/docs/pricing",
+        "rate_checked_date": "2026-09-22",
+    }
 
 
 def load_result_json(path: Path) -> dict[str, Any]:
