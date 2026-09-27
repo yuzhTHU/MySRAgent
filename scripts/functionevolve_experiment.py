@@ -30,6 +30,13 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def read_json(path, default):
+    try:
+        return json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return default
+
+
 def dump(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +86,7 @@ def summarize(output):
     return summary
 
 
-def task(dataset, problem, output, pilot=False):
+def task(dataset, problem, output, pilot=False, benchmark_options=None):
     import bench_sr_agent as bench
     from openai.resources.chat.completions import Completions
     from sr_agent._vendor.llmsr_bench.algorithms import functionevolve as fe
@@ -88,11 +95,12 @@ def task(dataset, problem, output, pilot=False):
     directory.mkdir(parents=True, exist_ok=True)
     benchmark_args = ['bench_sr_agent.py', '--algorithm', 'functionevolve', '--datasets', dataset,
         '--problem_names', problem, '--llm_model', 'qwen/qwen3.6-27b', '--seed', '260917',
-        '--save_dir', str(output / 'tasks'), '--exp_name', problem]
+        '--save_dir', str(output / 'tasks'), '--exp_name', problem, '--functionevolve_resume']
     if pilot:
         benchmark_args += ['--functionevolve_max_steps', '0', '--functionevolve_n_seeds', '2',
             '--functionevolve_timeout', '5', '--functionevolve_eval_workers', '2',
             '--functionevolve_max_tokens', '8192', '--functionevolve_reasoning', 'disabled']
+    benchmark_args += list(benchmark_options or [])
     sys.argv = benchmark_args
     args = bench.build_argparser().parse_args()
     args.save_path = str(directory)
@@ -105,8 +113,10 @@ def task(dataset, problem, output, pilot=False):
 
     def audited_judge(client, *positional, **kwargs):
         # Scope: this benchmark process only. Search runs in a separate subprocess.
+        model = kwargs.get('model', '')
+        judge_reasoning = {'effort': 'low'} if model.startswith('z-ai/glm-') else {'enabled': False}
         kwargs['extra_body'] = dict(kwargs.get('extra_body') or {},
-                                    reasoning={'enabled': False}, usage={'include': True})
+                                    reasoning=judge_reasoning, usage={'include': True})
         started = time.monotonic()
         row = dict(timestamp=now(), component='benchmark_judge', model=kwargs.get('model'))
         try:
@@ -171,27 +181,48 @@ def task(dataset, problem, output, pilot=False):
             search_seconds=sum(search_times), command=benchmark_args))
 
 
-def controller(output, workers):
+def controller(output, workers, all_synth=False, benchmark_options=None):
     output.mkdir(parents=True, exist_ok=True)
     directory = output / 'controller'
     directory.mkdir(exist_ok=True)
     # Validate all exact IDs before submitting any paid search.
     import pandas as pd
+    tasks = {}
     for dataset, names in TASKS.items():
         split = {'bio_pop_growth':'lsr_synth_bio_pop_growth', 'chem_react':'lsr_synth_chem_react',
                  'matsci':'lsr_synth_matsci', 'phys_osc':'lsr_synth_phys_osc'}[dataset]
         parquet = next((ROOT / 'data/llm-srbench-data/data').glob(split + '-*.parquet'))
-        available = set(pd.read_parquet(parquet)['name'])
+        available_names = pd.read_parquet(parquet)['name'].tolist()
+        available = set(available_names)
+        if len(available_names) != len(available):
+            raise ValueError(f'Duplicate IDs in {dataset}')
+        tasks[dataset] = available_names if all_synth else names
         if not set(names) <= available:
             raise ValueError(f'Missing IDs: {set(names) - available}')
+    if all_synth and sum(map(len, tasks.values())) != 129:
+        raise ValueError('Expected exactly 129 LSR-Synth tasks')
+    from bench_sr_agent import build_argparser
+    effective_cli = ['--algorithm', 'functionevolve', '--llm_model', 'qwen/qwen3.6-27b',
+                     '--seed', '260917', *(benchmark_options or [])]
+    previous_argv = sys.argv
+    try:
+        # build_argparser selects its algorithm-specific options from sys.argv.
+        sys.argv = [previous_argv[0], *effective_cli]
+        effective_args = build_argparser().parse_args(effective_cli)
+    finally:
+        sys.argv = previous_argv
+    effective_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(effective_args).items()
+                        if k.startswith('functionevolve_') or k in ('llm_model', 'llm_provider', 'seed')}
     started_at, started = now(), time.monotonic()
-    manifest = dict(started_at=started_at, workers=workers, tasks=TASKS, model='qwen/qwen3.6-27b',
-        seed=260917, key_source='project .env loaded before Python',
-        search_preset='upstream run.sh full + published Qwen temperature/token settings',
+    manifest = dict(started_at=started_at, workers=workers, tasks=tasks,
+        task_count=sum(map(len, tasks.values())), model=effective_args.llm_model,
+        seed=effective_args.seed, key_source='project .env loaded before Python',
+        search_preset='upstream full defaults with explicit benchmark CLI overrides',
+        effective_config=effective_config, benchmark_options=benchmark_options or [],
         deviations=['OpenRouter completion limit capped at 65536',
             'No GT baseline: upstream TreeSearch fixed train NMSE threshold 1e-11',
-            'Judge reasoning disabled (search reasoning enabled)',
-            'No per-equation total timeout; evaluation workers=16 per equation'],
+            f'Judge reasoning disabled; search reasoning={effective_args.functionevolve_reasoning}',
+            f'Per-equation total timeout={effective_args.functionevolve_run_timeout}; local evaluation workers={effective_args.functionevolve_eval_workers} per batch'],
         algorithm_defaults=__import__('sr_agent._vendor.llmsr_bench.algorithms.functionevolve',fromlist=['_DEFAULTS'])._DEFAULTS)
     dump(directory / 'manifest.json', manifest)
     sources = ['bench_sr_agent.py', 'scripts/functionevolve_experiment.py',
@@ -220,13 +251,17 @@ def controller(output, workers):
         log_dir.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, str(Path(__file__).resolve()), 'task', '--output', str(output),
                '--dataset', dataset, '--problem', problem]
+        if benchmark_options:
+            cmd += ['--benchmark-options', *benchmark_options]
         with (log_dir / 'console.log').open('w') as log:
             code = subprocess.call(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
         return dict(problem=problem, dataset=dataset, returncode=code, started_at=task_started_at,
                     finished_at=now(), subprocess_wall_seconds=time.monotonic() - task_started)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(run_one, dataset, problem) for dataset, names in TASKS.items() for problem in names]
+        unfinished = [(dataset, problem) for dataset, names in tasks.items() for problem in names
+                      if read_json(output / 'tasks' / problem / 'timing.json', {}).get('status') != 'completed']
+        futures = [pool.submit(run_one, dataset, problem) for dataset, problem in unfinished]
         for future in as_completed(futures):
             record = future.result()
             with (directory / 'progress.jsonl').open('a') as out:
@@ -245,12 +280,14 @@ def main():
     parser.add_argument('--dataset')
     parser.add_argument('--problem')
     parser.add_argument('--pilot', action='store_true')
+    parser.add_argument('--all-synth', action='store_true', help='Run all 129 local LSR-Synth tasks.')
+    parser.add_argument('--benchmark-options', nargs=argparse.REMAINDER, default=[])
     args = parser.parse_args()
     output = args.output.resolve()
     if args.mode == 'controller':
-        controller(output, args.workers)
+        controller(output, args.workers, args.all_synth, args.benchmark_options)
     elif args.mode == 'task':
-        task(args.dataset, args.problem, output, args.pilot)
+        task(args.dataset, args.problem, output, args.pilot, args.benchmark_options)
     else:
         print(json.dumps(summarize(output), indent=2))
 
