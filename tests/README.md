@@ -94,7 +94,7 @@ def test_parse_args_typehints(annotation, schema):
 ```
 tests/
 ├── conftest.py          # pytest 全局配置（sys.path 等）
-├── test_xxx.py          # SR Agent 测试
+├── test_xxx.py          # SRHarness 测试
 ├── tools/               # 工具测试
 │   ├── test_xxx.py
 ├── parser/              # 解析器测试

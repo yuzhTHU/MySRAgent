@@ -1,6 +1,6 @@
 import pytest
 
-from sr_agent.utils.format_pareto_front import format_pareto_front
+from sr_harness.utils.format_pareto_front import format_pareto_front
 
 
 def candidate(formula="x + 1", validation_r2=0.98, train_r2=0.99, complexity=3):

@@ -6,8 +6,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 from numpy.linalg import lstsq
-from typing import TYPE_CHECKING
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from ..core import SEDTask, SRResult
 
 
 def run(args: argparse.Namespace, task: SEDTask) -> SRResult:

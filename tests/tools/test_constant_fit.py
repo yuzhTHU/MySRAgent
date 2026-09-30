@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.constant_fit import ConstantFitTool
+from sr_harness.tools.constant_fit import ConstantFitTool
 
 
 def test_requires_a_numeric_constant():

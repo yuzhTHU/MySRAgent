@@ -5,9 +5,9 @@ import os
 import sys
 import json
 from pathlib import Path
-from sr_agent.tools import BaseTool
-from sr_agent.cli.tool import load_context, load_params, build_argparser
-from sr_agent._vendor.llmsr_bench.algorithms.codex.utils import record_tool_call
+from sr_harness.tools import BaseTool
+from sr_harness.cli.tool import load_context, load_params, setup_parser
+from sr_harness._vendor.llmsr_bench.algorithms.codex.utils import record_tool_call
 
 
 WORK_DIR = Path("<WORK_DIR>")
@@ -24,12 +24,12 @@ for cache_dir in ("HF_HOME", "HF_DATASETS_CACHE", "MPLCONFIGDIR"):
 
 
 def main(args) -> None:
-    if args.command == "list":
+    if args.tool_command == "list":
         for idx, metadata in enumerate(BaseTool.load_tool_list(ENABLED_TOOLS)):
             name = metadata['name']
             description = '\n'.join('  ' + line for line in (metadata['description'] or "").splitlines())
             print(f"{name}\n{description}\n")
-    elif args.command == "schema":
+    elif args.tool_command == "schema":
         if not args.tool:
             schema = BaseTool.to_tool_list(ENABLED_TOOLS)
             print(json.dumps(schema, indent=2, ensure_ascii=False))
@@ -39,7 +39,7 @@ def main(args) -> None:
             print(json.dumps(schema, indent=2, ensure_ascii=False))
         else:
             print(f"Tool {args.tool!r} is not in the enabled tools list: {ENABLED_TOOLS}", file=sys.stderr)
-    elif args.command == "call":
+    elif args.tool_command == "call":
         if args.tool not in ENABLED_TOOLS:
             print(f"Tool {args.tool!r} is not in the enabled tools list: {ENABLED_TOOLS}", file=sys.stderr)
             raise SystemExit(1)
@@ -53,11 +53,11 @@ def main(args) -> None:
         if not result.ok:
             raise SystemExit(1)
     else:
-        parser.error(f"Unknown command: {args.command}")
+        parser.error(f"Unknown tool command: {args.tool_command}")
 
 
 if __name__ == "__main__":
-    parser = build_argparser()
+    parser = setup_parser()
     args = parser.parse_args()
     args.context = CONTEXT_PATH
     main(args)

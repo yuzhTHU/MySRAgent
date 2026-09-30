@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.relationship_analysis import RelationshipAnalysisTool
+from sr_harness.tools.relationship_analysis import RelationshipAnalysisTool
 
 
 def test_relationships_and_conditional_collapse():

@@ -4,7 +4,7 @@
 import pytest
 import numpy as np
 
-from sr_agent.tools.code_executor import CodeExecutorTool
+from sr_harness.tools.code_executor import CodeExecutorTool
 
 
 class TestCodeExecutorTool:

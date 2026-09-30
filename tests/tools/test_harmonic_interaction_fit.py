@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sr_agent.tools import BaseTool, HarmonicInteractionFitTool
+from sr_harness.tools import BaseTool, HarmonicInteractionFitTool
 
 
 def test_recovers_polynomial_plus_sinusoidal_interaction():

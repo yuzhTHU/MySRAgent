@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+    from ..core import SEDTask, SRResult
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 _ROOT = Path(__file__).resolve().parents[5]
 _DEFAULTS = {
     # Released upstream experiment defaults, except for the deliberately
@@ -71,7 +71,7 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
 
 
 def _usage_from_response(response: Any) -> dict[str, Any]:
-    """Normalize LiteLLM/OpenRouter usage like ``sr_agent.api.openrouter_api``."""
+    """Normalize LiteLLM/OpenRouter usage like ``sr_harness.api.openrouter_api``."""
     usage = getattr(response, "usage", None)
     raw = usage.to_dict() if hasattr(usage, "to_dict") else dict(usage or {})
     prompt = int(raw.get("prompt_tokens") or 0)
@@ -139,7 +139,7 @@ def _display_term(term: str, symbols: list[str]) -> str:
 
 
 def _build_result(result: dict[str, Any], symbols: list[str]):
-    from sr_agent._vendor.llmsr_bench.core import SRResult
+    from ..core import SRResult
 
     terms = list(result.get("terms") or [])
     coefficients = np.asarray(result.get("coefficients"), dtype=float).reshape(-1)
@@ -230,10 +230,14 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         python = (_ROOT / python).resolve()
     if not python.is_file():
         raise FileNotFoundError(f"IGSR Python interpreter does not exist: {python}")
-    # Module execution avoids this adapter's ``igsr.py`` filename shadowing
-    # upstream's namespace package when the child imports ``igsr.dataset``.
-    cmd = [str(python), "-m", "sr_agent._vendor.llmsr_bench.algorithms.my_igsr",
-           "--worker", str(repo), str(work)]
+    # ``runpy`` starts the worker without giving an algorithm module a script
+    # entry point, and avoids shadowing upstream's ``igsr`` namespace package.
+    worker_code = (
+        "import runpy,sys; from pathlib import Path; "
+        "ns=runpy.run_path(sys.argv[1]); "
+        "ns['_worker'](Path(sys.argv[2]), Path(sys.argv[3]))"
+    )
+    cmd = [str(python), "-c", worker_code, str(Path(__file__).resolve()), str(repo), str(work)]
     log_path = work / "worker.log"
     process = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
@@ -408,9 +412,3 @@ def _worker(repo: Path, work: Path) -> None:
     except BaseException:
         (work / "worker_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
         raise
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 4 or sys.argv[1] != "--worker":
-        raise SystemExit("Invoke this algorithm through bench_sr_agent.py --algorithm my_igsr")
-    _worker(Path(sys.argv[2]), Path(sys.argv[3]))

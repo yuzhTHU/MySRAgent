@@ -18,9 +18,9 @@ import numpy as np
 from typing import Any
 from pathlib import Path
 from datetime import datetime
-from sr_agent.tools import BaseTool
-from sr_agent.utils import tag2ansi
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from sr_harness.tools import BaseTool
+from sr_harness.utils import tag2ansi
+from ...core import SEDTask, SRResult
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = Path(__file__).resolve().parents[6]
@@ -40,7 +40,7 @@ for _cache_dir in ("HF_HOME", "HF_DATASETS_CACHE", "MPLCONFIGDIR"):
     Path(os.environ[_cache_dir]).mkdir(parents=True, exist_ok=True)
 
 __all__ = ["update_parser", "run"]
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:

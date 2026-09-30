@@ -11,7 +11,7 @@ from ..api.core import ToolCall
 from ..tools import BaseTool, ToolCallResult
 from ..utils import FactoryMixin
 
-_logger = getLogger(f'sr_agent.{__name__}')
+_logger = getLogger(f'sr_harness.{__name__}')
 
 
 class BaseParser(ABC, FactoryMixin):

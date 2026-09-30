@@ -3,7 +3,7 @@ from __future__ import annotations
 import nd2py as nd
 import numpy as np
 
-from sr_agent.utils.symbolic_acc import get_symbolic_acc, llm_judge_equivalence
+from sr_harness.utils.symbolic_acc import get_symbolic_acc, llm_judge_equivalence
 
 
 def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
@@ -14,7 +14,7 @@ def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
             seen["messages"] = messages
             yield '{"reason": "Taylor approximation", "equivalent": false}', [], {}
 
-    monkeypatch.setattr("sr_agent.api.llm_api.LLMAPI.create", lambda *args, **kwargs: FakeAPI())
+    monkeypatch.setattr("sr_harness.api.llm_api.LLMAPI.create", lambda *args, **kwargs: FakeAPI())
     result = llm_judge_equivalence(
         nd.parse("exp(x)"), nd.parse("1+x+x**2/2"),
         {"x": (0.0, 0.01)}, "openrouter", "test-model",
@@ -27,7 +27,7 @@ def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
 
 def test_structural_judge_overrides_numerically_close_approximation(monkeypatch):
     monkeypatch.setattr(
-        "sr_agent.utils.symbolic_acc.llm_judge_equivalence",
+        "sr_harness.utils.symbolic_acc.llm_judge_equivalence",
         lambda **kwargs: {"reason": "different function family", "equivalent": False},
     )
     x = np.linspace(0, 0.01, 100)
@@ -41,7 +41,7 @@ def test_structural_judge_overrides_numerically_close_approximation(monkeypatch)
 
 def test_disagreement_sets_reason_without_human_review(monkeypatch):
     monkeypatch.setattr(
-        "sr_agent.utils.symbolic_acc.llm_judge_equivalence",
+        "sr_harness.utils.symbolic_acc.llm_judge_equivalence",
         lambda **kwargs: {"reason": "different function family", "equivalent": False},
     )
     x = np.linspace(0, 0.01, 100)
@@ -56,7 +56,7 @@ def test_disagreement_sets_reason_without_human_review(monkeypatch):
 
 def test_unavailable_judge_follows_existing_numeric_fallback(monkeypatch):
     monkeypatch.setattr(
-        "sr_agent.utils.symbolic_acc.llm_judge_equivalence",
+        "sr_harness.utils.symbolic_acc.llm_judge_equivalence",
         lambda **kwargs: {"reason": "unavailable", "equivalent": None},
     )
     x = np.linspace(0, 1, 100)

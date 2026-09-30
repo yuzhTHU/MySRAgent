@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.call_sindy import SINDyTool
+from sr_harness.tools.call_sindy import SINDyTool
 
 
 def make_tool(x: dict[str, np.ndarray], y: np.ndarray) -> SINDyTool:

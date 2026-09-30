@@ -4,9 +4,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import sr_agent.tools.predict_property as predict_property
-from sr_agent.tools.base_tool import ToolRunAbort
-from sr_agent.tools.predict_property import PropertyPredictorTool
+import sr_harness.tools.predict_property as predict_property
+from sr_harness.tools.base_tool import ToolRunAbort
+from sr_harness.tools.predict_property import PropertyPredictorTool
 
 
 class TestPropertyPredictorMetadata:
@@ -28,7 +28,7 @@ class TestPropertyPredictorMetadata:
         assert d["function"]["name"] == "predict_property"
 
     def test_not_registered_while_unready(self):
-        from sr_agent.tools.base_tool import BaseTool
+        from sr_harness.tools.base_tool import BaseTool
         assert "predict_property" not in BaseTool.REGISTRY_DICT
 
 

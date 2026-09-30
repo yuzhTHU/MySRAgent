@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from sr_agent._vendor.llmsr_bench.algorithms.codex import (
+from sr_harness._vendor.llmsr_bench.algorithms.codex import (
     estimate_credit_usage,
     latest_usage_from_codex_events,
 )

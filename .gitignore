@@ -142,12 +142,8 @@ Thumbs.db
 _deps/
 
 # Local development artifacts
-logs/
 *.log
 .cache/
-
-# Playground / experimental code
-playground/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -159,15 +155,15 @@ playground/
 .ruff_cache/
 
 /.claude/
-/data/
 /.agents/
-/CLAUDE.md
-/AGENTS.md
-/docs/
-/third-party/
-
-# Local analysis notebooks & data
-/analysis/
-
 /.agent
 /.claude
+/.codex
+/CLAUDE.md
+/AGENTS.md
+
+/data/
+/logs/
+/docs/
+/baseline/
+/playground/

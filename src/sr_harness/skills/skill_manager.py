@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 import yaml
 
-_logger = getLogger(f"sr_agent.{__name__}")
+_logger = getLogger(f"sr_harness.{__name__}")
 
 
 @dataclass(frozen=True)

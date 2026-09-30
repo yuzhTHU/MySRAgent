@@ -3,8 +3,8 @@ import json
 
 import numpy as np
 
-from sr_agent._vendor.llmsr_bench.algorithms import get_algorithm
-from sr_agent._vendor.llmsr_bench.algorithms import my_igsr
+from sr_harness._vendor.llmsr_bench.algorithms import get_algorithm
+from sr_harness._vendor.llmsr_bench.algorithms import my_igsr
 
 
 def test_dispatch_and_default_model():

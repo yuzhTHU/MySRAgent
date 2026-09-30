@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.rational_fit import RationalFitTool
+from sr_harness.tools.rational_fit import RationalFitTool
 
 
 def test_recovers_low_degree_rational_function():

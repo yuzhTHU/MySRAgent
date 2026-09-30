@@ -4,12 +4,12 @@ import json
 import numpy as np
 from types import SimpleNamespace
 
-from sr_agent.api.core import ToolCall
-from sr_agent.sr_agent import SRAgent
-from sr_agent.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
-from sr_agent.tools.read_skill import ReadSkill
-from sr_agent.tools.relationship_analysis import RelationshipAnalysisTool
-from sr_agent.tools.statistics_analysis import StatisticsTool
+from sr_harness.api.core import ToolCall
+from sr_harness.agents.sr_agent import SRAgent
+from sr_harness.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
+from sr_harness.tools.read_skill import ReadSkill
+from sr_harness.tools.relationship_analysis import RelationshipAnalysisTool
+from sr_harness.tools.statistics_analysis import StatisticsTool
 
 
 @BaseTool.register("unit_parallel_tool")

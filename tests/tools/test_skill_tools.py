@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sr_agent.skills import SkillManager
-from sr_agent.tools.create_skill import CreateSkill
-from sr_agent.tools.edit_skill import EditSkill
-from sr_agent.tools.edit_tool import EditTool
-from sr_agent.tools.read_skill import ReadSkill
-from sr_agent.tools.base_tool import BaseTool
-from sr_agent.tools.workspace_shell import WorkspaceShellTool
+from sr_harness.skills import SkillManager
+from sr_harness.tools.create_skill import CreateSkill
+from sr_harness.tools.edit_skill import EditSkill
+from sr_harness.tools.edit_tool import EditTool
+from sr_harness.tools.read_skill import ReadSkill
+from sr_harness.tools.base_tool import BaseTool
+from sr_harness.tools.workspace_shell import WorkspaceShellTool
 
 
 def _test_manager(custom_directory: Path) -> SkillManager:
@@ -175,7 +175,7 @@ class TestSkillManager:
 
 class TestCreateSkillTool:
     TOOL_CODE = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 class ExampleAnalysis(BaseTool):
     metadata = ToolMetadata(name="example_analysis", description="Analyze a value.")
     def execute(self, value: float = 0.0):
@@ -183,7 +183,7 @@ class ExampleAnalysis(BaseTool):
         return {"value": value}
 '''
     FORMULA_TOOL_CODE = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 class ExampleProposer(BaseTool):
     metadata = ToolMetadata(name="example_proposer", description="Propose a formula.")
     def execute(self, variable: str):
@@ -357,7 +357,7 @@ class TestEditSkillTool:
 
 class TestCreateSkillWithTool:
     TOOL_CODE = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 
 class DoubleValue(BaseTool):
     metadata = ToolMetadata(name="double_value", description="Doubles the input value.")
@@ -381,7 +381,7 @@ class DoubleValue(BaseTool):
             )
 
     def test_execute_creates_tool_and_registers(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         tool = _SkillCreatorHarness(skills_dir=tmp_path / "skills")
         result = tool.execute(
             tool_type="data_analysis",
@@ -398,7 +398,7 @@ class DoubleValue(BaseTool):
         assert BaseTool.REGISTRY_DICT["double_value"].source_path == tool_path.resolve()
 
     def test_execute_registered_tool_can_be_called(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         _SkillCreatorHarness(skills_dir=tmp_path / "skills").execute(
             tool_type="data_analysis",
             name="double-value",
@@ -410,7 +410,7 @@ class DoubleValue(BaseTool):
         assert ready.execute(value=21)["value"] == 42
 
     def test_execute_rejects_duplicate_tool_name(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         tool = _SkillCreatorHarness(skills_dir=tmp_path / "skills")
         tool.execute(
             tool_type="data_analysis",
@@ -432,7 +432,7 @@ class DoubleValue(BaseTool):
         assert "double_value" in BaseTool.REGISTRY_DICT
 
     def test_execute_rolls_back_on_bad_syntax(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         tool = _SkillCreatorHarness(skills_dir=tmp_path / "skills")
         bad = "def execute(self):\\n    return {  # unterminated\\n"
         for name in ("bad-skill",):
@@ -540,7 +540,7 @@ class DoubleValue(BaseTool):
 
 class TestEditToolTool:
     TOOL_CODE = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 
 class TripleValue(BaseTool):
     metadata = ToolMetadata(name="triple_value", description="Triples the input.")
@@ -554,7 +554,7 @@ class TripleValue(BaseTool):
 '''
 
     def test_execute_edits_and_reloads_tool(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         create = _SkillCreatorHarness(skills_dir=tmp_path / "skills")
         create.execute(
             tool_type="data_analysis",
@@ -586,7 +586,7 @@ class TripleValue(BaseTool):
             content="# Ambig Skill",
             tool_code="\n".join(
                 [
-                    "from sr_agent.tools import BaseTool, ToolMetadata",
+                    "from sr_harness.tools import BaseTool, ToolMetadata",
                     "class AmbigTool(BaseTool):",
                     "    metadata = ToolMetadata(name=\"ambig_tool\", description=\"d\")",
                     "    def execute(self):",
@@ -642,9 +642,9 @@ class TripleValue(BaseTool):
 
 class TestReadSkillFile:
     def test_execute_reads_tool_file_and_tree(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         code = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 class FileTool(BaseTool):
     metadata = ToolMetadata(name="file_tool", description="d")
     def execute(self):
@@ -667,9 +667,9 @@ class FileTool(BaseTool):
         assert not any("__pycache__" in p for p in result["tree"])
 
     def test_execute_rejects_path_traversal(self, tmp_path):
-        from sr_agent.tools import BaseTool
+        from sr_harness.tools import BaseTool
         code = '''
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 class TravTool(BaseTool):
     metadata = ToolMetadata(name="trav_tool", description="d")
     def execute(self):
@@ -694,7 +694,7 @@ class TestDiscoverToolSkills:
     def _write_saved_tool(self, tmp_path, name, reg_name, expr):
         """Write a saved custom tool file directly, as a prior session would."""
         code = (
-            f"from sr_agent.tools import BaseTool, ToolMetadata\n"
+            f"from sr_harness.tools import BaseTool, ToolMetadata\n"
             f"class Tool(BaseTool):\n"
             f"    metadata = ToolMetadata(name=\"{reg_name}\", description=\"d\")\n"
             f"    def execute(self, x: float):\n"
@@ -717,7 +717,7 @@ class TestDiscoverToolSkills:
     def test_repeated_agents_do_not_duplicate_discovered_tool_classes(self, tmp_path, monkeypatch):
         import importlib
 
-        sr_agent_module = importlib.import_module("sr_agent.sr_agent")
+        sr_agent_module = importlib.import_module("sr_harness.agents.sr_agent")
         custom_directory = tmp_path / "skills"
         self._write_saved_tool(tmp_path, "square-skill", "square_it", "x * x")
         monkeypatch.setattr(
@@ -809,7 +809,7 @@ class TestDiscoverToolSkills:
 
     def test_create_skill_registers_tool_immediately(self, tmp_path):
         code = (
-            "from sr_agent.tools import BaseTool, ToolMetadata\n"
+            "from sr_harness.tools import BaseTool, ToolMetadata\n"
             "class Tool(BaseTool):\n"
             "    metadata = ToolMetadata(name=\"create_discovered\", description=\"d\")\n"
             "    def execute(self):\n"

@@ -18,7 +18,7 @@ from .base_tool import BaseTool, ToolMetadata
 from .code_executor import LimitedWriter
 from ..utils import log_exception
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 # WorkspaceShellTool 支持的命令白名单
 ALLOWED_COMMANDS = {

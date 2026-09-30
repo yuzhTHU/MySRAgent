@@ -1,0 +1,609 @@
+"""
+LLM-SRBench 评估脚本 (浓缩版)
+
+将 benchmark 评估流程整合为单个脚本:
+  1) 数据读取与预处理
+  2) 调用符号回归函数 (placeholder)
+  3) 评估结果
+  4) 汇总多次运行的结果
+
+Usage:
+    # 测试单个问题
+    sr-harness bench --exp_name test_my_algorithm --datasets lsrtransform --problem_names II.6.15b_1_0
+    # 测试单个数据集
+    sr-harness bench --exp_name test_my_algorithm --datasets bio_pop_growth
+    # 测试一系列问题
+    sr-harness bench --problem_names MatSci2 MatSci19 CRK28 BPG1 PO6
+    # 测试特定算法
+    sr-harness bench --algorithm linear --exp_name test_linear_fitting
+"""
+
+from __future__ import annotations
+
+import re
+import time
+import json
+import h5py
+import shlex
+import dotenv
+import logging
+import argparse
+import datasets
+import numpy as np
+import nd2py as nd
+from pathlib import Path
+from datetime import datetime
+from socket import gethostname
+from typing import Callable, Dict, List
+from scipy.stats import kendalltau
+from scipy.optimize import least_squares
+from sklearn.metrics import mean_absolute_percentage_error
+from sr_harness.utils import (
+    add_minus_flags,
+    add_negation_flags,
+    get_symbolic_acc,
+    log_exception,
+    sanitize_filename,
+    save_args,
+    seed_all,
+    setup_logging,
+    tag2ansi,
+)
+from sr_harness._vendor.llmsr_bench.core import SEDTask, SRResult, Problem
+from sr_harness._vendor.llmsr_bench.algorithms import get_update_parser, get_algorithm, list_algorithms
+
+DATASET_SPLITS = {
+    "lsrtransform": "lsr_transform",
+    "bio_pop_growth": "lsr_synth_bio_pop_growth",
+    "chem_react": "lsr_synth_chem_react",
+    "matsci": "lsr_synth_matsci",
+    "phys_osc": "lsr_synth_phys_osc",
+}
+
+dotenv.load_dotenv()  # Load environment variables from .env file if present
+SCRIPT_NAME = "bench"
+_logger = logging.getLogger(f"sr_harness.{SCRIPT_NAME}")
+
+
+def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    if parser is None:
+        parser = argparse.ArgumentParser(
+            prog="sr-harness bench",
+            description="LLM-SRBench Evaluation Script.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+    else:
+        parser.description = "LLM-SRBench Evaluation Script."
+        parser.formatter_class = argparse.ArgumentDefaultsHelpFormatter
+    parser.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms(), help="符号回归算法名称")
+    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
+    parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
+    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
+    parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
+    parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
+    parser.add_argument("--debug", action="store_true", default=False, help="Enable debug mode (verbose + raise caught exceptions).")
+    parser.add_argument("--data_root", type=str, default=str(Path("data") / "llm-srbench-data"), help="HDF5 数据文件所在目录")
+    parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help="数据集名称, 默认评估全部数据集")
+    parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
+    parser.add_argument("--skip_existing", action="store_true", default=False, help="如果结果文件已存在则跳过评估")
+    parser.add_argument("--skip_successful", action="store_true", default=True, help="如果结果文件已存在且成功则跳过评估")
+    parser.add_argument("--anonymize", action="store_true", help="Anonymize agent-facing variables as x1..xn and target as y.")
+    # 解析 --alg 参数以获取对应的 update_parser
+    algorithm_probe = argparse.ArgumentParser(add_help=False)
+    algorithm_probe.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms())
+    probe_args, _ = algorithm_probe.parse_known_args()
+    if (update_parser_fn := get_update_parser(probe_args.algorithm)):
+        parser = update_parser_fn(parser)
+    add_minus_flags(parser)
+    add_negation_flags(parser)
+    return parser
+
+
+def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-srbench") -> List[Problem]:
+    """
+    从 HuggingFace + HDF5 加载指定数据集的所有问题
+
+    HDF5 键名:
+    - LSR-Transform: 'train', 'test'
+    - LSR-Synth: 'train', 'test', 'ood_test'
+
+    注意: 原始 benchmark 代码 (datamodules.py) 中 SynProblem 类使用了
+    不同的属性名映射 (train_data, id_test_data, ood_test_data),
+    但 HDF5 文件中的实际键名已统一为 train, test, ood_test。
+    """
+    split_name = DATASET_SPLITS[dataset_name]
+
+    # 尝试从本地 parquet 文件加载公式元信息
+    data_dir = Path(data_root) / "data"
+    if not data_dir.exists():
+        _logger.note(f"Local parquet not found. Downloading from {hf_repo_id}... (If you wait too long, consider downloading it manually)")
+        ds = datasets.load_dataset(hf_repo_id, split=split_name, cache_dir='./data/hf_cache')
+    elif not (data_path := data_dir.glob(f"{split_name}-*.parquet").__iter__().__next__()).exists():
+        _logger.note(f"Local parquet not found. Downloading from {hf_repo_id}... (If you wait too long, consider downloading it manually)")
+        ds = datasets.load_dataset(hf_repo_id, split=split_name, cache_dir='./data/hf_cache')
+    else:
+        _logger.note(f"Loading parquet from local: {data_path}")
+        ds = datasets.load_dataset("parquet", data_files=str(data_path), split="train")
+
+    # 从 HDF5 读取数值样本
+    h5file_path = Path(data_root) / "lsr_bench_data.hdf5"
+    problems = []
+    with h5py.File(h5file_path, "r") as f:
+        for entry in ds:
+            name = entry["name"]
+            # HDF5 路径: /lsr_transform/<name> 或 /lsr_synth/<domain>/<name>
+            if split_name == "lsr_transform":
+                h5_path = f"/lsr_transform/{name}"
+            else:
+                h5_path = f"/lsr_synth/{dataset_name}/{name}"
+
+            expression = entry["expression"]
+            samples = {k: v[...].astype(np.float64) for k, v in f[h5_path].items()}
+
+            # expression 中有一些 P(t) 这样的写法，需要将它替换成 P
+            for symbol in entry['symbols']:
+                try:
+                    expression = re.sub(rf"\b{re.escape(symbol)}\b\(t\)", symbol, expression)
+                except Exception as e:
+                    _logger.warning(f"Failed to replace {symbol}(t) -> {symbol} in {entry['expression']!r}")
+
+            # expression 中有一些 pi, e 这样的常数, 需要将它替换成数值
+            for key, var in {'pi': np.pi, 'e': np.e}.items():
+                if key not in entry['symbols']:
+                    try:
+                        expression = re.sub(rf"\b{key}\b", str(var), expression)
+                    except Exception as e:
+                        _logger.warning(f"Failed to replace {key} -> {var} in {entry['expression']!r}")
+
+            expression = expression.replace("^", "**")
+
+            # Chemical Reaction 数据集中存在一些错误设置的数值常数，替换为 __C0, __C1, ... 以便后续重新确定数值常数
+            if dataset_name == 'chem_react':
+                # 0.18997742423620262_z, 0.547523655303147_s, .5_alpha, 1e-3_k -> __C0, __C1, __C2, __C3
+                expression = re.sub(
+                    r"(?<![A-Za-z_])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?_[A-Za-z_]\w*",
+                    lambda m, c=iter(range(100)): f"__C{next(c)}",
+                    expression,
+                )
+
+            # Physical Oscillation / Chemical Reaction 数据集中公式的常数未被正确设置，需要拟合后替换成数值
+            if dataset_name in {'phys_osc', 'chem_react'}:
+                formula = nd.parse(expression)
+                if unknowns := sorted({var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable) and var.name not in entry['symbols']}):
+                    train, y = samples["train"], samples["train"][:, 0]
+                    base = {sym: train[:, i] for i, sym in enumerate(entry["symbols"])}
+                    def residual(c):
+                        data = base | {k: np.full(len(y), v) for k, v in zip(unknowns, c)}
+                        return formula.eval(data).flatten() - y
+                    starts = [np.full(len(unknowns), x) for x in (0.1, 0.5, 1.0, 2.0)]
+                    starts += [np.where(np.arange(len(unknowns)) == i, 0.01, 0.5) for i in range(len(unknowns))]
+                    rng = np.random.default_rng(0)
+                    starts += [np.exp(rng.uniform(np.log(0.01), np.log(2.0), len(unknowns))) for _ in range(4)]
+                    fits = [least_squares(residual, x0, bounds=(0, np.inf), max_nfev=5000).x for x0 in starts]
+                    values = min(fits, key=lambda c: np.mean(residual(c) ** 2))
+                    for key, val in zip(unknowns, values):
+                        expression = re.sub(rf"\b{re.escape(key)}\b", repr(float(val)), expression)
+
+            gt_expression = nd.parse(expression)
+
+            # 确保没有未知变量
+            variables = {var.name for var in gt_expression.iter_preorder() if isinstance(var, nd.Variable)}
+            if missing := set(variables) - set(entry['symbols']):
+                _logger.warning(f"[{dataset_name}] {name} has unknown variables in expression: {missing}. This problem is SKIPPED.")
+                continue
+
+            # 确保 gt_expression 足够准确
+            data = {sym: samples["train"][:, i] for i, sym in enumerate(entry["symbols"])}
+            y_pred = gt_expression.eval(data)
+            y_true = data[entry["symbols"][0]]
+            metrics = {
+                'mae': float(np.mean(np.abs(y_true - y_pred))),
+                'mape': float(mean_absolute_percentage_error(y_true, y_pred)),
+                'rmse': float(np.sqrt(np.mean((y_true - y_pred) ** 2))),
+                'r2': float(1 - np.mean((y_true - y_pred) ** 2) / np.var(y_true)) if np.var(y_true) > 0 else float("nan"),
+            }
+            if not (metrics['r2'] > 0.99):
+                _logger.warning(
+                    f"[{dataset_name}] {name} has low R^2 ({metrics['r2']:.4f}) between gt_expression and train samples "
+                    f"(MAE={metrics['mae']:.4e}, MAPE={metrics['mape']:.4e}, RMSE={metrics['rmse']:.4e}). "
+                    f"This problem is NOT skipped, but the results may be unreliable."
+                )
+
+            problems.append(Problem(
+                dataset_identifier=dataset_name,
+                equation_idx=name,
+                symbols=entry["symbols"],
+                symbol_descs=entry["symbol_descs"],
+                symbol_properties=entry["symbol_properties"],
+                raw_expression=entry["expression"],
+                gt_expression=gt_expression,
+                samples=samples,
+            ))
+    return problems
+
+
+def anonymize_problem(problem: Problem) -> Problem:
+    """Return an agent-facing anonymized copy of a benchmark problem."""
+
+    target = problem.symbols[0]
+    features = problem.symbols[1:]
+    feature_mapping = {name: f"x{i}" for i, name in enumerate(features, start=1)} | {target: "y"}
+
+    anonymized_symbols = [feature_mapping[sym] for sym in problem.symbols]
+    anonymized_symbol_descs = ["target variable", *[f"input variable {i}" for i in range(1, len(features) + 1)]]
+
+    anonymized_expression = problem.gt_expression.copy()
+    for var in anonymized_expression.iter_preorder():
+        if isinstance(var, nd.Variable):
+            var.name = feature_mapping[var.name]
+    anonymized_expression_str = anonymized_expression.to_str()
+    _logger.debug(
+        f"[{problem.equation_idx} @ {problem.dataset_identifier}]"
+        f"Anonymization enabled. "
+        f"Variable mapping: {feature_mapping}\n"
+        f"Original formula: {target} = {problem.gt_expression}\n"
+        f"Anonymized formula: {anonymized_symbols[0]} = {anonymized_expression_str}\n"
+    )
+
+    anonymized_problem = Problem(
+        dataset_identifier=problem.dataset_identifier,
+        equation_idx=problem.equation_idx,
+        symbols=anonymized_symbols,
+        symbol_descs=anonymized_symbol_descs,
+        symbol_properties=problem.symbol_properties,
+        gt_expression=anonymized_expression,
+        raw_expression="<None>",
+        samples=problem.samples,
+    )
+    return anonymized_problem
+
+
+def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
+    """计算 ID/OOD 测试集上的评估指标"""
+    mask = ~np.isnan(y_pred) # 原始的 LLM-SRBench 就是这么做的，可能导致潜在的问题，但为了保持一致，我们也采用相同的过滤方式。
+    y_pred, y_true = y_pred[mask], y_true[mask]
+    if len(y_true) == 0:
+        return {
+            "mse": float("nan"), "nmse": float("nan"), "r2": float("nan"),
+            "kdt": float("nan"), "mape": float("nan"), "num_valid_points": 0
+        }
+    else:
+        var = np.var(y_true)
+        mse = float(np.mean((y_true - y_pred) ** 2))
+        nmse = float(mse / var) if var > 0 else float("nan")
+        r2 = float(1 - nmse)
+        kdt = float(kendalltau(y_true, y_pred)[0]) if len(y_true) > 1 else float("nan")
+        mape = float(mean_absolute_percentage_error(y_true, y_pred))
+        acc01 = np.mean(np.abs(y_true - y_pred) <= 0.1 * np.abs(y_true))
+        return {
+            "mse": mse, "nmse": nmse, "r2": r2, "acc01": acc01,
+            "kdt": kdt, "mape": mape, "num_valid_points": len(y_true),
+        }
+
+
+def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) -> Dict:
+    """对单个问题运行 SR 方法并评估"""
+    task = problem.create_task()
+
+    start_time = time.time()
+    result = sr_fn(args, task)
+    search_time = time.time() - start_time
+
+    # ID test
+    X_id = problem.test_samples[:, 1:]
+    y_id = problem.test_samples[:, 0]
+    id_metrics = compute_metrics(y_pred=result.predict(X_id), y_true=y_id)
+
+    # OOD test (if available)
+    ood_metrics = None
+    if problem.ood_test_samples is not None:
+        X_ood = problem.ood_test_samples[:, 1:]
+        y_ood = problem.ood_test_samples[:, 0]
+        ood_metrics = compute_metrics(y_pred=result.predict(X_ood), y_true=y_ood)
+
+    # Symbolic Accurate
+    try:
+        data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
+        f_true = problem.gt_expression
+        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", "").replace("math.", ""))
+        symbolic_acc = get_symbolic_acc(
+            f_true,
+            f_pred,
+            data,
+            return_details=True,
+            llm_provider=getattr(args, "llm_provider", None),
+            llm_model=getattr(args, "llm_model", None),
+        )
+        foo = lambda x: tag2ansi(('[green bold]EQUIVALENT[reset]' if x is True else '[red bold]NOT EQUIVALENT[reset]' if x is False else f'[gray bold]{x!r}[reset]'))
+        _logger.note(tag2ansi(
+            f"[{problem.equation_idx}] The predicted formula is judged to be {foo(symbolic_acc['equivalent'])} since {symbolic_acc.get('reason')}:\n"
+            f"  f_true = [green]{f_true.to_str()}[reset]\n"
+            f"  f_pred = [red]{f_pred.to_str()}[reset]"
+            f"Manually modify [green bold]{exp_path}[reset] if you want to override the symbolic accuracy judgment."
+        ))
+    except Exception as e:
+        symbolic_acc = {
+            "equivalent": None,
+            "reason": f"symbolic accuracy check failed: [{type(e).__name__}] {e}",
+        }
+        _logger.warning(f"[{problem.equation_idx}] Symbolic accuracy check failed: {log_exception(e)}")
+
+    benchmark_result = {
+        "equation_id": problem.equation_idx,
+        "dataset_identifier": problem.dataset_identifier,
+        "gt_expression": problem.gt_expression.to_str(),
+        "discovered_expression": result.expression,
+        "num_train": len(problem.train_samples),
+        "num_test": len(problem.test_samples),
+        "search_time": search_time,
+        "id_metrics": id_metrics,
+        "ood_metrics": ood_metrics,
+        "symbolic_acc": symbolic_acc['equivalent'],
+        "symbolic_acc_detail": symbolic_acc['reason'],
+    }
+    if result.metadata:
+        benchmark_result.update(result.metadata)
+    return benchmark_result
+
+
+def log_result(result: Dict):
+    lines = []
+    lines.append(f'[gray]{"=" * 50}')
+    lines.append(f"[blue bold]Problem {result['equation_id']} @ {result.get('dataset_identifier', 'Unknown')} evaluated.[reset]")
+    lines.append(f'[gray]{"-" * 50}')
+    lines.append(f"[blue]GT: [green]{result['gt_expression']}[reset]")
+    lines.append(f"[blue]Discovered: [red]{result['discovered_expression']}[reset]")
+    if (symbolic_acc := result.get("symbolic_acc")) is None:
+        lines.append(f"[blue]Symbolic Accurate:[reset] [gray]N/A[reset]")
+    elif symbolic_acc:
+        lines.append(f"[blue]Symbolic Accurate:[reset] [green]Yes[reset]")
+    else:
+        lines.append(f"[blue]Symbolic Accurate:[reset] [red]No[reset]")
+    if 'id_metrics' in result and result['id_metrics'] is not None:
+        lines.append(
+            f"[blue]In-Domain: R2={result['id_metrics'].get('r2', float('nan')):.6f}, "
+            f"MSE={result['id_metrics'].get('mse', float('nan')):.6f}, "
+            f"NMSE={result['id_metrics'].get('nmse', float('nan')):.6f}, "
+            f"MAPE={result['id_metrics'].get('mape', float('nan')):.6f}, "
+            f"Acc@0.1={result['id_metrics'].get('acc01', float('nan')):.6f}, "
+            f"Valid Points={result['id_metrics'].get('num_valid_points', 0)}"
+        )
+    if 'ood_metrics' in result and result['ood_metrics'] is not None:
+        lines.append(
+            f"[blue]Out-of-Domain: R2={result['ood_metrics']['r2']:.6f}, "
+            f"MSE={result['ood_metrics']['mse']:.6f}, "
+            f"NMSE={result['ood_metrics']['nmse']:.6f}, "
+            f"MAPE={result['ood_metrics']['mape']:.6f}, "
+            f"Acc@0.1={result['ood_metrics']['acc01']:.6f}, "
+            f"Valid Points={result['ood_metrics']['num_valid_points']}"
+        )
+    lines.append(f"[blue]Search time:[reset] {result['search_time']:.2f}s")
+    lines.append(f'[gray]{"=" * 50}')
+    return tag2ansi("\n".join(lines))
+
+
+def aggregate_results(results: List[Dict]) -> Dict:
+    """汇总多次运行 / 多个问题的结果"""
+
+    def safe_mean(key, group):
+        vals = [r[group][key] for r in results if r[group] is not None and not np.isnan(r[group][key])]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    n = len(results)
+
+    # R² 达标率
+    r2_thresholds = [0.5, 0.9, 0.99, 0.999]
+    r2_hit_rates = {}
+    for thr in r2_thresholds:
+        hits = sum(1 for r in results if r["id_metrics"] is not None and r["id_metrics"]["r2"] >= thr)
+        r2_hit_rates[f"r2>={thr}"] = {"count": hits, "rate": hits / n if n > 0 else 0}
+
+    summary = {
+        "dataset": "|".join(sorted({r.get("dataset_identifier") for r in results} - {None})),
+        "total_problems": n,
+        "avg_search_time": float(np.mean([r["search_time"] for r in results])),
+        "avg_symbolic_acc": float(np.mean([r.get("symbolic_acc") is True for r in results])),
+        "r2_hit_rates": r2_hit_rates,
+    }
+    summary["id_metrics"] = {
+        "avg_mse": safe_mean("mse", "id_metrics"),
+        "avg_nmse": safe_mean("nmse", "id_metrics"),
+        "avg_r2": safe_mean("r2", "id_metrics"),
+        "avg_acc01": safe_mean("acc01", "id_metrics"),
+        "avg_kdt": safe_mean("kdt", "id_metrics"),
+        "avg_mape": safe_mean("mape", "id_metrics"),
+        "avg_num_valid_points": safe_mean("num_valid_points", "id_metrics"),
+    }
+    if any(r["ood_metrics"] is not None for r in results):
+        summary["ood_metrics"] = {
+            "avg_mse": safe_mean("mse", "ood_metrics"),
+            "avg_nmse": safe_mean("nmse", "ood_metrics"),
+            "avg_r2": safe_mean("r2", "ood_metrics"),
+            "avg_acc01": safe_mean("acc01", "ood_metrics"),
+            "avg_kdt": safe_mean("kdt", "ood_metrics"),
+            "avg_mape": safe_mean("mape", "ood_metrics"),
+            "avg_num_valid_points": safe_mean("num_valid_points", "ood_metrics"),
+        }
+    return summary
+
+def conclude_results(results: List[Dict], llmsr_datasets: List[str], save_path: str):
+    # 汇总
+    results = [r for r in results if r.get("dataset_identifier") in llmsr_datasets]
+    summary = aggregate_results(results)
+
+    # 打印汇总
+    lines = []
+    lines.extend([
+        f'[gray]{"=" * 50}[reset]',
+        f"[red bold]Summary of {'|'.join(llmsr_datasets)} ({summary['total_problems']} problems)[reset]",
+        f'[gray]{"-" * 50}[reset]',
+        f"  [red]Avg R2   (In-Domain):[reset] {summary['id_metrics']['avg_r2']:.6f}",
+        f"  [red]Avg MSE  (In-Domain):[reset] {summary['id_metrics']['avg_mse']:.6f}",
+        f"  [red]Avg NMSE (In-Domain):[reset] {summary['id_metrics']['avg_nmse']:.6f}",
+        f"  [red]Avg MAPE (In-Domain):[reset] {summary['id_metrics']['avg_mape']:.6f}",
+        f"  [red]Avg KDT  (In-Domain):[reset] {summary['id_metrics']['avg_kdt']:.6f}",
+        f"  [red]Avg Acc@0.1 (In-Domain):[reset] {summary['id_metrics']['avg_acc01']:.6f}",
+        f"  [red]Avg Valid Points (In-Domain):[reset] {summary['id_metrics']['avg_num_valid_points']:.1f}",
+    ])
+    if "ood_metrics" in summary:
+        lines.extend([
+            f'[gray]{"-" * 50}[reset]',
+            f"  [red]Avg R2   (Out-of-Domain):[reset] {summary['ood_metrics']['avg_r2']:.6f}",
+            f"  [red]Avg MSE  (Out-of-Domain):[reset] {summary['ood_metrics']['avg_mse']:.6f}",
+            f"  [red]Avg NMSE (Out-of-Domain):[reset] {summary['ood_metrics']['avg_nmse']:.6f}",
+            f"  [red]Avg MAPE (Out-of-Domain):[reset] {summary['ood_metrics']['avg_mape']:.6f}",
+            f"  [red]Avg KDT  (Out-of-Domain):[reset] {summary['ood_metrics']['avg_kdt']:.6f}",
+            f"  [red]Avg Acc@0.1 (Out-of-Domain):[reset] {summary['ood_metrics']['avg_acc01']:.6f}",
+            f"  [red]Avg Valid Points (Out-of-Domain):[reset] {summary['ood_metrics']['avg_num_valid_points']:.1f}",
+        ])
+    lines.append(f'[gray]{"-" * 50}[reset]')
+    for thr, info in summary["r2_hit_rates"].items():
+        lines.append(f"  [red]{thr:>10}:[reset] {info['count']:>5}/{summary['total_problems']} ({info['rate']:.1%})")
+    lines.append(f'[gray]{"-" * 50}[reset]')
+    lines.append(f"  [red]Avg Search Time:[reset] {summary['avg_search_time']:.2f}s")
+    lines.append(f"  [red]Avg Symbolic Accurate Rate:[reset] {summary['avg_symbolic_acc']:.6f}")
+    lines.append(f'[gray]{"=" * 50}[reset]')
+    _logger.note(tag2ansi("\n" + "\n".join(lines)))
+
+    # 保存汇总
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, "a", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, default=str, allow_nan=True)
+    _logger.note(f"Summary saved to {save_path}")
+
+
+def run_benchmark(args: argparse.Namespace) -> int:
+    # 加载问题集
+    args.datasets = args.datasets or list(DATASET_SPLITS.keys())
+    problems = []
+    for dataset in args.datasets:
+        problems.extend(load_problems(dataset, args.data_root))
+    _logger.note(f"Load {len(problems)} problems in total from datasets: {args.datasets}")
+
+    if args.problem_names is not None:
+        if unknown_problems := set(args.problem_names) - set(p.equation_idx for p in problems):
+            _logger.warning(f"Unknown problems specified: {unknown_problems}")
+        problems = [p for p in problems if p.equation_idx in args.problem_names]
+        _logger.note(f"Filtered to {len(problems)} problems: {[p.equation_idx for p in problems]}")
+        if not problems:
+            _logger.error("No valid problems found after filtering. Check your --problem_names.")
+            return 1
+
+    # 将 agent-facing 问题匿名化。样本矩阵列顺序不变，只替换符号名和自然语言描述。
+    if args.anonymize:
+        problems = [anonymize_problem(problem) for problem in problems]
+        _logger.note("Anonymization enabled for benchmark tasks.")
+
+    # 获取算法的 run 函数
+    sr_fn = get_algorithm(args.algorithm)
+
+    # 逐个问题运行 SR 并评估
+    results = []
+    interrupted = False
+    for i, problem in enumerate(problems):
+        _logger.note(f"[{i+1}/{len(problems)}] {problem.equation_idx}: {problem.gt_expression.to_str()}")
+        exp_path = Path(args.save_path) / "results" / f"{problem.dataset_identifier}_{problem.equation_idx}.jsonl"
+        exp_path.parent.mkdir(parents=True, exist_ok=True)
+        if exp_path.exists():
+            lines = [json.loads(line) for line in exp_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            successful_lines = [line for line in lines if 'error' not in line]
+            if args.skip_successful and successful_lines:
+                result = successful_lines[-1]
+                results.append(result)
+                _logger.info(tag2ansi(
+                    f"Successful result already exists at {exp_path} ([red bold]{len(successful_lines)} successful records), skipping...\n"
+                    f"Last successful result:\n{log_result(result)}"
+                ))
+                continue
+            if args.skip_existing and lines:
+                result = successful_lines[-1] if successful_lines else lines[-1]
+                results.append(result)
+                _logger.info(tag2ansi(
+                    f"Result already exists at {exp_path} ([red bold]{len(lines)} records with [red bold]{len(successful_lines)} successful), skipping...\n"
+                    f"Last result:\n{log_result(result)}"
+                ))
+                continue
+
+        try:
+            result = evaluate_problem(args, problem, sr_fn, exp_path)
+            results.append(result)
+            _logger.note(f"\n{log_result(result)}")
+            with open(exp_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(result, default=str, allow_nan=True) + "\n")
+            _logger.note(f"Result saved to {exp_path}")
+        except KeyboardInterrupt:
+            _logger.warning("Evaluation interrupted by user.")
+            interrupted = True
+            break
+        except Exception as e:
+            _logger.error(f"  ERROR: {log_exception(e)}")
+            result = {
+                "equation_id": problem.equation_idx,
+                "dataset_identifier": problem.dataset_identifier,
+                "gt_expression": problem.gt_expression.to_str(),
+                "discovered_expression": None,
+                "num_train": len(problem.train_samples),
+                "num_test": len(problem.test_samples),
+                "search_time": float("nan"),
+                "id_metrics": {
+                    "mse": float("nan"), "nmse": float("nan"), "r2": float("nan"),
+                    "kdt": float("nan"), "mape": float("nan"), "acc01": float("nan"),
+                    "num_valid_points": 0
+                },
+                "ood_metrics": None,
+                "symbolic_acc": False,
+                "error": str(e),
+            }
+            results.append(result)
+            with open(exp_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(result, default=str, allow_nan=True) + "\n")
+            if args.debug: raise
+
+    # 汇总结果
+    for dataset in args.datasets:
+        conclude_results(results, [dataset], save_path=Path(args.save_path) / "summary" / f"{dataset}.json")
+    conclude_results(results, list(DATASET_SPLITS.keys()), save_path=Path(args.save_path) / "summary" / f"all.json")
+    if interrupted:
+        return 130
+    return 1 if any("error" in result for result in results) else 0
+
+
+def main(args: argparse.Namespace) -> int:
+    """Run LLM-SRBench from CLI arguments."""
+    if args.exp_name is None:
+        now = datetime.now()
+        args.exp_name = sanitize_filename(
+            f"{now:%Y%m%d}_{args.name}_{now:%H%M%S}_{gethostname()}"
+        )
+    else:
+        args.exp_name = sanitize_filename(args.exp_name)
+    if args.debug:
+        args.verbose = True
+    if args.seed == -1:
+        args.seed = int(datetime.now().timestamp() * 1000) % (2**32 - 1)
+    seed_all(args.seed)
+    save_path = Path(args.save_path) if args.save_path else Path(args.save_dir) / args.exp_name
+    save_path.mkdir(parents=True, exist_ok=True)
+    args.save_path = str(save_path)
+    command = getattr(args, "invocation", ["sr-harness", "bench"])
+    args.invocation = " ".join(map(shlex.quote, command))
+
+    setup_logging(
+        info_level="debug" if args.verbose else "info",
+        exp_name=args.exp_name,
+        save_path=save_path / "info.log",
+        force=True,
+    )
+
+    _logger.note(f"Args: {args}")
+
+    save_args(args, save_path / "args.json")
+
+    exit_code = run_benchmark(args)
+    _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.invocation}[reset]"))
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(setup_parser().parse_args()))

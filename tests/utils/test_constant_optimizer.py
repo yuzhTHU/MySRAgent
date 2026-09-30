@@ -1,7 +1,7 @@
 import numpy as np
 import nd2py as nd
 
-from sr_agent.utils.constant_optimizer import ConstantOptimizerConfig, fit_constants
+from sr_harness.utils.constant_optimizer import ConstantOptimizerConfig, fit_constants
 
 
 FAST_CONFIG = ConstantOptimizerConfig(

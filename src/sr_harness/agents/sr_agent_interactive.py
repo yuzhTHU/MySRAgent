@@ -10,15 +10,15 @@ import logging
 import numpy as np
 from pathlib import Path
 from copy import deepcopy
-from .tools import BaseTool
+from ..tools import BaseTool
 from .sr_agent import SRAgent
-from .parser import BaseParser
-from .api.llm_api import LLMAPI
-from .utils import tag2ansi, render_markdown
-from .tools.workspace_shell import Workspace
+from ..parser import BaseParser
+from ..api.llm_api import LLMAPI
+from ..utils import tag2ansi, render_markdown
+from ..tools.workspace_shell import Workspace
 from typing import Any, Callable, Dict, List, Optional
 
-_logger = logging.getLogger(f'sr_agent.{__name__}')
+_logger = logging.getLogger(f'sr_harness.{__name__}')
 
 
 class SRAgentInteractive(SRAgent):

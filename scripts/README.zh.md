@@ -1,0 +1,3 @@
+- 本目录提供开发者使用的入口脚本
+- 用户使用的入口脚本放到 SRAgent/src/sr_harness/cli 中
+- 仅供本机使用的实验性/调试性脚本放到 playground 中

@@ -5,8 +5,8 @@
 
 import pytest
 from dotenv import load_dotenv
-from sr_agent.parser import TextParser
-from sr_agent.tools import BaseTool, LLMTool
+from sr_harness.parser import TextParser
+from sr_harness.tools import BaseTool, LLMTool
 
 # 加载环境变量
 load_dotenv()

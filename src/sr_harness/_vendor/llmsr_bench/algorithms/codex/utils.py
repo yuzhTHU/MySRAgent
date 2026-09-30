@@ -4,7 +4,7 @@ import numpy as np
 from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone
-from sr_agent.tools import ToolCallResult
+from sr_harness.tools import ToolCallResult
 
 
 def json_default(value: Any) -> Any:

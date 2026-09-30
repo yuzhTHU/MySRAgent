@@ -19,7 +19,7 @@ DEFAULT_LOG_DIR = Path.cwd() / "logs"
 
 
 def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
-    app = FastAPI(title="SR Agent Search Viewer")
+    app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

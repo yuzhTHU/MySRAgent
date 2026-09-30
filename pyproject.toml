@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sr-agent"
+name = "sr-harness"
 version = "1.7.1"
-description = "Symbolic Regression Agent powered by LLM"
+description = "SRHarness: a harness for agentic symbolic regression"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
@@ -32,10 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sr-agent-download-models = "sr_agent.cli.download_models:main"
-sr-agent-upload-models = "sr_agent.cli.upload_models:main"
-sr-agent-web = "sr_agent.cli.web:main"
-sr-agent-tool = "sr_agent.cli.tool:main"
+sr-harness = "sr_harness.cli:entrypoint"
 
 [project.optional-dependencies]
 nn = [
@@ -58,15 +55,15 @@ web = [
     "uvicorn>=0.30.0",
 ]
 all = [
-    "sr-agent[nn,tools,dev,web]",
+    "sr-harness[nn,tools,dev,web]",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["sr_agent*"]
+include = ["sr_harness*"]
 
 [tool.setuptools.package-data]
-sr_agent = [
+sr_harness = [
     "*.md",
     "*.yaml",
     "**/*.md",

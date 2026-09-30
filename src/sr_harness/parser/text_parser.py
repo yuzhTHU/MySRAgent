@@ -10,7 +10,7 @@ from .base_parser import BaseParser
 from ..api.core import ToolCall
 from ..tools import BaseTool
 
-_logger = getLogger(f'sr_agent.{__name__}')
+_logger = getLogger(f'sr_harness.{__name__}')
 
 
 @BaseParser.register('text')

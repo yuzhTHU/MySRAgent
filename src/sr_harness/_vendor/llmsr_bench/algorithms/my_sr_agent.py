@@ -10,13 +10,12 @@ import nd2py as nd
 from pathlib import Path
 from logging import getLogger
 from datetime import datetime
-from typing import TYPE_CHECKING
-from sr_agent import SRAgent
-from sr_agent.tools import BaseTool
-from sr_agent.utils import format_pareto_front, log_exception, tag2ansi
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from sr_harness import SRAgent
+from sr_harness.tools import BaseTool
+from sr_harness.utils import format_pareto_front, log_exception, tag2ansi
+from ..core import SEDTask, SRResult
 
-_logger = getLogger(f'sr_agent.{__name__}')
+_logger = getLogger(f'sr_harness.{__name__}')
 
 
 def update_parser(parser):

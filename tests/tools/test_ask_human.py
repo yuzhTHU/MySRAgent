@@ -1,7 +1,7 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 """AskHumanTool 的测试。"""
 
-from sr_agent.tools.ask_human import AskHumanTool
+from sr_harness.tools.ask_human import AskHumanTool
 
 
 class TestAskHumanTool:

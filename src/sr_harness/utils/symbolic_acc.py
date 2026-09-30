@@ -16,7 +16,7 @@ from itertools import combinations, product
 from typing import Any, Dict, Tuple, Sequence
 
 __all__ = [ "get_symbolic_acc" ]
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 def llm_judge_equivalence(
@@ -71,9 +71,10 @@ def llm_judge_equivalence(
             # Reasoning models may consume most of a 1k budget before emitting
             # the required JSON, yielding an otherwise successful empty answer.
             response = api(messages, n=1, max_tokens=4096, temperature=0.0)
-            for content, _, _ in response:
+            yielded_usage = None
+            for content, _, yielded_usage in response:
                 pass
-            merge_usage(response.usage)
+            merge_usage(getattr(response, "usage", yielded_usage))
             usage_merged = True
             _logger.debug(f"Response: {content!r}")
             parsed = parse_json_with_template(content, {'reason': str, 'equivalent': bool})

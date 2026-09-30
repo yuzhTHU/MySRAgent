@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sr_agent.api.core import ToolCall
-from sr_agent.api.llm_api import LLMAPI
-from sr_agent.api.lmstudio_api import LMStudioAPI
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.api.core import ToolCall
+from sr_harness.api.llm_api import LLMAPI
+from sr_harness.api.lmstudio_api import LMStudioAPI
+from sr_harness.tools import BaseTool, ToolMetadata
 
 
 class DemoTool(BaseTool):
@@ -58,7 +58,7 @@ def _consume(result):
 def test_lmstudio_factory_and_native_tool_call(monkeypatch):
     monkeypatch.setenv("LMSTUDIO_ENDPOINT", "http://lmstudio.test:1234/api/v1/chat")
     monkeypatch.setenv("LMSTUDIO_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.lmstudio_api.requests.Session", _FakeSession)
+    monkeypatch.setattr("sr_harness.api.lmstudio_api.requests.Session", _FakeSession)
     _FakeSession.instances = []
     _FakeSession.body = {
         "model": "qwen_qwen3-4b-instruct-2507",
@@ -106,7 +106,7 @@ def test_lmstudio_factory_and_native_tool_call(monkeypatch):
 def test_lmstudio_plain_chat_and_reasoning_usage(monkeypatch):
     monkeypatch.setenv("LMSTUDIO_ENDPOINT", "http://lmstudio.test:1234/v1/chat/completions")
     monkeypatch.setenv("LMSTUDIO_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.lmstudio_api.requests.Session", _FakeSession)
+    monkeypatch.setattr("sr_harness.api.lmstudio_api.requests.Session", _FakeSession)
     _FakeSession.instances = []
     _FakeSession.body = {
         "choices": [{"message": {"role": "assistant", "content": "LMSTUDIO_OK"}}],

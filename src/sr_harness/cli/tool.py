@@ -1,14 +1,14 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Command-line gateway for sr-agent tools."""
+"""Command-line gateway for SRHarness tools."""
 from __future__ import annotations
 
 import json
 import argparse
 import numpy as np
-import sr_agent.tools
+import sr_harness.tools
 from pathlib import Path
 from typing import Any
-from sr_agent.tools import BaseTool
+from sr_harness.tools import BaseTool
 
 
 def load_json_text(text: str) -> dict[str, Any]:
@@ -73,12 +73,17 @@ def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
     return {"data": data, "target": target_name}
 
 
-def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run sr-agent tools from the command line.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    if parser is None:
+        parser = argparse.ArgumentParser(
+            prog="sr-harness tool",
+            description="Run SRHarness tools from the command line.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+    else:
+        parser.description = "Run SRHarness tools from the command line."
+        parser.formatter_class = argparse.ArgumentDefaultsHelpFormatter
+    subparsers = parser.add_subparsers(dest="tool_command", required=True)
 
     list_parser = subparsers.add_parser("list", help="List registered tool names.")
     list_parser.add_argument("--json", action="store_true", help="Output tool names as JSON.")
@@ -99,31 +104,29 @@ def tool_class(name: str) -> type[BaseTool]:
     return BaseTool.create(name, create_instance=False)
 
 
-def main(argv: list[str] | argparse.Namespace | None = None) -> None:
-    parser = build_argparser()
-    args = argv if isinstance(argv, argparse.Namespace) else parser.parse_args(argv)
-
-    if args.command == "list":
+def main(args: argparse.Namespace) -> int:
+    if args.tool_command == "list":
         if args.json:
             print(json.dumps(list(BaseTool.REGISTRY_DICT), indent=2, ensure_ascii=False))
         else:
             for idx, (name, tool_cls) in enumerate(BaseTool.REGISTRY_DICT.items()):
                 description = (tool_cls.metadata.description or "").strip()
                 print(f"[{idx:02d}] {name}: {description}")
-    elif args.command == "schema":
+    elif args.tool_command == "schema":
         schema = tool_class(args.tool).to_dict() if args.tool else BaseTool.to_tool_list()
         print(json.dumps(schema, indent=2, ensure_ascii=False))
-    elif args.command == "call":
+    elif args.tool_command == "call":
         tool_cls = tool_class(args.tool)
         context = load_context(args.context, target=args.target)
         params = load_params(args.params, args.params_file)
         result = tool_cls(**context)(**params)
         print(result.result_str)
         if not result.ok:
-            raise SystemExit(1)
+            return 1
     else:
-        parser.error(f"Unknown command: {args.command}")
+        raise ValueError(f"Unknown tool command: {args.tool_command}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(setup_parser().parse_args()))

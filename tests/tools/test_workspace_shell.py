@@ -12,7 +12,7 @@
 import tempfile
 from pathlib import Path
 
-from sr_agent.tools.workspace_shell import Workspace, WorkspaceShellTool
+from sr_harness.tools.workspace_shell import Workspace, WorkspaceShellTool
 
 
 class TestWorkspace:

@@ -29,7 +29,7 @@ and one or more SandboxFusion ``/run_code`` endpoints must be available.
 ## 测试 SandBox
 # curl 'http://127.0.0.1:8080/run_code' -H 'Content-Type: application/json' --data-raw '{"code": "print(\"Hello, world!\")", "language": "python"}'
 
-## 启动多个 SandBox 并传给 bench_sr_agent.py
+## 启动多个 SandBox 并传给 sr-harness bench
 # cd ./third-party/SandboxFusion
 # conda activate sandbox-runtime
 # make run-online HOST=127.0.0.1 PORT=9010 &
@@ -37,7 +37,7 @@ and one or more SandboxFusion ``/run_code`` endpoints must be available.
 # make run-online HOST=127.0.0.1 PORT=9070 &
 # make run-online HOST=127.0.0.1 PORT=9080 &
 # cd ../../
-# python bench_sr_agent.py \
+# sr-harness bench \
 # --algorithm sr_scientist \
 # --datasets lsrtransform \
 # --llm_provider openrouter \
@@ -80,9 +80,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from ..core import SEDTask, SRResult
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 _ROOT = Path(__file__).resolve().parents[5]
 _SANDBOX_FUSION_ROOT = _ROOT / "third-party" / "SandboxFusion"
 _SR_SCIENTIST_INFERENCE = _ROOT / "third-party" / "sr_scientist" / "inference"

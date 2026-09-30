@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.power_law_fit import PowerLawFitTool
+from sr_harness.tools.power_law_fit import PowerLawFitTool
 
 
 def test_recovers_multivariate_power_law():

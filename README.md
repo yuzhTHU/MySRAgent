@@ -4,7 +4,7 @@
 
 SRHarness is a domain-specific runtime for **agentic symbolic regression**. It lets a large language model inspect numerical observations, choose scientific operations, evaluate competing hypotheses, and refine a symbolic expression over a long search trajectory.
 
-This repository contains the research code for **“SRHarness: A Harness for Agentic Symbolic Regression.”** The Python package and some historical entry points retain the name `sr_agent` / `SRAgent`.
+This repository contains the research code for **“SRHarness: A Harness for Agentic Symbolic Regression.”** The Python package is `sr_harness`, and its primary agent class remains `SRAgent`.
 
 > **Research-code status:** the project is under active development. Experiment-scale runs can make many paid LLM requests and may invoke external solvers. Start with a small `R-C-L-K` configuration and inspect the generated logs before launching a benchmark campaign.
 
@@ -42,8 +42,8 @@ These are symbolic-accuracy results reported in the manuscript. See the paper fo
 The following setup mirrors [`install.sh`](install.sh) while using HTTPS clone URLs:
 
 ```bash
-git clone https://github.com/yuzhTHU/MySRAgent.git SRAgent
-cd SRAgent
+git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
+cd SRHarness
 
 conda create -p ./venv python=3.12 -y
 conda activate ./venv
@@ -88,7 +88,7 @@ Run a small synthetic problem:
 ```bash
 conda activate ./venv
 
-python run_sr_agent.py \
+sr-harness run \
   --equation "y = sin(x1 - x2)" \
   --x-low -10 \
   --x-high 10 \
@@ -113,7 +113,7 @@ The nominal number of model responses is approximately `R × C × L × K`, altho
 
 ```python
 import numpy as np
-from sr_agent import SRAgent
+from sr_harness import SRAgent
 
 x1 = np.linspace(-3.0, 3.0, 100)
 x2 = np.linspace(3.0, -3.0, 100)
@@ -149,7 +149,7 @@ git clone https://huggingface.co/datasets/nnheui/llm-srbench \
 Run one LSR-Transform problem before scaling up:
 
 ```bash
-python bench_sr_agent.py \
+sr-harness bench \
   --algorithm my_sr_agent \
   --datasets lsrtransform \
   --problem-names II.6.15b_1_0 \
@@ -162,7 +162,7 @@ python bench_sr_agent.py \
 Add `--anonymize` to replace variable names and scientific descriptions with generic input/output labels while leaving the numerical observations unchanged:
 
 ```bash
-python bench_sr_agent.py \
+sr-harness bench \
   --algorithm my_sr_agent \
   --datasets lsrtransform \
   --problem-names II.6.15b_1_0 \
@@ -173,7 +173,7 @@ python bench_sr_agent.py \
   -R 1 -C 1 -L 3 -K 1
 ```
 
-The benchmark entry point also contains adapters for conventional and LLM-based baselines; `python bench_sr_agent.py --help` lists its general options, while each adapter defines its method-specific flags. Paper-scale reproduction requires the exact model, toolset, data split, token limit, seed, and `R-C-L-K` configuration reported with each experiment; the smoke commands above intentionally use a much smaller budget.
+The benchmark entry point also contains adapters for conventional and LLM-based baselines; `sr-harness bench --help` lists its general options, while each adapter defines its method-specific flags. Paper-scale reproduction requires the exact model, toolset, data split, token limit, seed, and `R-C-L-K` configuration reported with each experiment; the smoke commands above intentionally use a much smaller budget.
 
 ## Logs and Web Visualization
 
@@ -190,7 +190,7 @@ Install and launch the web viewer:
 
 ```bash
 pip install -e ".[web]"
-sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
+sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 ```
 
 Then open <http://127.0.0.1:8000/>. The server recursively discovers runs containing both `manifest.json` and `records.jsonl`.
@@ -201,7 +201,7 @@ Then open <http://127.0.0.1:8000/>. The server recursively discovers runs contai
 
 - Benchmark test observations are not exposed during search or candidate selection.
 - The agent can reserve part of the visible training data for random or OOD-style validation using `--validation-fraction` and `--split-by`.
-- Numerical predictions are evaluated through the shared benchmark pipeline. Symbolic equivalence is implemented in [`src/sr_agent/utils/symbolic_acc.py`](src/sr_agent/utils/symbolic_acc.py).
+- Numerical predictions are evaluated through the shared benchmark pipeline. Symbolic equivalence is implemented in [`src/sr_harness/utils/symbolic_acc.py`](src/sr_harness/utils/symbolic_acc.py).
 - Logs preserve prompts, model responses, tool calls, candidate provenance, token usage, and recorded cost so that a run can be audited after completion.
 - API behavior, model aliases, prices, and stochastic outputs can change over time. Record the exact provider model identifier, source revision, arguments, and environment for serious comparisons.
 
@@ -211,14 +211,14 @@ New scientific actions inherit `BaseTool`, declare stable metadata, and return a
 
 See:
 
-- [`src/sr_agent/README.md`](src/sr_agent/README.md) for the agent loop and internal architecture;
-- [`src/sr_agent/tools/README.md`](src/sr_agent/tools/README.md) for the action API and custom-tool guide;
+- [`src/sr_harness/README.md`](src/sr_harness/README.md) for the agent loop and internal architecture;
+- [`src/sr_harness/tools/README.md`](src/sr_harness/tools/README.md) for the action API and custom-tool guide;
 - [`tests/README.md`](tests/README.md) for testing conventions.
 
 ## Project Layout
 
 ```text
-├── src/sr_agent/        # Core package
+├── src/sr_harness/        # Core package
 │   ├── api/             # LLM provider adapters
 │   ├── parser/          # Native/text/JSON/XML tool-call parsing
 │   ├── tools/           # Scientific actions and shared evaluation contract
@@ -236,7 +236,7 @@ See:
 
 Repository conventions:
 
-- Keep stable entry points such as `run_sr_agent.py` and `bench_sr_agent.py` at the repository root.
+- Add user-facing commands as `sr-harness` subcommands under `src/sr_harness/cli/`.
 - Put experiment and analysis utilities under `scripts/`.
 - Name analysis notebooks as `YYMMDD_description.ipynb` and avoid committing large outputs.
 - Treat `data/`, `logs/`, and `playground/` as local working directories.

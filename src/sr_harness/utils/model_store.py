@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from .log_exception import log_exception
 
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 __all__ = ["get_default", "download_model", "upload_model"]
 DEFAULT_GITHUB_REPO = "yuzhTHU/MySRAgent"
 DEFAULT_GITHUB_RELEASE_TAG = "sr-agent-models"
@@ -117,7 +117,7 @@ def get_upload_url(repo: str, release_tag: str, name: str, token: str) -> str:
         url = f"https://api.github.com/repos/{repo}/releases"
         data = {
             "tag_name": release_tag, "name": release_tag,
-            "body": "Model checkpoints used by sr-agent.",
+            "body": "Model checkpoints used by SRHarness.",
             "draft": False, "prerelease": False,
         }
         with requests.post(url, headers=headers, json=data, timeout=60) as response:

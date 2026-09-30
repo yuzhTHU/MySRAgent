@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from .llm_api import LLMAPI
 from ..utils import log_exception
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 class LMStudioAPI(LLMAPI):

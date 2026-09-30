@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
-_logger = logging.getLogger(f'sr_agent.{__name__}')
+_logger = logging.getLogger(f'sr_harness.{__name__}')
 
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 120
@@ -183,7 +183,7 @@ class PySRTool(BaseTool):
         # prefix may be system-owned, so use a writable per-user project.
         if "PYTHON_JULIAPKG_PROJECT" not in os.environ:
             cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-            julia_project = cache_root / "sr_agent" / "julia_env"
+            julia_project = cache_root / "sr_harness" / "julia_env"
             julia_project.mkdir(parents=True, exist_ok=True)
             os.environ["PYTHON_JULIAPKG_PROJECT"] = str(julia_project)
         os.environ['PYTHON_JULIACALL_HANDLE_SIGNALS'] = 'yes'

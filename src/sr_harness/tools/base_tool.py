@@ -22,7 +22,7 @@ from ..utils import FactoryMixin, log_exception
 if TYPE_CHECKING:
     from ..skills import SkillManager
 
-_logger = getLogger(f'sr_agent.{__name__}')
+_logger = getLogger(f'sr_harness.{__name__}')
 
 _ANSI_ESCAPE_RE = re.compile(
     r"(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[@-_])"

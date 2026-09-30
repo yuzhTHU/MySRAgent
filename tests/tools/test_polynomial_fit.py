@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sr_agent.tools.polynomial_fit import PolynomialFitTool
+from sr_harness.tools.polynomial_fit import PolynomialFitTool
 
 
 def make_tool(x: dict[str, np.ndarray], y: np.ndarray) -> PolynomialFitTool:

@@ -40,8 +40,8 @@ SRHarness 围绕三项机制组织智能体方程发现过程：
 以下流程与 [`install.sh`](install.sh) 一致，但使用 HTTPS 地址：
 
 ```bash
-git clone https://github.com/yuzhTHU/MySRAgent.git SRAgent
-cd SRAgent
+git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
+cd SRHarness
 
 conda create -p ./venv python=3.12 -y
 conda activate ./venv
@@ -86,7 +86,7 @@ OPENROUTER_API_KEY="sk-or-v1-..."
 ```bash
 conda activate ./venv
 
-python run_sr_agent.py \
+sr-harness run \
   --equation "y = sin(x1 - x2)" \
   --x-low -10 \
   --x-high 10 \
@@ -111,7 +111,7 @@ python run_sr_agent.py \
 
 ```python
 import numpy as np
-from sr_agent import SRAgent
+from sr_harness import SRAgent
 
 x1 = np.linspace(-3.0, 3.0, 100)
 x2 = np.linspace(3.0, -3.0, 100)
@@ -147,7 +147,7 @@ git clone https://huggingface.co/datasets/nnheui/llm-srbench \
 建议先运行一个 LSR-Transform 问题：
 
 ```bash
-python bench_sr_agent.py \
+sr-harness bench \
   --algorithm my_sr_agent \
   --datasets lsrtransform \
   --problem-names II.6.15b_1_0 \
@@ -160,7 +160,7 @@ python bench_sr_agent.py \
 添加 `--anonymize` 后，变量名和科学描述会被替换为通用输入/输出标签，数值观测保持不变：
 
 ```bash
-python bench_sr_agent.py \
+sr-harness bench \
   --algorithm my_sr_agent \
   --datasets lsrtransform \
   --problem-names II.6.15b_1_0 \
@@ -171,7 +171,7 @@ python bench_sr_agent.py \
   -R 1 -C 1 -L 3 -K 1
 ```
 
-Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`python bench_sr_agent.py --help` 会列出通用参数，各适配器则定义相应方法的专用参数。复现论文规模的实验需要使用对应实验记录中的准确模型、工具集、数据划分、token 上限、随机种子和 `R-C-L-K` 设置；以上 smoke test 有意使用较小预算。
+Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harness bench --help` 会列出通用参数，各适配器则定义相应方法的专用参数。复现论文规模的实验需要使用对应实验记录中的准确模型、工具集、数据划分、token 上限、随机种子和 `R-C-L-K` 设置；以上 smoke test 有意使用较小预算。
 
 ## 日志与 Web 可视化
 
@@ -188,7 +188,7 @@ Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`python 
 
 ```bash
 pip install -e ".[web]"
-sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
+sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 ```
 
 随后打开 <http://127.0.0.1:8000/>。服务会递归发现同时包含 `manifest.json` 与 `records.jsonl` 的运行目录。
@@ -199,7 +199,7 @@ sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
 
 - 搜索和候选选择期间不会向 Agent 暴露 Benchmark 测试数据。
 - 可通过 `--validation-fraction` 和 `--split-by` 从可见训练数据中划分随机或 OOD 风格的验证集。
-- 数值预测使用统一 Benchmark pipeline 评估；符号等价评估实现在 [`src/sr_agent/utils/symbolic_acc.py`](src/sr_agent/utils/symbolic_acc.py)。
+- 数值预测使用统一 Benchmark pipeline 评估；符号等价评估实现在 [`src/sr_harness/utils/symbolic_acc.py`](src/sr_harness/utils/symbolic_acc.py)。
 - 日志保留 Prompt、模型响应、工具调用、候选来源、token 用量和记录到的费用，便于完成后审计运行过程。
 - API 行为、模型别名、价格和随机输出可能随时间变化。严肃比较时应记录准确的 provider/model 标识、代码版本、参数和运行环境。
 
@@ -209,14 +209,14 @@ sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
 
 进一步说明见：
 
-- [`src/sr_agent/README.md`](src/sr_agent/README.md)：Agent 循环与内部架构；
-- [`src/sr_agent/tools/README.md`](src/sr_agent/tools/README.md)：科学动作 API 与自定义工具指南；
+- [`src/sr_harness/README.md`](src/sr_harness/README.md)：Agent 循环与内部架构；
+- [`src/sr_harness/tools/README.md`](src/sr_harness/tools/README.md)：科学动作 API 与自定义工具指南；
 - [`tests/README.md`](tests/README.md)：测试约定。
 
 ## 项目结构
 
 ```text
-├── src/sr_agent/        # 核心 Python 包
+├── src/sr_harness/        # 核心 Python 包
 │   ├── api/             # LLM 服务适配器
 │   ├── parser/          # 原生/text/JSON/XML 工具调用解析
 │   ├── tools/           # 科学动作及统一评估契约
@@ -234,7 +234,7 @@ sr-agent-web --log-dir logs --host 127.0.0.1 --port 8000
 
 目录约定：
 
-- `run_sr_agent.py`、`bench_sr_agent.py` 等稳定入口保留在仓库根目录。
+- 面向用户的命令统一作为 `sr-harness` 子命令放在 `src/sr_harness/cli/` 下。
 - 实验与分析工具放在 `scripts/`。
 - 分析 notebook 使用 `YYMMDD_description.ipynb` 命名，并避免提交大体积输出。
 - `data/`、`logs/` 和 `playground/` 作为本地工作目录使用。

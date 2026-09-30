@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Tuple
 from .base_parser import BaseParser
 from ..tools import BaseTool
 
-_logger = getLogger(f'sr_agent.{__name__}')
+_logger = getLogger(f'sr_harness.{__name__}')
 
 
 @BaseParser.register('xml')

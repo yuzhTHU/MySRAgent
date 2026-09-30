@@ -1,4 +1,4 @@
-from sr_agent.utils import parse_json_with_template
+from sr_harness.utils import parse_json_with_template
 
 
 def test_parse_json_with_template_extracts_fenced_json():

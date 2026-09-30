@@ -3,7 +3,7 @@
 Clone Phoinikas03/FunctionEvolve into baseline/repo/FunctionEvolve and install
 its requirements in the selected Python environment. Example:
 
-    python bench_sr_agent.py --algorithm functionevolve --datasets bio_pop_growth \
+    sr-harness bench --algorithm functionevolve --datasets bio_pop_growth \
         --problem_names BPG5 --llm_model qwen/qwen3.6-27b
 
 The default search uses 30 steps and 20 seeds. A small integration smoke test can
@@ -24,7 +24,6 @@ import json
 import os
 from pathlib import Path
 import re
-import re
 import signal
 import subprocess
 import sys
@@ -34,7 +33,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+    from ..core import SEDTask, SRResult
 
 _ROOT = Path(__file__).resolve().parents[5]
 _DEFAULTS = {
@@ -74,7 +73,7 @@ def _real_pow(base, exponent):
 
 def _build_result(result: dict, symbols: list[str]):
     import sympy as sp
-    from sr_agent._vendor.llmsr_bench.core import SRResult
+    from ..core import SRResult
 
     if not result.get('expression') or not np.isfinite(result.get('train_nmse', np.inf)):
         raise RuntimeError('FunctionEvolve returned no finite fitted candidate.')
@@ -158,8 +157,13 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     (work / 'request.json').write_text(json.dumps(dict(config=config, name=task.name,
         symbols=list(task.symbols), descriptions=list(task.symbol_descs),
         properties=list(task.symbol_properties)), indent=2), encoding='utf-8')
-    cmd = [str(getattr(args, 'functionevolve_python', sys.executable)), str(Path(__file__).resolve()),
-           '--worker', str(repo), str(work)]
+    worker_code = (
+        "import runpy,sys; from pathlib import Path; "
+        "ns=runpy.run_path(sys.argv[1]); "
+        "ns['_worker'](Path(sys.argv[2]), Path(sys.argv[3]))"
+    )
+    cmd = [str(getattr(args, 'functionevolve_python', sys.executable)), '-c', worker_code,
+           str(Path(__file__).resolve()), str(repo), str(work)]
     log_path = work / 'worker.log'
     with log_path.open('w', encoding='utf-8') as log:
         process = subprocess.Popen(cmd, cwd=repo, env=env, stdout=log,
@@ -182,7 +186,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
 
 
 def _worker(repo: Path, work: Path):
-    # This script runs outside sr_agent imports; upstream owns the generic src namespace.
+    # This script runs outside sr_harness imports; upstream owns the generic src namespace.
     sys.path.insert(0, str(repo))
     from src.dataset import SRDataset
     from src.evaluator import Evaluator
@@ -281,9 +285,3 @@ def _worker(repo: Path, work: Path):
         if search is not None:
             search.close_log()
         usage.close()
-
-
-if __name__ == '__main__':
-    if len(sys.argv) != 4 or sys.argv[1] != '--worker':
-        raise SystemExit('Invoke this algorithm through bench_sr_agent.py --algorithm functionevolve')
-    _worker(Path(sys.argv[2]), Path(sys.argv[3]))

@@ -1,4 +1,4 @@
-# SRAgent 框架说明
+# SRHarness 框架说明
 
 ## SRAgent 整体架构
 
@@ -64,8 +64,10 @@ SRAgent 持有两个核心组件：
 ## 目录结构
 
 ```
-src/sr_agent/
-├── sr_agent.py      # SRAgent 主类，包含 fit() 主循环和各个步骤方法
+src/sr_harness/
+├── agents/
+│   ├── sr_agent.py              # SRAgent 主类，包含 fit() 主循环和各个步骤方法
+│   └── sr_agent_interactive.py  # 交互式 SRAgent
 ├── api/             # LLM API 封装
 │   ├── core.py      # LLMResult、ToolCall 等核心数据结构
 │   ├── llm_api.py   # LLMAPI 基类和工厂方法
@@ -77,7 +79,5 @@ src/sr_agent/
 │   ├── base_tool.py # BaseTool 基类
 │   └── ...          # 具体工具实现
 ├── utils/           # 工具函数
-├── prompts/         # Prompt 模板（暂时用不到）
-├── buffer/          # 消息管理（暂时用不到）
 └── skills/          # 技能文档（暂时用不到）
 ```

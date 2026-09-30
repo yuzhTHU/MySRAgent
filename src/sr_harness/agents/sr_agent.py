@@ -14,16 +14,16 @@ from itertools import islice
 from collections import defaultdict
 from joblib import Parallel, delayed
 from typing import Any, Dict, List, Optional, Tuple
-from .api.llm_api import LLMAPI
-from .parser import BaseParser
-from .api.core import ToolCall
-from .skills import SkillManager
-from .tools import BaseTool, ToolCallResult
-from .utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
-from .utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
-from .web import SearchRecordWriter
+from ..api.llm_api import LLMAPI
+from ..parser import BaseParser
+from ..api.core import ToolCall
+from ..skills import SkillManager
+from ..tools import BaseTool, ToolCallResult
+from ..utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
+from ..utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
+from ..web import SearchRecordWriter
 
-_logger = logging.getLogger(f'sr_agent.{__name__}')
+_logger = logging.getLogger(f'sr_harness.{__name__}')
 
 class FitEarlyStop(Exception):
     pass

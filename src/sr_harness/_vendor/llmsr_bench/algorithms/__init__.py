@@ -3,23 +3,20 @@
 """
 
 import importlib
-import numpy as np
 from pathlib import Path
-from typing import Callable, Dict
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
 
 # 算法目录
 ALGORITHMS_DIR = Path(__file__).parent
 
 def get_algorithm(name: str):
     """获取指定算法的 run 函数"""
-    module = importlib.import_module(f"sr_agent._vendor.llmsr_bench.algorithms.{name}")
+    module = importlib.import_module(f".{name}", __name__)
     return getattr(module, "run")
 
 
 def get_update_parser(name: str):
     """获取指定算法的 update_parser 函数"""
-    module = importlib.import_module(f"sr_agent._vendor.llmsr_bench.algorithms.{name}")
+    module = importlib.import_module(f".{name}", __name__)
     return getattr(module, "update_parser", None)
 
 

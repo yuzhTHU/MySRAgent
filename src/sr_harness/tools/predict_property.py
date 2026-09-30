@@ -6,9 +6,9 @@
 为符号回归搜索提供先验知识指导。
 
 可通过下述指令将模型上传到 Github Release（需要设置 GITHUB_TOKEN 环境变量）
-    python -m sr_agent.cli.upload_models --checkpoint path/to/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
+    sr-harness upload-models --checkpoint path/to/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 可通过下述指令从 Github Release 下载模型到本地（或者在首次调用时自动下载）
-    python -m sr_agent.cli.download_models --checkpoint path/to/save/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
+    sr-harness download-models --checkpoint path/to/save/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from typing import Dict, Any, List, Literal
 from ..utils import download_model, get_default, tag2ansi
 from .base_tool import BaseTool, ToolMetadata, ToolRunAbort, is_numeric_array
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _MODEL_CACHE_DIR = _PROJECT_ROOT / ".cache" / "nn_tools"
 _MONO_LABELS = {0: "non-monotonic", 1: "increasing", 2: "decreasing", 3: "constant"}

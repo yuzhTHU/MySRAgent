@@ -6,9 +6,8 @@ from __future__ import annotations
 import argparse
 import numpy as np
 import nd2py as nd
-from typing import TYPE_CHECKING
-from sr_agent.tools import PolynomialFitTool
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from sr_harness.tools import PolynomialFitTool
+from ..core import SEDTask, SRResult
 
 
 def update_parser(parser):

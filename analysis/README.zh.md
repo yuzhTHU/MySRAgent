@@ -1,0 +1,3 @@
+- 本目录用于存储那些分析运行结果的 jupyter notebook 脚本
+- 脚本以 `YYMMDD-{NAME}.ipynb` 格式命名
+- 脚本生成的图片或日志保存到 logs/analysis/{NAME}/ 中

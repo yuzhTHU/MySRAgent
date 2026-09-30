@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from .llm_api import LLMAPI
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 class GeminiAPI(LLMAPI):

@@ -6,9 +6,9 @@ import subprocess
 import numpy as np
 import pytest
 
-from sr_agent._vendor.llmsr_bench.algorithms import get_algorithm
-from sr_agent._vendor.llmsr_bench.algorithms import functionevolve as fe
-from sr_agent._vendor.llmsr_bench.core import SEDTask
+from sr_harness._vendor.llmsr_bench.algorithms import get_algorithm
+from sr_harness._vendor.llmsr_bench.algorithms import functionevolve as fe
+from sr_harness._vendor.llmsr_bench.core import SEDTask
 
 
 def test_result_restores_symbols_and_predicts_unseen_points():

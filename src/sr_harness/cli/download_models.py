@@ -1,19 +1,23 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Download sr-agent model checkpoints."""
+"""Download SRHarness model checkpoints."""
 from __future__ import annotations
 import argparse
 import dotenv
-from sr_agent.utils import tag2ansi, download_model, get_default
+from sr_harness.utils import tag2ansi, download_model, get_default
 
 dotenv.load_dotenv()
 
 
-def build_common_parser(description: str) -> argparse.ArgumentParser:
+def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
     default_repo = get_default("repo")
     default_release_tag = get_default("release_tag")
     default_token = get_default("token")
 
-    parser = argparse.ArgumentParser(description=description)
+    description = "Download a model checkpoint from the SRHarness model store."
+    if parser is None:
+        parser = argparse.ArgumentParser(prog="sr-harness download-models", description=description)
+    else:
+        parser.description = description
     parser.add_argument("--checkpoint", required=True, help="Local checkpoint path.")
     parser.add_argument("--name", required=True, help="Remote model name, e.g. property-scratch.")
     parser.add_argument("--repo", default=default_repo, help=f"GitHub repo in owner/name form.")
@@ -22,9 +26,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    parser = build_common_parser("Download a model checkpoint from the sr-agent model store.")
-    args = parser.parse_args()
+def main(args: argparse.Namespace) -> int:
     save_path = download_model(
         name=args.name,
         checkpoint=args.checkpoint,
@@ -33,7 +35,8 @@ def main() -> None:
         token=args.token,
     )
     print(tag2ansi(f"Downloaded [bold green]{args.name}[reset] to [bold blue]{save_path}[reset]"))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(setup_parser().parse_args()))

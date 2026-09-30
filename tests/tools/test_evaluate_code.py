@@ -4,8 +4,8 @@
 import numpy as np
 import pytest
 
-from sr_agent.tools.base_tool import BaseTool
-from sr_agent.tools.evaluate_code import EvaluateCodeTool
+from sr_harness.tools.base_tool import BaseTool
+from sr_harness.tools.evaluate_code import EvaluateCodeTool
 
 
 class TestEvaluateCodeTool:

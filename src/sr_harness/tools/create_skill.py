@@ -12,7 +12,7 @@ from logging import getLogger
 from ..utils import bounded_value, parse_json_with_template
 from .base_tool import BaseTool, ToolMetadata
 
-_logger = getLogger(f"sr_agent.{__name__}")
+_logger = getLogger(f"sr_harness.{__name__}")
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -36,7 +36,7 @@ _RESPONSE_TEMPLATE = {
 }
 
 _DATA_ANALYSIS_DEMO = '''import numpy as np
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.tools import BaseTool, ToolMetadata
 
 class VariableRangeAnalysis(BaseTool):
     metadata = ToolMetadata(name="variable_range_analysis", description="Summarize one variable.")
@@ -47,7 +47,7 @@ class VariableRangeAnalysis(BaseTool):
         return {"variable": variable, "minimum": float(finite.min()), "maximum": float(finite.max())}
 '''
 
-_FORMULA_PROPOSER_DEMO = '''from sr_agent.tools import BaseTool, ToolMetadata
+_FORMULA_PROPOSER_DEMO = '''from sr_harness.tools import BaseTool, ToolMetadata
 
 class SquareFormulaProposer(BaseTool):
     metadata = ToolMetadata(name="square_formula_proposer", description="Propose a squared formula.")
@@ -68,7 +68,7 @@ _AUTHORING_PROMPT = '''Create a reusable Agent Skill from the conversation buffe
 First decide skill_type as exactly one of instructions, data_analysis, or formula_proposer.
 Use the selected type guidance and its demo. Ask only questions that cannot be resolved from context; on later internal rounds resolve them using your best supported judgment.
 Do not preserve one-off answers, secrets, or unsupported guesses.
-Custom tool code must import BaseTool and ToolMetadata from sr_agent.tools, define exactly one BaseTool subclass with unique metadata.name, avoid @BaseTool.register(...), and return a dict.
+Custom tool code must import BaseTool and ToolMetadata from sr_harness.tools, define exactly one BaseTool subclass with unique metadata.name, avoid @BaseTool.register(...), and return a dict.
 
 Return exactly one JSON object:
 {"status":"needs_input" or "ready", "skill_type":"instructions" or "data_analysis" or "formula_proposer", "questions":["question"], "draft":{"name":"lowercase-hyphenated", "description":"trigger description", "content":"Markdown without frontmatter", "tool_code":"Python source or empty", "readonly":false}}

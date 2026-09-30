@@ -3,7 +3,7 @@
 
 import pytest
 from dotenv import load_dotenv
-from sr_agent.tools.call_llm import LLMTool
+from sr_harness.tools.call_llm import LLMTool
 
 # 加载环境变量
 load_dotenv()
@@ -31,7 +31,7 @@ class TestLLMTool:
                 assert n == 1
                 return FakeResult()
 
-        from sr_agent.api import LLMAPI
+        from sr_harness.api import LLMAPI
 
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: FakeAPI())
@@ -63,7 +63,7 @@ class TestLLMTool:
             def __call__(self, messages, n=1):
                 return FakeResult()
 
-        from sr_agent.api import LLMAPI
+        from sr_harness.api import LLMAPI
         monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: FakeAPI())
 
         tool = LLMTool()
@@ -82,7 +82,7 @@ class TestLLMTool:
 
     def test_execute_invalid_provider(self, monkeypatch):
         """测试无效提供商。"""
-        from sr_agent.api import LLMAPI
+        from sr_harness.api import LLMAPI
         monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad provider")))
 
         tool = LLMTool()

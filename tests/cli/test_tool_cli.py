@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pytest
 
-from sr_agent.cli.tool import build_argparser, load_context, load_params, main
+from sr_harness.cli.tool import load_context, load_params, main, setup_parser
 
 
-def run_cli(argv: list[str]) -> None:
-    main(build_argparser().parse_args(argv))
+def run_cli(argv: list[str]) -> int:
+    return main(setup_parser().parse_args(argv))
 
 
 def test_load_context_from_explicit_data_field(tmp_path):
@@ -58,7 +57,7 @@ def test_call_outputs_formatted_result_only(tmp_path, capsys):
         target="y",
     )
 
-    run_cli(
+    exit_code = run_cli(
         [
             "call",
             "statistics_analysis",
@@ -70,6 +69,7 @@ def test_call_outputs_formatted_result_only(tmp_path, capsys):
     )
 
     captured = capsys.readouterr()
+    assert exit_code == 0
     assert captured.out.startswith("x1 (finite samples=3/3; finite ratio=100%):")
     assert "ToolCallResult" not in captured.out
     assert captured.err == ""
@@ -84,18 +84,17 @@ def test_call_returns_nonzero_on_tool_error(tmp_path, capsys):
         target="y",
     )
 
-    with pytest.raises(SystemExit) as exc:
-        run_cli(
-            [
-                "call",
-                "evaluate_formula",
-                "--context",
-                str(context_path),
-                "--params",
-                '{"f": "invalid_syntax!!"}',
-            ]
-        )
+    exit_code = run_cli(
+        [
+            "call",
+            "evaluate_formula",
+            "--context",
+            str(context_path),
+            "--params",
+            '{"f": "invalid_syntax!!"}',
+        ],
+    )
 
     captured = capsys.readouterr()
-    assert exc.value.code == 1
+    assert exit_code == 1
     assert "SyntaxError" in captured.out

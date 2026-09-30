@@ -4,9 +4,9 @@ import json
 import numpy as np
 import pytest
 
-from sr_agent._vendor.llmsr_bench.core import SEDTask
-from sr_agent._vendor.llmsr_bench.algorithms import my_sr_agent
-from sr_agent._vendor.llmsr_bench.algorithms.my_sr_agent import update_parser
+from sr_harness._vendor.llmsr_bench.core import SEDTask
+from sr_harness._vendor.llmsr_bench.algorithms import my_sr_agent
+from sr_harness._vendor.llmsr_bench.algorithms.my_sr_agent import update_parser
 
 
 def test_default_benchmark_tools_exclude_self_modification():

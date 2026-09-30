@@ -10,7 +10,7 @@ from ..utils import log_exception
 if TYPE_CHECKING:
     from .llm_api import ToolParserName, ToolList
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 class ToolCallMixin:

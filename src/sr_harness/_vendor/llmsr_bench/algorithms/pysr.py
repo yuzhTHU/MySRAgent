@@ -10,9 +10,9 @@ import argparse
 import tempfile
 import numpy as np
 from typing import Any
-from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
+from ..core import SEDTask, SRResult
 
-_logger = logging.getLogger(f"sr_agent.{__name__}")
+_logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:

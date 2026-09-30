@@ -12,7 +12,7 @@ import nd2py as nd
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
-_logger = logging.getLogger(f'sr_agent.{__name__}')
+_logger = logging.getLogger(f'sr_harness.{__name__}')
 
 
 @BaseTool.register('call_sindy')

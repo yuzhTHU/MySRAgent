@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sr_agent.api.openrouter_api import OpenRouterAPI
-from sr_agent.api.siliconflow_api import SiliconFlowAPI
-from sr_agent.api.core import ToolCall
-from sr_agent.tools import BaseTool, ToolMetadata
+from sr_harness.api.openrouter_api import OpenRouterAPI
+from sr_harness.api.siliconflow_api import SiliconFlowAPI
+from sr_harness.api.core import ToolCall
+from sr_harness.tools import BaseTool, ToolMetadata
 
 
 class DemoTool(BaseTool):
@@ -131,7 +131,7 @@ def _consume(result):
 
 def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
     _FakeOpenRouterClient.payloads = []
     _FakeOpenRouterClient.message = {
         "content": "ready",
@@ -167,9 +167,9 @@ def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypat
 
 def test_openrouter_honors_retry_after_and_recovers(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _RetryingOpenRouterClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _RetryingOpenRouterClient)
     sleeps = []
-    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.time.sleep", sleeps.append)
     _RetryingOpenRouterClient.payloads = []
     _RetryingOpenRouterClient.attempts = 0
 
@@ -190,9 +190,9 @@ def test_openrouter_empty_response_uses_same_retry_backoff(monkeypatch):
             return _FakeOpenRouterCompletion({"content": content})
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", EmptyThenValidClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", EmptyThenValidClient)
     sleeps = []
-    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.time.sleep", sleeps.append)
 
     api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
     chunks, _ = _consume(api([{"role": "user", "content": "retry empty"}]))
@@ -212,9 +212,9 @@ def test_openrouter_all_empty_responses_raise(monkeypatch):
             return _FakeOpenRouterCompletion({"content": ""})
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", AlwaysEmptyClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", AlwaysEmptyClient)
     sleeps = []
-    monkeypatch.setattr("sr_agent.api.openrouter_api.time.sleep", sleeps.append)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.time.sleep", sleeps.append)
 
     api = OpenRouterAPI(model="deepseek/deepseek-v4-flash")
     with pytest.raises(RuntimeError, match="failed after 3 attempts"):
@@ -226,7 +226,7 @@ def test_openrouter_all_empty_responses_raise(monkeypatch):
 
 def test_openrouter_uses_standard_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
     _FakeOpenRouterClient.api_keys = []
     _FakeOpenRouterClient.message = {"content": "ok"}
 
@@ -238,7 +238,7 @@ def test_openrouter_uses_standard_key(monkeypatch):
 
 def test_openrouter_skips_malformed_native_tool_calls(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
     _FakeOpenRouterClient.payloads = []
     _FakeOpenRouterClient.message = {
         "content": "ready",
@@ -274,7 +274,7 @@ def test_openrouter_skips_malformed_native_tool_calls(monkeypatch):
 
 def test_openrouter_text_parser_injects_tool_prompt_and_parses_action(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("sr_agent.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
     _FakeOpenRouterClient.payloads = []
     _FakeOpenRouterClient.message = {"content": "Action: demo_tool(x=2)"}
 
@@ -302,7 +302,7 @@ def test_siliconflow_qwen_text_parser_injects_tool_prompt_and_parses_action(monk
             _siliconflow_response({"content": "Action: demo_tool(x=3)"})
         )
 
-    monkeypatch.setattr("sr_agent.api.siliconflow_api.requests.request", fake_request)
+    monkeypatch.setattr("sr_harness.api.siliconflow_api.requests.request", fake_request)
 
     api = SiliconFlowAPI(model="Qwen3-8B", parser="text", tool_list=[DemoTool])
     _chunks, return_value = _consume(api([{"role": "user", "content": "call demo"}]))
@@ -333,7 +333,7 @@ def test_siliconflow_qwen_native_tools_are_sent_and_tool_calls_are_extracted(mon
             })
         )
 
-    monkeypatch.setattr("sr_agent.api.siliconflow_api.requests.request", fake_request)
+    monkeypatch.setattr("sr_harness.api.siliconflow_api.requests.request", fake_request)
 
     api = SiliconFlowAPI(model="Qwen3-8B", parser="openai", tool_list=[DemoTool])
     chunks, return_value = _consume(api([{"role": "user", "content": "call demo"}]))

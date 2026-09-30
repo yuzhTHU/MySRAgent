@@ -1,8 +1,8 @@
 """TextParser 单元测试。"""
 
 import pytest
-from sr_agent.parser import TextParser
-from sr_agent.tools import BaseTool
+from sr_harness.parser import TextParser
+from sr_harness.tools import BaseTool
 
 
 class TestTextParserFormatTools:
