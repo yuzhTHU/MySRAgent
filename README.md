@@ -60,7 +60,7 @@ Install optional components as needed:
 
 ```bash
 pip install -e ".[web]"       # Web search-tree viewer
-pip install -e ".[tools]"     # PySR, gplearn, and PySINDy integrations
+pip install -e ".[tools]"     # PySR, gplearn, PySINDy, and PDF integrations
 pip install -e ".[nn]"        # Experimental neural components
 pip install -e ".[all]"       # Everything above
 ```
@@ -196,6 +196,25 @@ sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 Then open <http://127.0.0.1:8000/>. The server recursively discovers runs containing both `manifest.json` and `records.jsonl`.
 
 ![SRHarness Web search-tree viewer](assets/web.png)
+
+### Research backends, subagents, and live control
+
+The default tool set includes recursive per-subtree EIC diagnostics (`evaluate_eic`), an actual
+MDLformer-guided SR4MDL search (`sr4mdl`), NDformer-guided network-dynamics search (`nd2`), bounded
+symbolic-regression hypothesis/critique delegation (`delegate_subagent`), web search, and PDF
+reading. Configure heavyweight external projects with `SR4MDL_HOME` and `ND2_HOME`, and point
+`SR4MDL_CHECKPOINT` to the trained MDLformer checkpoint. Repositories placed at
+`third-party/SR4MDL` and `third-party/ND2` are discovered automatically. When `evaluate_eic` is
+enabled, each newly generated scalar candidate receives a lightweight structural audit whose
+diagnostics are retained in candidate state. Documentation for EIC, SR4MDL, and ND2 is exposed as
+runtime read-only skills by each tool's `get_doc()` method.
+
+For live bidirectional control, share an `InteractionController` between `SRAgentInteractive` and
+`create_app(log_dir, controller=controller)`. The Web header can pause/resume/stop the agent, inject
+guidance at the next LLM boundary, and answer `ask_human` questions. Model auto-routing can use a
+cheap base backend for simple/early requests and an optional strong backend for complex or
+stagnated searches. Configure `strong_llm_provider`/`strong_llm_model`, or pass
+`auto_routing=False` to keep every request on the base backend.
 
 ## Evaluation and Reproducibility Notes
 

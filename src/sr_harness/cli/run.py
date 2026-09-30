@@ -45,6 +45,8 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
+    parser.add_argument("--strong_llm_provider", default=None, help="Optional provider for the strong backend used by auto-routing. Defaults to --llm_provider.")
+    parser.add_argument("--strong_llm_model", default=None, help="Optional strong model for complex tasks or escalation after two unsuccessful rounds.")
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
     parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
     parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help="Maximum agent refinement depth.")
@@ -61,6 +63,11 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
     parser.add_argument("--force_initial_diagnostics", action=argparse.BooleanOptionalAction, default=False, help=(
         "Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws."
+    ))
+    parser.add_argument("--auto_routing", action=argparse.BooleanOptionalAction, default=True, help=(
+        "Automatically route LLM requests between the base backend and the optional "
+        "--strong_llm_provider/--strong_llm_model backend according to task complexity "
+        "and search progress. --no-auto_routing always uses the base backend."
     ))
     parser = add_minus_flags(parser)
     parser = add_negation_flags(parser)
@@ -153,6 +160,9 @@ def run_experiment(args: argparse.Namespace) -> dict:
         split_by=args.split_by,
         split_random_state=args.split_random_state,
         force_initial_diagnostics=args.force_initial_diagnostics,
+        auto_routing=args.auto_routing,
+        strong_llm_provider=args.strong_llm_provider,
+        strong_llm_model=args.strong_llm_model,
     )
 
     result = {
@@ -168,7 +178,12 @@ def run_experiment(args: argparse.Namespace) -> dict:
         "token_usage": None,
         "money_usage": None,
         "tools_usage": None,
-        "llm_model": f"{args.llm_model} @ {args.llm_provider}",
+        "llm_model": f"{args.llm_model} @ {args.llm_provider}" + (
+            f" [autorouting to {args.strong_llm_model or args.llm_model} @ "
+            f"{args.strong_llm_provider or args.llm_provider}]"
+            if args.auto_routing
+            else ""
+        ),
     }
     try:
         result |= agent.fit(X=X, y=y, problem_description=problem_description)

@@ -15,6 +15,7 @@ from collections import defaultdict
 from joblib import Parallel, delayed
 from typing import Any, Dict, List, Optional, Tuple
 from ..api.llm_api import LLMAPI
+from ..api.model_router import ModelRouter
 from ..parser import BaseParser
 from ..api.core import ToolCall
 from ..skills import SkillManager
@@ -67,6 +68,9 @@ class SRAgent(FactoryMixin):
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
         force_initial_diagnostics: bool = False,
+        auto_routing: bool = True,
+        strong_llm_provider: str | None = None,
+        strong_llm_model: str | None = None,
     ):
         """初始化 Agent。
 
@@ -92,6 +96,9 @@ class SRAgent(FactoryMixin):
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
             force_initial_diagnostics: 是否在每个对话分支的 L=1 请求 LLM 前，强制执行
                 statistics_analysis、relationship_analysis 和读取 discover-symbolic-laws skill。
+            auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
+            strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
+            strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
@@ -133,6 +140,20 @@ class SRAgent(FactoryMixin):
         self.ranking_metric = ranking_metric
         self.larger_is_better = larger_is_better
         self.force_initial_diagnostics = force_initial_diagnostics
+        self.auto_routing = auto_routing
+        self.strong_llm_provider = strong_llm_provider or llm_provider
+        self.strong_llm_model = strong_llm_model
+        self.model_router = ModelRouter(
+            enabled=auto_routing,
+            base_provider=llm_provider,
+            base_model=llm_model,
+            strong_provider=self.strong_llm_provider,
+            strong_model=strong_llm_model,
+        )
+        self._task_route_score = 0
+        self._task_route_reasons: list[str] = []
+        self._strong_llm_api = None
+        self._last_model_route = None
 
         # 关键组件
         self.tool_cls_list = tool_cls_list
@@ -315,10 +336,31 @@ class SRAgent(FactoryMixin):
         """Split aligned arrays into train and validation data mappings."""
         data = X | y
         arrays = {name: np.asarray(value) for name, value in data.items()}
-        lengths = {len(value) for value in arrays.values()}
-        if len(lengths) != 1:
-            raise ValueError(f"All X and y arrays must have the same length, got lengths={sorted(lengths)}.")
-        n_samples = next(iter(lengths))
+        target = next(iter(y))
+        n_samples = len(arrays[target])
+        network_data = "A" in arrays or "G" in arrays
+        if network_data:
+            temporal_names = {
+                name for name, value in arrays.items()
+                if name not in {"A", "G"} and value.ndim > 0
+                and len(value) == n_samples
+            }
+            mismatched_targets = [
+                name for name in y if name not in temporal_names
+            ]
+            if mismatched_targets:
+                raise ValueError(
+                    "Network-dynamics targets must use time as their first axis: "
+                    f"{mismatched_targets}"
+                )
+        else:
+            lengths = {len(value) for value in arrays.values()}
+            if len(lengths) != 1:
+                raise ValueError(
+                    "All X and y arrays must have the same length, got "
+                    f"lengths={sorted(lengths)}."
+                )
+            temporal_names = set(arrays)
         n_validation = int(round(n_samples * self.validation_fraction))
         if self.validation_fraction == 0:
             n_train = n_samples # 当不使用 validation_fraction 时, 训练集就是验证集
@@ -347,7 +389,10 @@ class SRAgent(FactoryMixin):
             validation_indices = indices[-n_validation:]
 
         def select(selected):
-            return {name: value[selected] for name, value in arrays.items()}
+            return {
+                name: value[selected] if name in temporal_names else value
+                for name, value in arrays.items()
+            }
 
         return select(train_indices), select(validation_indices) if n_validation else {}
 
@@ -359,6 +404,10 @@ class SRAgent(FactoryMixin):
         在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
         """
         initial_prompt = []
+        self._task_route_score, self._task_route_reasons = self.model_router.assess(
+            problem_description,
+            feature_count=len(X),
+        )
 
         # 根据是否有历史最优结果来动态设置 MSE 目标
         if not restart_records:
@@ -496,7 +545,27 @@ class SRAgent(FactoryMixin):
     def request_llm(self, prompt: List[Dict[str, Any]], R: int, L: int, C: int):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
-        llm_result = self.llm_api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
+        route = self.model_router.route(
+            task_score=self._task_route_score,
+            task_reasons=self._task_route_reasons,
+            refinement_step=L,
+        )
+        self._last_model_route = route
+        llm_api = self.llm_api
+        if route.tier == "strong":
+            if self._strong_llm_api is None:
+                self._strong_llm_api = LLMAPI.create(
+                    route.provider,
+                    route.model,
+                    tool_list=self.tools,
+                    tool_parser=self.tool_parser,
+                )
+            llm_api = self._strong_llm_api
+        _logger.info(
+            f"Model route: tier={route.tier}, backend={route.provider}/{route.model}, "
+            f"score={route.score}, reason={route.reason}"
+        )
+        llm_result = llm_api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
         for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()
@@ -650,12 +719,46 @@ class SRAgent(FactoryMixin):
             concise=True,
             formula_max_length=160,
         )
+        pareto_front = self.get_pareto_front(topk_records)
+        diagnostics = []
+        for record in pareto_front:
+            if eic := record.get("eic_diagnostics"):
+                diagnostics.append(
+                    f"- {record['formula']}: EIC={eic['eic']:.6g}; "
+                    f"worst subtree={eic['worst_subtree']}"
+                )
+        available_tools = {tool.metadata.name for tool in getattr(self, "tools", [])}
+        routing = []
+        distinct_formulas = list(dict.fromkeys(
+            record.get("formula") for _, _, _, record in sorted(topk_records)
+        ))
+        if (
+            len(distinct_formulas) >= 2
+            and "delegate_subagent" in available_tools
+            and self.tools_counter.named_count.get("delegate_subagent", 0) == 0
+            and remaining_rounds >= 1
+        ):
+            routing.append(
+                "There are multiple viable formulas. Use delegate_subagent in "
+                "candidate_critique mode with the leading formulas and their metrics, then "
+                "run the cheapest discriminating check it recommends."
+            )
+        diagnostics_text = (
+            "\n\n[Candidate structural diagnostics]\n" + "\n".join(diagnostics)
+            if diagnostics else ""
+        )
+        routing_text = (
+            "\n\n[Specialist routing]\n" + "\n".join(f"- {item}" for item in routing)
+            if routing else ""
+        )
         return {
             "role": "user", "content": (
                 f"[Iteration status]\n"
                 f"{progress_line} {policy}\n\n"
                 f"[Current Pareto Front]\n"
                 f"{pareto_front_str}"
+                f"{diagnostics_text}"
+                f"{routing_text}"
             )
         }
 
@@ -683,6 +786,41 @@ class SRAgent(FactoryMixin):
                         "data_split_results": res.result["data_split_results"],
                         "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
+                    if (
+                        "eic_diagnostics" not in res.result
+                        and not str(res.result.get("method", "")).startswith("ND2")
+                    ):
+                        eic_tool = next(
+                            (
+                                tool for tool in self.tools
+                                if tool.metadata.name == "evaluate_eic"
+                            ),
+                            None,
+                        )
+                        if eic_tool is not None:
+                            audit_call = ToolCall(
+                                name="evaluate_eic",
+                                params={"f": record["formula"], "repeats": 4},
+                            )
+                            audit_result = eic_tool(**audit_call.params)
+                            self.tools_counter.add("evaluate_eic")
+                            self.record_tool_calls(
+                                [audit_call],
+                                [audit_result],
+                                R=R,
+                                L=L,
+                                C=C,
+                                forced=True,
+                            )
+                            if audit_result.ok:
+                                record["eic_diagnostics"] = audit_result.result[
+                                    "eic_diagnostics"
+                                ]
+                    if diagnostics := res.result.get("eic_diagnostics"):
+                        record["eic_diagnostics"] = diagnostics
+                        for _, _, _, previous in topk_records:
+                            if previous.get("formula") == record["formula"]:
+                                previous["eic_diagnostics"] = diagnostics
                     self.push_candidate(record, topk_records)
                     # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
                     for formula_dict in res.result.get('all_formulas', []):
@@ -749,6 +887,11 @@ class SRAgent(FactoryMixin):
                     "responses": llm_result.returned["responses"],
                     "progress": self.format_progress(R, L, C),
                     "usage": usage,
+                    "model_route": (
+                        vars(self._last_model_route)
+                        if self._last_model_route is not None
+                        else None
+                    ),
                 }, f)
                 f.write('\n')
         return usage

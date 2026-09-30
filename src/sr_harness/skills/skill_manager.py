@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import re
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
@@ -102,6 +103,20 @@ class SkillManager:
         available = ", ".join(skills)
         raise ValueError(f"Skill '{name}' not found. Available skills: {available}")
 
+    def search_skills(self, query: str, limit: int = 5) -> list[Skill]:
+        """Rank skills by lexical overlap in name and discovery description."""
+        tokens = set(re.findall(r"[a-zA-Z][\w-]+|[\u4e00-\u9fff]{2,}", query.lower()))
+        ranked = []
+        for skill in self.load_skills().values():
+            pattern = r"[a-zA-Z][\w-]+|[\u4e00-\u9fff]{2,}"
+            name_tokens = set(re.findall(pattern, skill.name.lower().replace("-", " ")))
+            desc_tokens = set(re.findall(pattern, skill.description.lower()))
+            score = 3 * len(tokens & name_tokens) + len(tokens & desc_tokens)
+            ranked.append((score, skill.name, skill))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        matches = [skill for score, _, skill in ranked if score > 0]
+        return matches[:max(1, min(int(limit), 20))]
+
     def read_skill(self, name: str, file_path: str = "SKILL.md") -> str:
         skill = self.get_skill(name)
         path = self._resolve_skill_file(skill, file_path)
@@ -157,7 +172,7 @@ class SkillManager:
     @staticmethod
     def _validate_name(name: str) -> str:
         name = name.strip()
-        if not name or Path(name).name != name or name in {".", ".."}:
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
             raise ValueError(f"Invalid skill name: {name!r}.")
         return name
 

@@ -40,15 +40,32 @@ class ReadSkill(BaseTool):
         description = _format_description(self.skill_manager.load_skills())
         self.metadata = replace(type(self).metadata, description=description)
 
-    def execute(self, name: str, file_path: str = "", show_tree: bool = False) -> Dict[str, Any]:
+    def execute(
+        self,
+        name: str = "",
+        file_path: str = "",
+        show_tree: bool = False,
+        query: str = "",
+    ) -> Dict[str, Any]:
         """Inspect a skill's instructions, directory structure, or a file.
 
         Args:
-            name: The exact skill name to inspect.
+            name: The exact skill name to inspect. Leave empty to search by query.
             file_path: Optional path relative to the skill directory, such as
                 ``tool.py`` or ``references/example.md``. Empty reads SKILL.md.
             show_tree: Whether to include all files and subdirectories in the skill.
+            query: Task description used to recommend skills when name is empty.
         """
+        if not name.strip():
+            if not query.strip():
+                raise ValueError("Provide either an exact skill name or a search query.")
+            matches = self.skill_manager.search_skills(query)
+            return {
+                "content": "Recommended skills:\n" + "\n".join(
+                    f"- {skill.name}: {skill.description}" for skill in matches
+                ),
+                "matches": [skill.name for skill in matches],
+            }
         skill = self.skill_manager.get_skill(name)
         result: dict[str, Any] = {}
         if file_path.strip():

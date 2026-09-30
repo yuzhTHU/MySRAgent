@@ -9,10 +9,16 @@ from sr_harness.utils.symbolic_acc import get_symbolic_acc, llm_judge_equivalenc
 def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
     seen = {}
 
+    class FakeResult:
+        usage = {"token": {}, "price": {}}
+
+        def __iter__(self):
+            yield '{"reason": "Taylor approximation", "equivalent": false}', [], {}
+
     class FakeAPI:
         def __call__(self, messages, **kwargs):
             seen["messages"] = messages
-            yield '{"reason": "Taylor approximation", "equivalent": false}', [], {}
+            return FakeResult()
 
     monkeypatch.setattr("sr_harness.api.llm_api.LLMAPI.create", lambda *args, **kwargs: FakeAPI())
     result = llm_judge_equivalence(

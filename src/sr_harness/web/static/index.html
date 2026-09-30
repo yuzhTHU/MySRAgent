@@ -172,6 +172,9 @@
       font: inherit;
     }
     button { cursor: pointer; }
+    .agent-control { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+    .agent-control input { height: 34px; min-width: 260px; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; }
+    .agent-control .danger { color: #9f1d20; border-color: #dfb4b5; }
     main {
       --run-width: 280px;
       --side-width: 410px;
@@ -904,6 +907,13 @@
     <button id="refresh">Refresh</button>
     <button id="home">Home</button>
     <span id="status" class="muted"></span>
+    <div class="agent-control" aria-label="Live agent controls">
+      <input id="guidance" placeholder="Inject guidance at the next safe boundary">
+      <button id="send-guidance">Send</button>
+      <button id="pause-agent">Pause</button>
+      <button id="stop-agent" class="danger">Stop</button>
+      <span id="agent-status" class="muted">agent: running</span>
+    </div>
   </header>
   <main>
     <nav id="run-panel" class="run-panel" aria-label="Runs">
@@ -1070,6 +1080,13 @@
     const formulaEditorStatus = document.getElementById("formula-editor-status");
     const detailEl = document.getElementById("detail");
     const statusEl = document.getElementById("status");
+    const guidanceInput = document.getElementById("guidance");
+    const sendGuidanceButton = document.getElementById("send-guidance");
+    const pauseAgentButton = document.getElementById("pause-agent");
+    const stopAgentButton = document.getElementById("stop-agent");
+    const agentStatusEl = document.getElementById("agent-status");
+    let controlSeq = 0;
+    let agentPaused = false;
     const svg = document.getElementById("graph");
     const state = {
       runId: null,
@@ -2790,6 +2807,45 @@
     function shortTreeId(treeId) {
       return String(treeId || "legacy").slice(0, 8);
     }
+
+    async function sendControl(action, message = "") {
+      const response = await fetch("/api/control/command", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, message })
+      });
+      if (!response.ok) throw new Error((await response.json()).detail || "Control command failed");
+      const value = await response.json();
+      agentPaused = value.paused;
+      pauseAgentButton.textContent = agentPaused ? "Resume" : "Pause";
+      agentStatusEl.textContent = value.stopped ? "agent: stopped" : (agentPaused ? "agent: paused" : "agent: running");
+    }
+
+    async function pollControl() {
+      try {
+        const response = await fetch(`/api/control/events?after_seq=${controlSeq}`);
+        const payload = await response.json();
+        for (const event of payload.events || []) {
+          controlSeq = Math.max(controlSeq, event.seq || 0);
+          if (event.kind === "question") {
+            const answer = window.prompt(event.payload.message || "Agent requests guidance", "");
+            if (answer !== null) await fetch(`/api/control/reply/${event.id}`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: answer })
+            });
+          }
+        }
+      } catch (error) { agentStatusEl.textContent = `control: ${error.message}`; }
+    }
+
+    sendGuidanceButton.addEventListener("click", async () => {
+      const message = guidanceInput.value.trim();
+      if (!message) return;
+      await sendControl("message", message); guidanceInput.value = "";
+    });
+    guidanceInput.addEventListener("keydown", event => { if (event.key === "Enter") sendGuidanceButton.click(); });
+    pauseAgentButton.addEventListener("click", () => sendControl(agentPaused ? "resume" : "pause"));
+    stopAgentButton.addEventListener("click", () => { if (window.confirm("Stop the connected agent?")) sendControl("stop"); });
+    setInterval(pollControl, 1000);
 
     syncR2ColorControls();
     setRunTab(state.runTab);

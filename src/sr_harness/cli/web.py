@@ -28,8 +28,9 @@ def main(args: argparse.Namespace) -> int:
         raise SystemExit("Please install web dependencies with: pip install -e .[web]") from exc
 
     from sr_harness.web.app import create_app
+    from sr_harness.web.interaction import InteractionController
 
-    app = create_app(Path(args.log_dir))
+    app = create_app(Path(args.log_dir), controller=InteractionController())
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     return 0
 

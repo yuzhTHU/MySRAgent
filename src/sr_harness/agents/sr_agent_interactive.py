@@ -17,6 +17,7 @@ from ..api.llm_api import LLMAPI
 from ..utils import tag2ansi, render_markdown
 from ..tools.workspace_shell import Workspace
 from typing import Any, Callable, Dict, List, Optional
+from ..web.interaction import InteractionController
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
@@ -50,6 +51,10 @@ class SRAgentInteractive(SRAgent):
         use_workspace: bool = False,
         workspace_files: List[str | Path] | None = None,
         human_input_callback: Optional[Callable[[str], str]] = None,
+        interaction_controller: InteractionController | None = None,
+        auto_routing: bool = True,
+        strong_llm_provider: str | None = None,
+        strong_llm_model: str | None = None,
     ):
         """初始化 SRAgentInteractive。
 
@@ -74,6 +79,10 @@ class SRAgentInteractive(SRAgent):
             use_workspace: 是否使用工作区。
             workspace_files: 初始化到工作区的文件/目录路径列表。
             human_input_callback: 人类输入回调函数。默认 None 时使用 input()。
+            interaction_controller: 与 Web UI 共享的双向控制器。
+            auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
+            strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
+            strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
         """
         if use_workspace:
             excluded_tools = {"code_executor"}
@@ -99,6 +108,9 @@ class SRAgentInteractive(SRAgent):
             split_random_state=split_random_state,
             ranking_metric=ranking_metric,
             larger_is_better=larger_is_better,
+            auto_routing=auto_routing,
+            strong_llm_provider=strong_llm_provider,
+            strong_llm_model=strong_llm_model,
         )
 
         # 工作区
@@ -106,7 +118,22 @@ class SRAgentInteractive(SRAgent):
         self.workspace_files = workspace_files
 
         # 交互界面
-        self.human_input_callback = human_input_callback or self._default_human_input
+        self.interaction_controller = interaction_controller
+        self.human_input_callback = (
+            human_input_callback
+            or (interaction_controller.ask if interaction_controller is not None else None)
+            or self._default_human_input
+        )
+
+    def request_llm(self, prompt, R: int, L: int, C: int):
+        """Apply web/terminal control commands at a safe boundary before each LLM request."""
+        if self.interaction_controller is not None:
+            for message in self.interaction_controller.checkpoint():
+                prompt.append({
+                    "role": "user",
+                    "content": f"[Human guidance injected during the run]\n{message}",
+                })
+        return super().request_llm(prompt, R=R, L=L, C=C)
 
     def fit( # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
         self,
@@ -261,6 +288,10 @@ class SRAgentInteractive(SRAgent):
         在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
         """
         initial_prompt = []
+        self._task_route_score, self._task_route_reasons = self.model_router.assess(
+            problem_description,
+            feature_count=len(X),
+        )
 
         # 根据是否有历史最优结果来动态设置 MSE 目标
         if not restart_records:

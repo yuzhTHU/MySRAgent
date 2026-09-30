@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import nd2py as nd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from .interaction import InteractionController
 
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -18,9 +20,14 @@ STATIC_DIR = WEB_DIR / "static"
 DEFAULT_LOG_DIR = Path.cwd() / "logs"
 
 
-def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
+def create_app(
+    log_dir: str | Path = DEFAULT_LOG_DIR,
+    *,
+    controller: InteractionController,
+) -> FastAPI:
     app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
+    app.state.controller = controller
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")
@@ -44,6 +51,32 @@ def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
             })
         runs.sort(key=lambda item: item["mtime"], reverse=True)
         return {"runs": runs}
+
+    @app.get("/api/control/status")
+    def control_status():
+        return app.state.controller.status()
+
+    @app.get("/api/control/events")
+    def control_events(after_seq: int = Query(0, ge=0)):
+        return {"events": app.state.controller.events(after_seq)}
+
+    @app.post("/api/control/command")
+    def control_command(payload: dict = Body(...)):
+        try:
+            return app.state.controller.command(
+                str(payload.get("action", "")),
+                str(payload.get("message", "")),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/control/reply/{event_id}")
+    def control_reply(event_id: str, payload: dict = Body(...)):
+        try:
+            app.state.controller.reply(event_id, str(payload.get("message", "")))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True}
 
     @app.get("/api/runs/{run_id}/records")
     def list_records(run_id: str, after_seq: int = Query(0, ge=0), include_detail: bool = False):
@@ -91,9 +124,6 @@ def create_app(log_dir: str | Path = DEFAULT_LOG_DIR) -> FastAPI:
         return StreamingResponse(event_source(), media_type="text/event-stream")
 
     return app
-
-
-app = create_app()
 
 
 def _iter_run_dirs(log_dir: Path):

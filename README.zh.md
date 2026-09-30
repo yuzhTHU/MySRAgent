@@ -58,7 +58,7 @@ pip install -e ".[dev]"
 
 ```bash
 pip install -e ".[web]"       # Web 搜索树查看器
-pip install -e ".[tools]"     # PySR、gplearn 和 PySINDy
+pip install -e ".[tools]"     # PySR、gplearn、PySINDy 和 PDF 文本提取
 pip install -e ".[nn]"        # 实验性神经网络组件
 pip install -e ".[all]"       # 安装以上全部组件
 ```
@@ -194,6 +194,34 @@ sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 随后打开 <http://127.0.0.1:8000/>。服务会递归发现同时包含 `manifest.json` 与 `records.jsonl` 的运行目录。
 
 ![SRHarness Web 搜索树查看器](assets/web.png)
+
+### 研究后端、Subagent 与双向交互
+
+默认工具集现包含逐子树递归诊断的 `evaluate_eic`、直接运行 MDLformer-guided 搜索的
+`sr4mdl`、直接运行 NDformer-guided 网络动力学搜索的 `nd2`，以及面向符号回归假设生成/候选审查/残差诊断/搜索恢复的
+`delegate_subagent`，以及 `web_search` 和 `read_pdf`。SR4MDL 与 ND2 分别通过
+`SR4MDL_HOME`、`ND2_HOME` 配置，也会自动发现 `third-party/SR4MDL` 和
+`third-party/ND2`；预训练权重分别由 `SR4MDL_CHECKPOINT` 与 `ND2_CHECKPOINT` 指定。
+启用 `evaluate_eic` 后，新产生的普通标量候选会自动接受轻量结构审查，诊断结果会保留在候选状态中。
+三项研究工具的说明由各自 `get_doc()` 动态注册为
+只读 runtime skill，不在内置 `skills/` 目录维护副本。
+
+`SRAgentInteractive` 可与 Web 服务共享 `InteractionController`，从网页暂停、恢复、停止、
+注入研究者意见，并回复 `ask_human`：
+
+```python
+from sr_harness import InteractionController, SRAgentInteractive
+from sr_harness.web import create_app
+
+controller = InteractionController()
+agent = SRAgentInteractive(..., interaction_controller=controller)
+app = create_app("logs", controller=controller)
+```
+
+auto-routing 用于模型后端选择：简单任务和早期探索使用基础后端；配置了
+`strong_llm_provider` / `strong_llm_model` 后，复杂任务或两轮仍未收敛的搜索会升级到
+强后端。设置 `auto_routing=False` 后所有请求固定使用基础后端。Skill 的创建、读取和
+编辑仍完全使用 SRAgent 自身的 `create_skill` / `read_skill` / `edit_skill` 协议。
 
 ## 评测与可复现性说明
 

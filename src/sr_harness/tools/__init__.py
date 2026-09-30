@@ -26,6 +26,12 @@ from .call_pysr import PySRTool
 from .predict_property import PropertyPredictorTool
 from .ask_human import AskHumanTool
 from .workspace_shell import WorkspaceShellTool
+from .subagent import SubagentTool
+from .web_research import WebSearchTool
+from .read_pdf import PDFReadTool
+from .eic import EICTool
+from .nd2 import ND2Tool
+from .sr4mdl import SR4MDLTool
 
 __all__ = [
     "BaseTool",
@@ -54,4 +60,10 @@ __all__ = [
     "PropertyPredictorTool",
     "AskHumanTool",
     "WorkspaceShellTool",
+    "SubagentTool",
+    "WebSearchTool",
+    "PDFReadTool",
+    "EICTool",
+    "ND2Tool",
+    "SR4MDLTool",
 ]
