@@ -58,6 +58,11 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
     parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
     parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
+    parser.add_argument("--workspace_files", default=None, type=str, nargs="+", help="Files or directories to link into the interactive workspace.")
+    parser.add_argument("--web", action="store_true", help="Open the browser workbench with this dataset.")
+    parser.add_argument("--web_host", default="127.0.0.1")
+    parser.add_argument("--web_port", type=int, default=8000)
+    parser.add_argument("--no_browser", action="store_true")
     parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
     parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
     parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
@@ -136,6 +141,17 @@ def run_experiment(args: argparse.Namespace) -> dict:
         f"Find the relationship {target} = f({', '.join(features)}). "
         f"The synthetic target was generated from an unknown formula."
     )
+    if getattr(args, "web", False):
+        from sr_harness.cli.web import serve
+        options = {key: getattr(args, key) for key in (
+            "llm_provider", "llm_model", "tools", "local_sample_size",
+            "max_refinement_depth", "global_width", "max_restart_loop",
+            "restart_top_k", "verbose", "tool_parser", "workspace_files",
+        )}
+        serve(args.save_path, host=args.web_host, port=args.web_port,
+              open_browser=not args.no_browser, agent_options=options, data=(X, y),
+              initial_prompt=problem_description)
+        return
     _logger.note(
         f"Starting experiment {args.exp_name}\n"
         f"Equation: {target} = {formula}\n"
@@ -253,6 +269,8 @@ def main(args: argparse.Namespace) -> int:
 
     result = run_experiment(args)
     _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.invocation}[reset]"))
+    if result is None:
+        return 0
     if result.get("status") == "interrupted":
         return 130
     return 0 if result.get("status") in {"completed", "early_stopped"} else 1

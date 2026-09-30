@@ -277,3 +277,29 @@ If you use this code, please cite **“SRHarness: A Harness for Agentic Symbolic
 ## License
 
 SRHarness is released under the [MIT License](LICENSE).
+
+### Interactive browser workbench
+
+```bash
+pip install -e '.[web]'
+sr-harness web --port 8000
+# Or use the interactive script's generated dataset:
+sr-harness run --web --equation 'y = sin(x1 - x2)'
+```
+
+The browser opens at `http://127.0.0.1:8000` (`--no-browser` disables opening).
+The workbench provides a live Workspace with drag-and-drop uploads, downloads and
+text previews; an execution timeline and current model context; the existing
+R–C–L–K viewer embedded alongside ranked formulas and metrics; and a prompt
+composer with model selection, pause/resume, stop, and inline `ask_human` replies.
+Configure a numeric CSV path and target column before starting, or leave the path
+empty to use demo data. Provider credentials use the existing configuration.
+
+Guidance and model changes apply before the next model request. Pause/stop take
+effect at operation boundaries, without forcibly cancelling an in-flight call.
+Responses and tool events update as they complete, rather than token by token.
+The server owns one run; restart it for another task. Workspaces remain on disk
+after completion. Uploads are limited to 256 MiB each and never overwrite existing
+files. Drag-out downloads depend on browser support; download links always work.
+The live timeline retains 1000 events; completed iterations remain in search logs.
+The original viewer remains at `/viewer` or via `sr-harness web --viewer-only`.

@@ -20,6 +20,9 @@ class InteractionController:
         self._guidance: deque[str] = deque()
         self._replies: dict[str, str] = {}
         self._sequence = 0
+        self._questions: dict[str, str] = {}
+        self._waiting_at_boundary = False
+        self._activity: dict[str, Any] = {"phase": "idle", "since": time.time()}
 
     def status(self) -> dict[str, Any]:
         with self._condition:
@@ -28,6 +31,10 @@ class InteractionController:
                 "stopped": self._stopped,
                 "pending_guidance": len(self._guidance),
                 "last_event_seq": self._sequence,
+                "questions": dict(self._questions),
+                "waiting_at_boundary": self._waiting_at_boundary,
+                "activity": dict(self._activity),
+                "server_time": time.time(),
             }
 
     def command(self, action: str, message: str = "") -> dict[str, Any]:
@@ -50,12 +57,18 @@ class InteractionController:
             self._condition.notify_all()
             return self.status()
 
-    def checkpoint(self) -> list[str]:
+    def wait_until_running(self) -> None:
         with self._condition:
             while self._paused and not self._stopped:
+                self._waiting_at_boundary = True
                 self._condition.wait(timeout=1.0)
+            self._waiting_at_boundary = False
             if self._stopped:
                 raise KeyboardInterrupt("Stopped through the interaction controller")
+
+    def checkpoint(self) -> list[str]:
+        with self._condition:
+            self.wait_until_running()
             guidance = list(self._guidance)
             self._guidance.clear()
             return guidance
@@ -63,23 +76,24 @@ class InteractionController:
     def ask(self, message: str, timeout: float | None = None) -> str:
         event_id = uuid.uuid4().hex
         with self._condition:
+            self._questions[event_id] = message
             self._publish_locked("question", {"message": message}, event_id=event_id)
             deadline = None if timeout is None else time.monotonic() + timeout
             while event_id not in self._replies and not self._stopped:
                 remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
                 if remaining == 0:
+                    self._questions.pop(event_id, None)
                     return "(No response before timeout)"
                 self._condition.wait(timeout=remaining)
             if self._stopped:
+                self._questions.pop(event_id, None)
                 raise KeyboardInterrupt("Stopped while waiting for human input")
+            self._questions.pop(event_id, None)
             return self._replies.pop(event_id)
 
     def reply(self, event_id: str, message: str) -> None:
         with self._condition:
-            if not any(
-                event["id"] == event_id and event["kind"] == "question"
-                for event in self._events
-            ):
+            if event_id not in self._questions or event_id in self._replies:
                 raise ValueError(f"unknown question event: {event_id}")
             self._replies[event_id] = message.strip() or "(No input)"
             self._publish_locked("reply", {"question_id": event_id, "message": message})
@@ -100,6 +114,8 @@ class InteractionController:
         event_id: str | None = None,
     ) -> dict[str, Any]:
         self._sequence += 1
+        if kind == "activity":
+            self._activity = {**payload, "since": time.time()}
         event = {
             "seq": self._sequence,
             "id": event_id or uuid.uuid4().hex,

@@ -37,6 +37,7 @@ class Workspace:
     """
 
     def __init__(self, workspace_files: List[str] | None = None, temp_dir: str | None = None):
+        self.retain = False
         self._path = Path(tempfile.mkdtemp(prefix="sr_workspace_", dir=temp_dir))
         _logger.info(f"Created workspace at {self._path}")
         for src in (workspace_files or []):
@@ -77,7 +78,8 @@ class Workspace:
         return self
 
     def __exit__(self, *_):
-        self.cleanup()
+        if not self.retain:
+            self.cleanup()
 
     def link_item(self, src: Path):
         """将文件或目录链接/复制到工作区内，设置为只读。"""

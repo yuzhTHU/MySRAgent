@@ -4,11 +4,12 @@ import asyncio
 import base64
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
 import nd2py as nd
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -24,6 +25,7 @@ def create_app(
     log_dir: str | Path = DEFAULT_LOG_DIR,
     *,
     controller: InteractionController,
+    session=None,
 ) -> FastAPI:
     app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
@@ -32,7 +34,15 @@ def create_app(
 
     @app.get("/")
     def index():
+        return FileResponse(STATIC_DIR / ("platform.html" if session is not None else "index.html"))
+
+    @app.get("/viewer")
+    def viewer():
         return FileResponse(STATIC_DIR / "index.html")
+
+    if session is not None:
+        from .platform import mount_platform
+        mount_platform(app, session)
 
     @app.get("/api/runs")
     def list_runs():
@@ -102,15 +112,15 @@ def create_app(
         raise HTTPException(status_code=404, detail=f"Node not found: {node_id}")
 
     @app.get("/api/runs/{run_id}/stream")
-    async def stream_records(run_id: str, after_seq: int = Query(0, ge=0)):
-        run_dir = _resolve_run_dir(app.state.log_dir, run_id)
+    async def stream_records(run_id: str, request: Request, after_seq: int = Query(0, ge=0)):
+        run_dir = await asyncio.to_thread(_resolve_run_dir, app.state.log_dir, run_id)
         records_path = run_dir / "records.jsonl"
 
         async def event_source():
             next_seq = after_seq
-            while True:
+            while not await request.is_disconnected():
                 batch = []
-                all_records = list(_read_records(records_path))
+                all_records = await asyncio.to_thread(lambda: list(_read_records(records_path)))
                 records_by_id = {record.get("node_id"): record for record in all_records if record.get("node_id")}
                 for record in all_records:
                     seq = int(record.get("seq", 0))
@@ -129,13 +139,34 @@ def create_app(
 def _iter_run_dirs(log_dir: Path):
     if not log_dir.exists():
         return
-    for path in log_dir.rglob("records.jsonl"):
-        run_dir = path.parent
-        if (run_dir / "manifest.json").exists():
-            yield run_dir
+    # A run's workspace may contain whole projects. Never recursively discover
+    # runs inside one, nor follow directory symlinks into external datasets.
+    for root, directories, files in os.walk(log_dir):
+        directories[:] = [name for name in directories if not name.startswith('.')
+                          and name not in {'workspace', 'node_modules', 'venv', '__pycache__'}
+                          and not name.startswith('sr_workspace_')]
+        if 'manifest.json' in files:
+            directories[:] = []
+            if 'records.jsonl' in files:
+                yield Path(root)
 
 
 def _resolve_run_dir(log_dir: Path, run_id: str) -> Path:
+    root = log_dir.resolve()
+    candidates = [run_id]
+    try:
+        candidates.append(base64.urlsafe_b64decode(run_id + '=' * (-len(run_id) % 4)).decode('utf-8'))
+    except (ValueError, UnicodeError):
+        pass
+    for relative in candidates:
+        candidate = (root / relative).resolve()
+        if (candidate.is_relative_to(root) and (candidate / 'manifest.json').is_file()
+                and (candidate / 'records.jsonl').is_file()):
+            return candidate
+    # A supplied path/run key is authoritative. Only legacy bare names need
+    # discovery; the running session is always an immediate child of log_dir.
+    if run_id.startswith('interactive_') or len(candidates) > 1:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     matches = [
         path
         for path in _iter_run_dirs(log_dir)

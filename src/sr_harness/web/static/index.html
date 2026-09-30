@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SR Agent Search Viewer</title>
+  <title>SRHarness Search Viewer</title>
   <script>
     window.MathJax = {
       tex: {
@@ -27,6 +27,23 @@
       --root: #263238;
       --accent: #157a6e;
     }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #101615;
+      --panel: #18201f;
+      --ink: #dce7e5;
+      --muted: #8f9d9a;
+      --line: #2b3836;
+      --edge: #71827f;
+      --root: #879894;
+      --accent: #64b9ad;
+    }
+    :root[data-theme="dark"] .control-bar,
+    :root[data-theme="dark"] select,
+    :root[data-theme="dark"] button,
+    :root[data-theme="dark"] input,
+    :root[data-theme="dark"] .range-input { background:#1b2523;color:var(--ink) }
+    :root[data-theme="dark"] #graph-wrap {background:linear-gradient(#26322f 1px,transparent 1px),linear-gradient(90deg,#26322f 1px,transparent 1px);background-size:32px 32px}
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -899,11 +916,14 @@
       header { flex-wrap: wrap; }
       .legend { position: static; width: auto; margin: 10px; }
     }
+    body.embedded header, body.embedded .run-resizer, body.embedded .side-resizer, body.embedded .legend {display:none!important}
+    body.embedded main {height:100vh!important;grid-template-columns:0 minmax(0,1fr) 0!important;grid-template-rows:1fr!important}
+    body.embedded #graph-wrap {grid-column:2;min-height:0}
   </style>
 </head>
 <body>
   <header>
-    <h1>SR Agent Search Viewer</h1>
+    <h1>SRHarness Search Viewer</h1>
     <button id="refresh">Refresh</button>
     <button id="home">Home</button>
     <span id="status" class="muted"></span>
@@ -1221,14 +1241,51 @@
     svg.addEventListener("pointerdown", onBackgroundPointerDown);
     svg.addEventListener("wheel", onWheel, { passive: false });
 
+    const viewerParams = new URLSearchParams(location.search);
+    function reportTree(message) {
+      statusEl.textContent = message;
+      if (viewerParams.has("embed")) parent.postMessage({type: "sr-tree-status", message}, location.origin);
+    }
+    let followLatest = true;
+    function frameTree(mode) {
+      const wrap = document.getElementById("graph-wrap");
+      const points = [...state.positions.values()];
+      if (!points.length) return;
+      const width = wrap.clientWidth, height = wrap.clientHeight;
+      if (mode === "fit") {
+        const xs = points.map(p => p.x), ys = points.map(p => p.y);
+        const minX = Math.min(...xs)-50, maxX = Math.max(...xs)+50;
+        const minY = Math.min(...ys)-40, maxY = Math.max(...ys)+45;
+        const scale = Math.min(1, (width-30)/(maxX-minX), (height-65)/(maxY-minY));
+        state.view = {scale, x: width/2-(minX+maxX)*scale/2, y: 35+height/2-(minY+maxY)*scale/2};
+      } else {
+        const latest = [...state.records.values()].sort((a,b)=>b.seq-a.seq)[0];
+        const point = latest && state.positions.get(latest.node_id);
+        if (point) state.view = {scale: 1, x: width/2-point.x, y: height-60-point.y};
+      }
+      renderGraph();
+    }
+    window.addEventListener("message", event => {
+      if (!viewerParams.has("embed") || event.source !== parent || event.origin !== location.origin) return;
+      if (event.data?.type === "sr-tree-theme") {document.documentElement.dataset.theme=event.data.theme === "dark" ? "dark" : "light";return}
+      if (event.data?.type !== "sr-tree-view") return;
+      followLatest = event.data.mode === "latest";
+      frameTree(followLatest ? "latest" : "fit");
+    });
+    let runListLoading = false;
     async function loadRuns() {
+      if (runListLoading) return;
+      runListLoading = true;
+      try {
       const data = await fetchJson("/api/runs");
       state.runs = data.runs || [];
       renderRunTree(state.runs);
       if (data.runs.length && (!state.runId || !data.runs.some(run => runKey(run) === state.runId))) {
-        selectRun(runKey(data.runs[0]));
+        const requested = data.runs.find(run => run.run_id === viewerParams.get("run"));
+        if (requested || !viewerParams.has("run")) selectRun(runKey(requested || data.runs[0]));
       }
       statusEl.textContent = data.runs.length ? "" : "No runs with records.jsonl found";
+      } finally { runListLoading = false; }
     }
 
     function renderRunTree(runs) {
@@ -1339,10 +1396,25 @@
       startStream();
     }
 
+    async function pollRequestedRun() {
+      // The run id is already known. Do not discover/parse every historical run
+      // before displaying this one; keep exactly one request in flight.
+      state.runId = viewerParams.get("run");
+      try {
+        await loadRecords();
+        reportTree(state.records.size ? `${state.records.size} 个节点 · 已同步` : "等待第一轮完成后生成搜索节点");
+      } catch (error) {
+        reportTree(error.status === 404 ? "等待第一轮完成后生成搜索节点" : `搜索树同步失败：${error.message} · 自动重试`);
+      } finally { setTimeout(pollRequestedRun, 3000); }
+    }
+
     async function loadRecords() {
       const data = await fetchJson(`/api/runs/${encodeURIComponent(state.runId)}/records?after_seq=${state.lastSeq}`);
-      ingestRecords(data.records || []);
-      renderGraph();
+      if ((data.records || []).length) {
+        ingestRecords(data.records);
+        if (viewerParams.has("embed") && followLatest) frameTree("latest");
+        else renderGraph();
+      }
     }
 
     function startStream() {
@@ -1520,6 +1592,11 @@
       const maxY = Math.max(...[...state.positions.values()].map(p => p.y), 650);
       svg.setAttribute("width", Math.max(1200, maxX + 220));
       svg.setAttribute("height", Math.max(760, maxY + 160));
+      if (viewerParams.has("embed")) {
+        const wrap = document.getElementById("graph-wrap");
+        svg.setAttribute("width", wrap.clientWidth);
+        svg.setAttribute("height", wrap.clientHeight);
+      }
       svg.innerHTML = "";
 
       const edgeGroup = svgEl("g");
@@ -1560,6 +1637,12 @@
         circle.addEventListener("click", () => {
           if (state.nodeDragMoved) return;
           showCore(node);
+          if (viewerParams.has("embed") && !node.virtual_root) parent.postMessage({
+            type: "sr-tree-node-selected",
+            coord: node.coord,
+            nodeId: node.node_id,
+            runId: node.run_id || state.runId
+          }, location.origin);
         });
         nodeGroup.appendChild(circle);
 
@@ -1594,6 +1677,7 @@
     }
 
     function onBackgroundPointerDown(event) {
+      followLatest = false;
       if (event.target !== svg) return;
       const point = clientPoint(event);
       state.panning = { x: point.x, y: point.y, viewX: state.view.x, viewY: state.view.y };
@@ -1680,6 +1764,7 @@
     }
 
     function onWheel(event) {
+      followLatest = false;
       event.preventDefault();
       const anchor = clientPoint(event);
       const before = clientToSvg(event);
@@ -2554,9 +2639,18 @@
     }
 
     async function fetchJson(url) {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch(url, {signal: controller.signal});
+        if (!response.ok) {
+          const error = new Error(await response.text()); error.status = response.status; throw error;
+        }
+        return await response.json();
+      } catch (error) {
+        if (error.name === "AbortError") throw new Error("请求超时");
+        throw error;
+      } finally { clearTimeout(timer); }
     }
 
     async function exportScene(format) {
@@ -2845,14 +2939,23 @@
     guidanceInput.addEventListener("keydown", event => { if (event.key === "Enter") sendGuidanceButton.click(); });
     pauseAgentButton.addEventListener("click", () => sendControl(agentPaused ? "resume" : "pause"));
     stopAgentButton.addEventListener("click", () => { if (window.confirm("Stop the connected agent?")) sendControl("stop"); });
-    setInterval(pollControl, 1000);
+    if (!viewerParams.has("embed")) setInterval(pollControl, 1000);
+
+    if (viewerParams.has("embed")) {
+      document.body.classList.add("embedded");
+      setRunHidden(true);
+      setSideHidden(true);
+    }
 
     syncR2ColorControls();
     setRunTab(state.runTab);
     applyPanelLayout();
-    loadRuns().catch(error => {
-      statusEl.textContent = error.message;
-    });
+    if (viewerParams.has("run")) {
+      reportTree("正在加载本次搜索树…");
+      pollRequestedRun();
+    } else {
+      loadRuns().catch(error => reportTree(error.message));
+    }
   </script>
 </body>
 </html>
