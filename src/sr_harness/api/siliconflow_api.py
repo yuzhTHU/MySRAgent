@@ -5,13 +5,14 @@ import requests
 from dotenv import load_dotenv
 from collections import defaultdict
 from typing import Generator, List, Dict
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class SiliconFlowAPI(LLMAPI):
+@BaseAPI.register("siliconflow")
+class SiliconFlowAPI(BaseAPI):
     supported_models = [
         "Qwen3-8B",
         "Deepseek-V3",

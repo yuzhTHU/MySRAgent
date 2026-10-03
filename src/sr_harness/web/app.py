@@ -11,7 +11,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .interaction import InteractionController
+from ..runtime import InteractionController
 
 
 WEB_DIR = Path(__file__).resolve().parent

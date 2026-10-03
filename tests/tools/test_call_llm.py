@@ -19,7 +19,7 @@ class TestLLMTool:
         assert tool.metadata.name == "call_llm"
 
     def test_execute_qwen3_8b(self):
-        """测试通过 LLMAPI 工厂调用模型。"""
+        """测试通过 BaseAPI 工厂调用模型。"""
         class FakeResult:
             usage = {"token": {"prompt": 1}, "price": {"total": 0.0}}
 
@@ -31,10 +31,10 @@ class TestLLMTool:
                 assert n == 1
                 return FakeResult()
 
-        from sr_harness.api import LLMAPI
+        from sr_harness.api import BaseAPI
 
         monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: FakeAPI())
+        monkeypatch.setattr(BaseAPI, "create", lambda *args, **kwargs: FakeAPI())
         tool = LLMTool()
         messages = [{"role": "user", "content": "用一句话回答：1+1 等于几？"}]
 
@@ -63,8 +63,8 @@ class TestLLMTool:
             def __call__(self, messages, n=1):
                 return FakeResult()
 
-        from sr_harness.api import LLMAPI
-        monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: FakeAPI())
+        from sr_harness.api import BaseAPI
+        monkeypatch.setattr(BaseAPI, "create", lambda *args, **kwargs: FakeAPI())
 
         tool = LLMTool()
         messages = [{"role": "user", "content": "Hello"}]
@@ -82,8 +82,8 @@ class TestLLMTool:
 
     def test_execute_invalid_provider(self, monkeypatch):
         """测试无效提供商。"""
-        from sr_harness.api import LLMAPI
-        monkeypatch.setattr(LLMAPI, "create", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad provider")))
+        from sr_harness.api import BaseAPI
+        monkeypatch.setattr(BaseAPI, "create", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad provider")))
 
         tool = LLMTool()
         messages = [{"role": "user", "content": "Hello"}]

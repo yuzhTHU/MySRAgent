@@ -4,13 +4,14 @@ import logging
 from openai import OpenAI
 from collections import defaultdict
 from typing import Generator, List, Dict
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class DeepSeekAPI(LLMAPI):
+@BaseAPI.register("deepseek")
+class DeepSeekAPI(BaseAPI):
     supported_models = [
         "deepseek-chat",
         "deepseek-reasoner",

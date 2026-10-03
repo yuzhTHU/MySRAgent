@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import csv
-import shutil
 import threading
-import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,160 +10,11 @@ from types import SimpleNamespace
 import numpy as np
 
 from ..agents.sr_agent_interactive import SRAgentInteractive
-from ..api.llm_api import LLMAPI
-from ..agents.model_router import ModelRouter
 from ..core import json_value
-from .interaction import InteractionController
-
-
-def add_variable_descriptions(messages, descriptions, variables):
-    rows = [
-        f"- {name}: {descriptions[name]}"
-        for name in variables
-        if descriptions.get(name)
-    ]
-    if not rows:
-        return messages
-    for message in messages:
-        if message.get("role") == "user":
-            message["content"] += "\n\nVariable descriptions:\n" + "\n".join(rows)
-            break
-    return messages
-
-
-class WebInteractiveAgent(SRAgentInteractive):
-    def __init__(self, *, session, **kwargs):
-        self.session = session
-        super().__init__(interaction_controller=session.controller, **kwargs)
-        with self.session.lock:
-            self.session.run_state = self.run_state
-
-    def emit(self, kind, payload):
-        self.session.controller.publish(kind, json_value(payload))
-
-    def build_initial_prompt(self, *args, **kwargs):
-        # Tools are initialized by fit before this hook. Keep the actual workspace
-        # available after completion, including runs interrupted by the user.
-        with self.session.lock:
-            for tool in self.tools:
-                workspace = tool.context.get("workspace")
-                if workspace is not None:
-                    workspace.retain = True
-                    if self.session.workspace != workspace.path:
-                        for item in self.session.workspace.iterdir():
-                            shutil.move(str(item), str(workspace.path / item.name))
-                        self.session.workspace = workspace.path
-                    break
-        prompt = super().build_initial_prompt(*args, **kwargs)
-        with self.session.lock:
-            overrides = self.session.prompt_overrides.copy()
-            descriptions = self.session.variable_descriptions.copy()
-        X = args[1] if len(args) > 1 else kwargs["X"]
-        y = args[2] if len(args) > 2 else kwargs["y"]
-        add_variable_descriptions(prompt, descriptions, [*X, *y])
-        for message in prompt:
-            if message.get("role") in overrides:
-                message["content"] = overrides[message["role"]]
-        return prompt
-
-    def before_iteration(self, buffer, R, L, C):
-        self.emit("activity", {"phase": "checkpoint", "coord": {"R": R, "C": C, "L": L}})
-        super().before_iteration(buffer, R=R, L=L, C=C)
-        with self.session.lock:
-            settings = self.session.pending_settings
-            self.session.pending_settings = None
-        if settings:
-            try:
-                api = LLMAPI.create(settings["llm_provider"], settings["llm_model"],
-                                    tool_list=self.tools, tool_parser=self.tool_parser)
-                self.llm_api = api
-                self.llm_provider = settings["llm_provider"]
-                self.llm_model = settings["llm_model"]
-                self.model_router.base_provider = self.llm_provider
-                self.model_router.base_model = self.llm_model
-                self.model_router.enabled = False
-                for tool in self.tools:
-                    tool.context.update(settings)
-                with self.session.lock:
-                    self.session.settings.update(settings)
-                self.emit("settings_applied", settings)
-            except Exception as exc:
-                self.emit("settings_error", {"error": str(exc)})
-
-    def request_llm(self, prompt, R, L, C):
-        self.emit("context", {"messages": prompt, "coord": {"R": R, "C": C, "L": L}})
-        route = self.model_router.route(task_score=self._task_route_score,
-                                       task_reasons=self._task_route_reasons, refinement_step=L)
-        self.emit("activity", {"phase": "model", "coord": {"R": R, "C": C, "L": L},
-                               "provider": route.provider, "model": route.model})
-        responses, usage = super().request_llm(prompt, R=R, L=L, C=C)
-        self.emit("activity", {"phase": "processing", "coord": {"R": R, "C": C, "L": L}})
-        cumulative_usage = {
-            "token": self.token_counter.named_count,
-            "price": self.money_counter.named_count,
-        }
-        tool_schemas = {
-            tool.metadata.name: {
-                "description": tool.metadata.description,
-                "parameters": tool.metadata.parameters or {},
-            }
-            for tool in self.tools
-            if getattr(tool, "metadata", None) is not None
-        }
-        for K, (content, calls, message) in enumerate(responses, 1):
-            self.emit("assistant", {"content": content, "message": message, "tool_calls": calls,
-                                    "tool_schemas": tool_schemas,
-                                    "coord": {"R": R, "C": C, "L": L, "K": K},
-                                    "usage": usage, "cumulative_usage": cumulative_usage})
-        return responses, usage
-
-    def tool_schema(self, name):
-        return next(
-            ({"description": tool.metadata.description,
-              "parameters": tool.metadata.parameters or {}} for tool in self.tools
-             if tool.metadata.name == name),
-            {},
-        )
-
-    def execute_action(self, actions):
-        results = []
-        for action in actions:
-            tool_schema = self.tool_schema(action.name)
-            # Check stop/pause without consuming queued guidance.
-            self.emit("activity", {"phase": "checkpoint", "tool": action.name})
-            self.interaction_controller.wait_until_running()
-            self.emit("activity", {"phase": "tool", "tool": action.name})
-            self.emit("tool_start", {"call": action, "tool_schema": tool_schema})
-            started_at = time.monotonic()
-            try:
-                result = super().execute_action([action])[0]
-            except BaseException as exc:
-                self.emit("tool_error", {"call": action, "tool_schema": tool_schema,
-                                         "duration_seconds": time.monotonic() - started_at,
-                                         "error": str(exc)})
-                raise
-            self.emit("tool_result", {"call": action, "tool_schema": tool_schema,
-                                      "duration_seconds": time.monotonic() - started_at,
-                                      "result": result})
-            results.append(result)
-        self.emit("activity", {"phase": "processing"})
-        return results
-
-    def collect_candidates(self, *args, **kwargs):
-        self.emit("activity", {"phase": "ranking"})
-        records = super().collect_candidates(*args, **kwargs)
-        value = json_value([record.display_dict() for record in records])
-        with self.session.lock:
-            self.session.topk = value
-        self.emit("topk", {"records": value})
-        return records
-
-    def record_tool_calls(self, tool_calls, results, R, L, C, forced=False):
-        super().record_tool_calls(tool_calls, results, R=R, L=L, C=C, forced=forced)
-        if forced:
-            for call, result in zip(tool_calls, results):
-                self.emit("tool_result", {"call": call, "tool_schema": self.tool_schema(call.name),
-                                          "result": result, "forced": True})
+from ..interaction import InteractionManager, WebInteractionManager
+from ..runtime import InteractionController
+from ..interaction.web import add_variable_descriptions
+from ..runtime import ModelRouter
 
 
 class InteractiveSession:
@@ -187,15 +36,22 @@ class InteractiveSession:
         self.prompt_overrides = {}
         self.variable_descriptions = {}
         self.state = "idle"
-        self.topk = []
         self.result = None
         self.run_state = None
         self.thread = None
 
     def snapshot(self):
         with self.lock:
+            topk = (
+                []
+                if self.run_state is None
+                else json_value([
+                    record.display_dict()
+                    for record in self.run_state.ranked_candidates()
+                ])
+            )
             return {"state": self.state, "settings": self.settings.copy(),
-                    "pending_settings": self.pending_settings, "topk_records": self.topk,
+                    "pending_settings": self.pending_settings, "topk_records": topk,
                     "result": self.result, "run_id": self.run_id,
                     "initial_prompt": self.initial_prompt, "supplied_data": self.data is not None,
                     "workspace": str(self.workspace), **self.controller.status()}
@@ -303,6 +159,8 @@ class InteractiveSession:
             ),
             max_refinement_depth=settings["max_refinement_depth"],
             use_workspace=True,
+            tools=[],
+            interaction_manager=InteractionManager(),
         )
         messages = SRAgentInteractive.build_initial_prompt(
             preview_agent, description, X, y, [],
@@ -356,7 +214,8 @@ class InteractiveSession:
                 use_workspace=True,
             )
             options.setdefault("max_workers", 0)
-            agent = WebInteractiveAgent(session=self, **options)
+            manager = WebInteractionManager(self)
+            agent = SRAgentInteractive(interaction_manager=manager, **options)
             with self.lock:
                 self.state = "running"
             self.controller.publish("lifecycle", {"state": "running"})

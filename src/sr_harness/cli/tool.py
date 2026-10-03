@@ -93,9 +93,13 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
 
     call_parser = subparsers.add_parser("call", help="Call one registered tool.")
     call_parser.add_argument("tool", help="Tool name.")
-    call_parser.add_argument("--context", default="context.npz", help="Path to context.npz containing BaseTool context fields.")
+    call_parser.add_argument("--context", default="context.npz", help=(
+        "Path to context.npz containing BaseTool context fields."
+    ))
     call_parser.add_argument("--target", default=None, help="Override context target name.")
-    call_parser.add_argument("--params", default=None, help='Tool parameters as a JSON object, e.g. \'{"f": "sin(x1)"}\'.')
+    call_parser.add_argument("--params", default=None, help=(
+        'Tool parameters as a JSON object, e.g. \'{"f": "sin(x1)"}\'.'
+    ))
     call_parser.add_argument("--params-file", default=None, help="JSON file with tool parameters.")
     return parser
 

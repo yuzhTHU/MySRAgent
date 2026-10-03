@@ -75,20 +75,46 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     else:
         parser.description = "LLM-SRBench Evaluation Script."
         parser.formatter_class = argparse.ArgumentDefaultsHelpFormatter
-    parser.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms(), help="符号回归算法名称")
-    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
-    parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
-    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
-    parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
-    parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms(), help=(
+        "符号回归算法名称"
+    ))
+    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help=(
+        "Experiment task name used when auto-generating exp_name."
+    ))
+    parser.add_argument("--exp_name", default=None, help=(
+        "Experiment name. Defaults to a timestamped name."
+    ))
+    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help=(
+        "Root directory for logs and run artifacts."
+    ))
+    parser.add_argument("--seed", type=int, default=-1, help=(
+        "Random seed. Default -1 means using current system time."
+    ))
+    parser.add_argument("--save_path", default=None, help=(
+        "Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name."
+    ))
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
-    parser.add_argument("--debug", action="store_true", default=False, help="Enable debug mode (verbose + raise caught exceptions).")
-    parser.add_argument("--data_root", type=str, default=str(Path("data") / "llm-srbench-data"), help="HDF5 数据文件所在目录")
-    parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help="数据集名称, 默认评估全部数据集")
-    parser.add_argument("--problem_names", type=str, default=None, nargs="+", help="仅评估指定问题（方程）ID, 默认评估全部问题")
-    parser.add_argument("--skip_existing", action="store_true", default=False, help="如果结果文件已存在则跳过评估")
-    parser.add_argument("--skip_successful", action="store_true", default=True, help="如果结果文件已存在且成功则跳过评估")
-    parser.add_argument("--anonymize", action="store_true", help="Anonymize agent-facing variables as x1..xn and target as y.")
+    parser.add_argument("--debug", action="store_true", default=False, help=(
+        "Enable debug mode (verbose + raise caught exceptions)."
+    ))
+    parser.add_argument("--data_root", type=str, default=str(Path("data") / "llm-srbench-data"), help=(
+        "HDF5 数据文件所在目录"
+    ))
+    parser.add_argument("--datasets", type=str, default=None, nargs="+", choices=list(DATASET_SPLITS.keys()), help=(
+        "数据集名称, 默认评估全部数据集"
+    ))
+    parser.add_argument("--problem_names", type=str, default=None, nargs="+", help=(
+        "仅评估指定问题（方程）ID, 默认评估全部问题"
+    ))
+    parser.add_argument("--skip_existing", action="store_true", default=False, help=(
+        "如果结果文件已存在则跳过评估"
+    ))
+    parser.add_argument("--skip_successful", action="store_true", default=True, help=(
+        "如果结果文件已存在且成功则跳过评估"
+    ))
+    parser.add_argument("--anonymize", action="store_true", help=(
+        "Anonymize agent-facing variables as x1..xn and target as y."
+    ))
     # 解析 --alg 参数以获取对应的 update_parser
     algorithm_probe = argparse.ArgumentParser(add_help=False)
     algorithm_probe.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms())

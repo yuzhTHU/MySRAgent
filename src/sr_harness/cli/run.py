@@ -20,6 +20,27 @@ from sr_harness.utils import add_minus_flags, add_negation_flags, format_pareto_
 SCRIPT_NAME = "run"
 _logger = logging.getLogger(f"sr_harness.{SCRIPT_NAME}")
 
+AGENT_OPTION_NAMES = (
+    "llm_provider",
+    "llm_model",
+    "tools",
+    "local_sample_size",
+    "max_refinement_depth",
+    "global_width",
+    "max_restart_loop",
+    "restart_top_k",
+    "verbose",
+    "tool_parser",
+    "max_workers",
+    "validation_fraction",
+    "split_by",
+    "split_random_state",
+    "force_initial_diagnostics",
+    "auto_routing",
+    "strong_llm_provider",
+    "strong_llm_model",
+)
+
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
     if parser is None:
@@ -31,41 +52,83 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     else:
         parser.description = "Run SRAgent on a synthetic symbolic-regression problem."
         parser.formatter_class = argparse.ArgumentDefaultsHelpFormatter
-    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help="Experiment task name used when auto-generating exp_name.")
-    parser.add_argument("--exp_name", default=None, help="Experiment name. Defaults to a timestamped name.")
-    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help="Root directory for logs and run artifacts.")
-    parser.add_argument("-f", "--equation", default="y = sin(x1 - x2)", help="Target equation. Example: 'y = sin(x1 - x2)'.")
-    parser.add_argument("--problem_description", default=None, help="Problem description passed to the agent. Defaults to one derived from --equation.")
-    parser.add_argument("--features", default=None, help="Optional comma-separated feature names. Defaults to variables parsed from --equation.")
-    parser.add_argument("--anonymize", action="store_true", help="Anonymize agent-facing variables as x1..xn and target as y.")
+    parser.add_argument("--name", default=f"{SCRIPT_NAME}", help=(
+        "Experiment task name used when auto-generating exp_name."
+    ))
+    parser.add_argument("--exp_name", default=None, help=(
+        "Experiment name. Defaults to a timestamped name."
+    ))
+    parser.add_argument("--save_dir", default=f"./logs/{SCRIPT_NAME}", help=(
+        "Root directory for logs and run artifacts."
+    ))
+    parser.add_argument("-f", "--equation", default="y = sin(x1 - x2)", help=(
+        "Target equation. Example: 'y = sin(x1 - x2)'."
+    ))
+    parser.add_argument("--problem_description", default=None, help=(
+        "Problem description passed to the agent. Defaults to one derived from --equation."
+    ))
+    parser.add_argument("--features", default=None, help=(
+        "Optional comma-separated feature names. Defaults to variables parsed from --equation."
+    ))
     parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
-    parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
+    parser.add_argument("--seed", type=int, default=-1, help=(
+        "Random seed. Default -1 means using current system time."
+    ))
     parser.add_argument("--x_low", type=float, default=0.0, help="Lower bound for random features.")
-    parser.add_argument("--x_high", type=float, default=1.0, help="Upper bound for random features.")
-    parser.add_argument("--noise_std_ratio", type=float, default=0.0, help="Gaussian noise standard deviation added to the target.")
+    parser.add_argument("--x_high", type=float, default=1.0, help=(
+        "Upper bound for random features."
+    ))
+    parser.add_argument("--noise_std_ratio", type=float, default=0.0, help=(
+        "Gaussian noise standard deviation added to the target."
+    ))
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
-    parser.add_argument("--strong_llm_provider", default=None, help="Optional provider for the strong backend used by auto-routing. Defaults to --llm_provider.")
-    parser.add_argument("--strong_llm_model", default=None, help="Optional strong model for complex tasks or escalation after two unsuccessful rounds.")
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
-    parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help="Maximum agent refinement depth.")
-    parser.add_argument("-C", "--global_width", type=int, default=2, help="Number of independent branches per restart loop.")
-    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help="Maximum number of best-solution restart loops.")
-    parser.add_argument("--restart_top_k", type=int, default=1, help="Number of previous best formulas to inject into the next restart prompt.")
-    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
-    parser.add_argument("--save_path", default=None, help="Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name.")
+    parser.add_argument("--strong_llm_provider", default=None, help=(
+        "Optional provider for the strong backend used by auto-routing. Defaults to --llm_provider."
+    ))
+    parser.add_argument("--strong_llm_model", default=None, help=(
+        "Optional strong model for complex tasks or escalation after two unsuccessful rounds."
+    ))
+    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help=(
+        "Optional list of tools to use. Default is all built-in tools."
+    ))
+    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help=(
+        "Number of LLM samples to generate for each branch."
+    ))
+    parser.add_argument("-L", "--max_refinement_depth", type=int, default=5, help=(
+        "Maximum agent refinement depth."
+    ))
+    parser.add_argument("-C", "--global_width", type=int, default=2, help=(
+        "Number of independent branches per restart loop."
+    ))
+    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help=(
+        "Maximum number of best-solution restart loops."
+    ))
+    parser.add_argument("--restart_top_k", type=int, default=1, help=(
+        "Number of previous best formulas to inject into the next restart prompt."
+    ))
+    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help=(
+        "Tool response parser type."
+    ))
+    parser.add_argument("--save_path", default=None, help=(
+        "Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name."
+    ))
     parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
-    parser.add_argument("--debug", action="store_true", default=True, help="Enable debug mode (verbose + raise caught exceptions).")
-    parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
-    parser.add_argument("--workspace_files", default=None, type=str, nargs="+", help="Files or directories to link into the interactive workspace.")
-    parser.add_argument("--web", action="store_true", help="Open the browser workbench with this dataset.")
-    parser.add_argument("--web_host", default="127.0.0.1")
-    parser.add_argument("--web_port", type=int, default=8000)
-    parser.add_argument("--no_browser", action="store_true")
-    parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
-    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
-    parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
+    parser.add_argument("--debug", action="store_true", default=True, help=(
+        "Enable debug mode (verbose + raise caught exceptions)."
+    ))
+    parser.add_argument("--max_workers", type=int, default=0, help=(
+        "Maximum number of parallel workers for tool execution. 0 means no parallel execution."
+    ))
+    parser.add_argument("--validation_fraction", type=float, default=0.2, help=(
+        "Fraction of samples held out for validation."
+    ))
+    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help=(
+        "Validation split strategy."
+    ))
+    parser.add_argument("--split_random_state", type=int, default=42, help=(
+        "Random seed used by the random validation split."
+    ))
     parser.add_argument("--force_initial_diagnostics", action=argparse.BooleanOptionalAction, default=False, help=(
         "Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws."
     ))
@@ -107,33 +170,18 @@ def make_dataset(args):
     return features, target, formula, data
 
 
+def build_agent_options(args: argparse.Namespace) -> dict:
+    """Build the validated SRAgent configuration for this run."""
+    options = {name: getattr(args, name) for name in AGENT_OPTION_NAMES}
+    if not 0 <= options["validation_fraction"] < 1:
+        raise ValueError("validation_fraction must be in [0, 1).")
+    if options["max_workers"] < 0:
+        raise ValueError("max_workers must be non-negative.")
+    return options
+
+
 def run_experiment(args: argparse.Namespace) -> dict:
     features, target, formula, data = make_dataset(args)
-
-    if args.anonymize:
-        feature_mapping = {name: f"x{i}" for i, name in enumerate(features, start=1)} | {target: "y"}
-        anonymized_data = {feature_mapping[name]: values for name, values in data.items()}
-        anonymized_features = [feature_mapping[name] for name in features]
-        anonymized_target = feature_mapping[target]
-        anonymized_formula = formula.copy()
-        for var in anonymized_formula.iter_preorder():
-            if not isinstance(var, nd.Variable):
-                pass
-            elif var.name not in feature_mapping:
-                raise ValueError(f"Variable '{var.name}' in the formula is not in the feature mapping.")
-            else:
-                var.name = feature_mapping[var.name]
-        _logger.note(
-            f"Anonymization enabled. "
-            f"Original features {features} mapped to {anonymized_features}, "
-            f"target {target} mapped to {anonymized_target}.\n"
-            f"Original formula: {target} = {formula}\n"
-            f"Anonymized formula: {anonymized_target} = {anonymized_formula}\n"
-        )
-        features = anonymized_features
-        target = anonymized_target
-        formula = anonymized_formula
-        data = anonymized_data
 
     X = {name: data[name] for name in features}
     y = {target: data[target]}
@@ -141,17 +189,7 @@ def run_experiment(args: argparse.Namespace) -> dict:
         f"Find the relationship {target} = f({', '.join(features)}). "
         f"The synthetic target was generated from an unknown formula."
     )
-    if getattr(args, "web", False):
-        from sr_harness.cli.web import serve
-        options = {key: getattr(args, key) for key in (
-            "llm_provider", "llm_model", "tools", "local_sample_size",
-            "max_refinement_depth", "global_width", "max_restart_loop",
-            "restart_top_k", "verbose", "tool_parser", "workspace_files",
-        )}
-        serve(args.save_path, host=args.web_host, port=args.web_port,
-              open_browser=not args.no_browser, agent_options=options, data=(X, y),
-              initial_prompt=problem_description)
-        return
+    agent_options = build_agent_options(args)
     _logger.note(
         f"Starting experiment {args.exp_name}\n"
         f"Equation: {target} = {formula}\n"
@@ -159,27 +197,7 @@ def run_experiment(args: argparse.Namespace) -> dict:
         f"Generated {args.n_samples} samples with seed {args.seed}\n"
     )
 
-    agent = SRAgent(
-        llm_provider=args.llm_provider,
-        llm_model=args.llm_model,
-        tools=args.tools,
-        local_sample_size=args.local_sample_size,
-        max_refinement_depth=args.max_refinement_depth,
-        global_width=args.global_width,
-        max_restart_loop=args.max_restart_loop,
-        restart_top_k=args.restart_top_k,
-        verbose=args.verbose,
-        tool_parser=args.tool_parser,
-        save_path=args.save_path,
-        max_workers=args.max_workers,
-        validation_fraction=args.validation_fraction,
-        split_by=args.split_by,
-        split_random_state=args.split_random_state,
-        force_initial_diagnostics=args.force_initial_diagnostics,
-        auto_routing=args.auto_routing,
-        strong_llm_provider=args.strong_llm_provider,
-        strong_llm_model=args.strong_llm_model,
-    )
+    agent = SRAgent(save_path=args.save_path, **agent_options)
 
     result = {
         "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -187,8 +205,6 @@ def run_experiment(args: argparse.Namespace) -> dict:
         "target_formula": f"{target} = {formula}",
         "noise_std_ratio": args.noise_std_ratio,
         "random_seed": args.seed,
-        "best_formula": None,
-        "best_mse": None,
         "status": "not_started",
         "progress": None,
         "token_usage": None,
@@ -202,7 +218,7 @@ def run_experiment(args: argparse.Namespace) -> dict:
         ),
     }
     try:
-        result |= agent.fit(X=X, y=y, problem_description=problem_description)
+        result |= agent.run(X=X, y=y, problem_description=problem_description)
     except KeyboardInterrupt as e:
         _logger.note("Experiment interrupted by user.")
         result |= getattr(e, "partial_result", {"status": "interrupted"})
@@ -218,13 +234,23 @@ def run_experiment(args: argparse.Namespace) -> dict:
         result["money_usage"] = agent.money_counter.to_str(mode='count', mode_of_detail=None, mode_of_percent=None)
         result["tools_usage"] = agent.tools_counter.to_str(mode='count', mode_of_detail='count', mode_of_percent='by_count')
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k not in ['pareto_front', 'topk_records']])
+        log = '\n'.join([
+            f"[red]{k.replace('_', ' ').title()}[reset]: {v}"
+            for k, v in result.items()
+            if k not in {"pareto_front", "candidates"}
+        ])
+        candidates = result.get("candidates", [])
+        pareto = [
+            {"formula": candidates[index]["formula"], **candidates[index]["details"]}
+            for index in result.get("pareto_front", [])
+            if 0 <= index < len(candidates)
+        ]
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
             f"{log}\n"
             f"\n[red bold]Pareto Front[reset]\n"
-            f"{format_pareto_front(result.get('pareto_front'))}\n"
+            f"{format_pareto_front(pareto)}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
         # 保存文件
@@ -269,8 +295,6 @@ def main(args: argparse.Namespace) -> int:
 
     result = run_experiment(args)
     _logger.note(tag2ansi(f"Experiment completed. Re-run the script with [green bold]{args.invocation}[reset]"))
-    if result is None:
-        return 0
     if result.get("status") == "interrupted":
         return 130
     return 0 if result.get("status") in {"completed", "early_stopped"} else 1

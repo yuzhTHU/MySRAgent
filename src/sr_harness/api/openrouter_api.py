@@ -5,13 +5,14 @@ import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Generator, List, Dict
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class OpenRouterAPI(LLMAPI):
+@BaseAPI.register("openrouter")
+class OpenRouterAPI(BaseAPI):
     supported_models = [
         "qwen/qwen3.6-flash",
         "moonshotai/kimi-k2",

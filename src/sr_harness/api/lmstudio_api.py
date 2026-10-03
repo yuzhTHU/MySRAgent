@@ -10,13 +10,14 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 from dotenv import load_dotenv
 
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class LMStudioAPI(LLMAPI):
+@BaseAPI.register("lmstudio")
+class LMStudioAPI(BaseAPI):
     """LLM API adapter for an LM Studio server.
 
     ``LMSTUDIO_ENDPOINT`` may point at LM Studio's native ``/api/v1/chat``

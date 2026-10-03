@@ -39,7 +39,7 @@ These are symbolic-accuracy results reported in the manuscript. See the paper fo
 - Git and a working C/C++ toolchain are recommended.
 - Some optional actions have additional requirements, such as Julia for PySR or PyTorch for neural components.
 
-The following setup mirrors [`install.sh`](install.sh) while using HTTPS clone URLs:
+The following setup mirrors [`scripts/install.sh`](scripts/install.sh) while using HTTPS clone URLs:
 
 ```bash
 git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
@@ -128,12 +128,13 @@ agent = SRAgent(
     save_path="logs/python_api_demo",
 )
 
-result = agent.fit(
+result = agent.run(
     X={"x1": x1, "x2": x2},
     y={"y": np.sin(x1 - x2)},
     problem_description="Discover y as a function of x1 and x2.",
 )
-print(result["best_formula"])
+best = result["candidates"][result["best_candidate"]]
+print(best["formula"])
 ```
 
 ## LLM-SRBench Evaluation
@@ -177,14 +178,17 @@ The benchmark entry point also contains adapters for conventional and LLM-based 
 
 ## Logs and Web Visualization
 
-When `save_path` is enabled, SRHarness writes append-only search artifacts including:
+`SearchRunState` always keeps the live run in memory. When `save_path` is enabled, it also writes:
 
-- `manifest.json`: run configuration and visualization metadata;
-- `records.jsonl`: search-tree nodes, prompts, actions, results, and usage;
+- `run.json`: the globally unique run ID and agent metadata;
+- `nodes.jsonl`: search nodes, parent relations, prompts, actions, results, and usage;
+- `result.json`: candidates plus the Pareto-front and best-candidate indices;
 - `response.jsonl`: raw model responses and token/cost accounting;
 - `tool_calls.jsonl`: tool invocations and outputs;
-- `search_record.jsonl`: the evolving candidate/Pareto state;
-- result and text log files produced by the selected entry point.
+- text logs and entry-point-specific result files.
+
+With `save_path=None`, search identity, parent relations, candidates, and results remain fully
+available through `agent.run_state`, while no search-state files are created.
 
 Install and launch the web viewer:
 
@@ -193,9 +197,23 @@ pip install -e ".[web]"
 sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 ```
 
-Then open <http://127.0.0.1:8000/>. The server recursively discovers runs containing both `manifest.json` and `records.jsonl`.
+Then open <http://127.0.0.1:8000/>. The Web API and search viewer read the active session's
+in-memory `SearchRunState`; they do not depend on persisted run files.
 
 ![SRHarness Web search-tree viewer](assets/web.png)
+
+The workbench opens on **Data & Problem**. Select or upload a CSV, assign one target and one or
+more features, edit variable descriptions, and drag variables into the X/Y/Hue/Size slots for a
+quick relationship preview. SRHarness generates the initial system and user prompts from that
+configuration; either prompt remains editable before the run starts. The included `demo.csv`
+contains three input columns (including one categorical column) and one numeric target.
+
+During a run, **Timeline** shows model reasoning, tool calls, results, token/cost usage, and control
+events, while **Current Context** exposes the messages associated with each R-C-L node. The search
+tree and candidate panel stay linked to those nodes and can switch between all ranked candidates
+and the Pareto front. Guidance, model changes, pause/resume, stop, and inline `ask_human` replies
+take effect at safe operation boundaries. The interface supports Chinese/English text, light/dark
+themes, and resizable or collapsible side panels.
 
 ### Research backends, subagents, and live control
 
@@ -209,12 +227,15 @@ enabled, each newly generated scalar candidate receives a lightweight structural
 diagnostics are retained in candidate state. Documentation for EIC, SR4MDL, and ND2 is exposed as
 runtime read-only skills by each tool's `get_doc()` method.
 
-For live bidirectional control, share an `InteractionController` between `SRAgentInteractive` and
-`create_app(log_dir, controller=controller)`. The Web header can pause/resume/stop the agent, inject
-guidance at the next LLM boundary, and answer `ask_human` questions. Model auto-routing can use a
-cheap base backend for simple/early requests and an optional strong backend for complex or
-stagnated searches. Configure `strong_llm_provider`/`strong_llm_model`, or pass
-`auto_routing=False` to keep every request on the base backend.
+`SRAgentInteractive` accepts an `InteractionManager` that connects its shared search loop to a
+frontend. Its default `TerminalInteractionManager` handles `ask_human` in a terminal. The Web
+workbench injects a `WebInteractionManager`, which binds the run state and workspace to its session,
+handles pause/resume/stop and queued guidance at safe boundaries, and publishes model, tool, and
+candidate events. Frontend adapters do not own the scientific search state or duplicate the R-C-L
+loop. Model auto-routing can use a cheap base backend for simple/early requests and an optional
+strong backend for complex or stagnated searches. Configure
+`strong_llm_provider`/`strong_llm_model`, or pass `auto_routing=False` to keep every request on the
+base backend.
 
 ## Evaluation and Reproducibility Notes
 
@@ -237,20 +258,25 @@ See:
 ## Project Layout
 
 ```text
-├── src/sr_harness/        # Core package
-│   ├── api/             # LLM provider adapters
-│   ├── parser/          # Native/text/JSON/XML tool-call parsing
-│   ├── tools/           # Scientific actions and shared evaluation contract
-│   ├── skills/          # Reusable agent-facing scientific instructions
-│   ├── utils/           # Metrics, symbolic accuracy, logging, and utilities
-│   ├── web/             # Search-tree recording and viewer backend
-│   └── _vendor/         # Integrated benchmark/baseline adapters
-├── tests/               # Unit and integration tests
-├── scripts/             # Experiment and analysis utilities
-├── analysis/            # Analysis notebooks
-├── data/                # Local datasets; ignored by Git
-├── logs/                # Run artifacts; ignored by Git
-└── playground/          # Temporary experiments; ignored by Git
+├── src/sr_harness/          # Python package
+│   ├── agents/              # Batch and interactive SRAgent implementations
+│   ├── api/                 # BaseAPI and LLM provider adapters
+│   ├── core/                # API, tool, candidate, node, and run-state structures
+│   ├── interaction/         # Terminal and Web interaction managers
+│   ├── runtime/             # Model routing and interaction control
+│   ├── cli/                 # sr-harness subcommands
+│   ├── parser/              # Native/text/JSON/XML tool-call parsing
+│   ├── tools/               # Scientific actions and shared evaluation contract
+│   ├── skills/              # Reusable agent-facing scientific instructions
+│   ├── web/                 # Interactive workbench backend and static UI
+│   ├── utils/               # Metrics, symbolic accuracy, logging, and utilities
+│   └── _vendor/             # Integrated benchmark/baseline adapters
+├── tests/                   # Unit and integration tests
+├── scripts/                 # Experiment and analysis utilities
+├── analysis/                # Analysis notebooks
+├── data/                    # Local datasets; ignored by Git
+├── logs/                    # Run artifacts; ignored by Git
+└── playground/              # Temporary experiments; ignored by Git
 ```
 
 Repository conventions:
@@ -277,29 +303,3 @@ If you use this code, please cite **“SRHarness: A Harness for Agentic Symbolic
 ## License
 
 SRHarness is released under the [MIT License](LICENSE).
-
-### Interactive browser workbench
-
-```bash
-pip install -e '.[web]'
-sr-harness web --port 8000
-# Or use the interactive script's generated dataset:
-sr-harness run --web --equation 'y = sin(x1 - x2)'
-```
-
-The browser opens at `http://127.0.0.1:8000` (`--no-browser` disables opening).
-The workbench provides a live Workspace with drag-and-drop uploads, downloads and
-text previews; an execution timeline and current model context; the existing
-R–C–L–K viewer embedded alongside ranked formulas and metrics; and a prompt
-composer with model selection, pause/resume, stop, and inline `ask_human` replies.
-Configure a numeric CSV path and target column before starting, or leave the path
-empty to use demo data. Provider credentials use the existing configuration.
-
-Guidance and model changes apply before the next model request. Pause/stop take
-effect at operation boundaries, without forcibly cancelling an in-flight call.
-Responses and tool events update as they complete, rather than token by token.
-The server owns one run; restart it for another task. Workspaces remain on disk
-after completion. Uploads are limited to 256 MiB each and never overwrite existing
-files. Drag-out downloads depend on browser support; download links always work.
-The live timeline retains 1000 events; completed iterations remain in search logs.
-The original viewer remains at `/viewer` or via `sr-harness web --viewer-only`.

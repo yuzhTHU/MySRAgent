@@ -58,11 +58,7 @@ def add_negation_flags(parser: argparse.ArgumentParser):
                     'help': f"Disable {primary_name}"
                 })
     for arg in args_to_add:
-        parser.add_argument(
-            *arg['options'], 
-            dest=arg['dest'],
-            action=arg['action'],
-            default=arg['default'],
-            help=arg['help']
-        )
+        parser.add_argument(*arg['options'], dest=arg['dest'], action=arg['action'], default=arg['default'], help=(
+            arg['help']
+        ))
     return parser

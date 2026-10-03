@@ -179,9 +179,9 @@ class CreateSkill(BaseTool):
         model = self.context.get("llm_model")
         if not provider or not model:
             raise ValueError("create_skill requires llm_provider/llm_model context or a skill_authoring_callback.")
-        from ..api import LLMAPI
+        from ..api import BaseAPI
 
-        result = LLMAPI.create(provider, model)(
+        result = BaseAPI.create(provider, model=model)(
             messages, n=1, max_tokens=min(int(self.context.get("llm_max_tokens") or 4096), 4096),
         )
         content = ""

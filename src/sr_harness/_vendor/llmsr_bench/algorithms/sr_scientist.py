@@ -214,15 +214,31 @@ _ensure_sandboxfusion_on_import()
 
 
 def update_parser(parser):
-    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name used to infer model URL and API key.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.6-plus", help="Model name passed to SR-Scientist.")
-    parser.add_argument("--sr_scientist_model_url", default=None, help="OpenAI-compatible model API base URL.")
+    parser.add_argument("--llm_provider", default="openrouter", help=(
+        "LLM provider name used to infer model URL and API key."
+    ))
+    parser.add_argument("--llm_model", default="qwen/qwen3.6-plus", help=(
+        "Model name passed to SR-Scientist."
+    ))
+    parser.add_argument("--sr_scientist_model_url", default=None, help=(
+        "OpenAI-compatible model API base URL."
+    ))
     parser.add_argument("--sr_scientist_api_key", default=None, help="API key override.")
-    parser.add_argument("--sr_scientist_sandbox_urls", nargs="+", default=["http://127.0.0.1:8080/run_code"], help="SandboxFusion /run_code endpoints used by original SR-Scientist tools.")
-    parser.add_argument("--sr_scientist_mape_threshold", type=float, default=0.001, help="Initial MAPE target.")
-    parser.add_argument("--sr_scientist_num_turns", type=int, default=3, help="Original SR-Scientist --num-turns.")
-    parser.add_argument("--sr_scientist_top_k", type=int, default=3, help="Original SR-Scientist --top-k.")
-    parser.add_argument("--sr_scientist_max_assistant_turns", type=int, default=100, help="Original SR-Scientist --max-assistant-turns.")
+    parser.add_argument("--sr_scientist_sandbox_urls", nargs="+", default=["http://127.0.0.1:8080/run_code"], help=(
+        "SandboxFusion /run_code endpoints used by original SR-Scientist tools."
+    ))
+    parser.add_argument("--sr_scientist_mape_threshold", type=float, default=0.001, help=(
+        "Initial MAPE target."
+    ))
+    parser.add_argument("--sr_scientist_num_turns", type=int, default=3, help=(
+        "Original SR-Scientist --num-turns."
+    ))
+    parser.add_argument("--sr_scientist_top_k", type=int, default=3, help=(
+        "Original SR-Scientist --top-k."
+    ))
+    parser.add_argument("--sr_scientist_max_assistant_turns", type=int, default=100, help=(
+        "Original SR-Scientist --max-assistant-turns."
+    ))
     return parser
 
 

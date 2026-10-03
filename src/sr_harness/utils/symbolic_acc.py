@@ -28,7 +28,7 @@ def llm_judge_equivalence(
     max_retry = 3,
     retry_timeout = 5,
 ):
-    from ..api.llm_api import LLMAPI # utils 内的模块原则上不应该依赖于外部代码，加上这个防止循环依赖
+    from ..api import BaseAPI # utils 内的模块原则上不应该依赖于外部代码，加上这个防止循环依赖
     from .parse_json_with_template import parse_json_with_template
 
     messages = []
@@ -55,7 +55,7 @@ def llm_judge_equivalence(
         f"Variable ranges:\n"
         f"{"\n".join(f"- {name}: [{lo}, {hi}]" for name, (lo, hi) in ranges.items())}"
     )})
-    api = LLMAPI.create(llm_provider=llm_provider, llm_model=llm_model)
+    api = BaseAPI.create(llm_provider, model=llm_model)
     total_usage = {'token': {}, 'price': {}}
 
     def merge_usage(usage):

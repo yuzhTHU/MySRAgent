@@ -21,10 +21,18 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--pysr_niterations", type=int, default=1000000, help="PySR 进化迭代次数。")
     parser.add_argument("--pysr_maxsize", type=int, default=30, help="PySR 表达式最大复杂度。")
     parser.add_argument("--pysr_populations", type=int, default=31, help="PySR 种群数量。")
-    parser.add_argument("--pysr_max_samples", type=int, default=500, help="拟合时最多使用的训练样本数；<=0 表示使用全部样本。")
-    parser.add_argument("--pysr_binary_operators", nargs="+", default=["+", "-", "*", "/"], help='PySR 二元算子列表')
-    parser.add_argument("--pysr_unary_operators", nargs="+", default=["sin", "cos", "exp", "log", "sqrt", "square"], help="PySR 一元算子列表")
-    parser.add_argument("--pysr_model_selection", default="best", choices=["best", "accuracy", "score"], help="PySR 模型选择策略。")
+    parser.add_argument("--pysr_max_samples", type=int, default=500, help=(
+        "拟合时最多使用的训练样本数；<=0 表示使用全部样本。"
+    ))
+    parser.add_argument("--pysr_binary_operators", nargs="+", default=["+", "-", "*", "/"], help=(
+        'PySR 二元算子列表'
+    ))
+    parser.add_argument("--pysr_unary_operators", nargs="+", default=["sin", "cos", "exp", "log", "sqrt", "square"], help=(
+        "PySR 一元算子列表"
+    ))
+    parser.add_argument("--pysr_model_selection", default="best", choices=["best", "accuracy", "score"], help=(
+        "PySR 模型选择策略。"
+    ))
     return parser
 
 

@@ -44,22 +44,54 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("--codex_cmd", default=os.environ.get("CODEX_CMD"), help="Full Codex command prefix, e.g. 'npx --yes @openai/codex@latest'. Overrides --codex_bin.")
-    parser.add_argument("--codex_bin", default=os.environ.get("CODEX_BIN", "codex"), help="Codex executable used when --codex_cmd is unset.")
-    parser.add_argument("--codex_model", default=os.environ.get("CODEX_MODEL", "gpt-5.5"), help="Model passed to Codex CLI.")
-    parser.add_argument("--codex_timeout_seconds", default=int(os.environ.get("CODEX_TIMEOUT_SECONDS", "900")), type=int, help="Per-problem Codex wall-clock timeout.")
-    parser.add_argument("--codex_progress_interval", default=int(os.environ.get("CODEX_PROGRESS_INTERVAL", "30")), type=int, help="Seconds between Codex progress log lines. Use 0 to disable.")
-    parser.add_argument("--codex_echo_events", action='store_true', default=True, help="Print raw Codex JSONL events while saving them.")
-    parser.add_argument("--codex_sandbox", default=os.environ.get("CODEX_SANDBOX", "workspace-write"), help="Sandbox mode passed to Codex CLI.")
-    parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help="Optional Codex config override for approval_policy.")
-    parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help="Extra arguments inserted before the prompt.")
-    parser.add_argument("--codex_overwrite", action='store_true', default=False, help="Overwrite per-problem Codex public files and result JSON.")
-    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "60")), type=int, help="Wall-clock timeout for the finalization pass (second Codex call). 60s only allows a fast memory-based submission; reading logs / re-analysis times out and counts as missing.")
-    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help="Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed.")
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to exclude. Default is no excluded tools.")
-    parser.add_argument("--llm_provider", default="openrouter", help="LLM provider used for the symbolic-accuracy equivalence judge.")
-    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash", help="LLM model used for the symbolic-accuracy equivalence judge.")
+    parser.add_argument("--codex_cmd", default=os.environ.get("CODEX_CMD"), help=(
+        "Full Codex command prefix, e.g. 'npx --yes @openai/codex@latest'. Overrides --codex_bin."
+    ))
+    parser.add_argument("--codex_bin", default=os.environ.get("CODEX_BIN", "codex"), help=(
+        "Codex executable used when --codex_cmd is unset."
+    ))
+    parser.add_argument("--codex_model", default=os.environ.get("CODEX_MODEL", "gpt-5.5"), help=(
+        "Model passed to Codex CLI."
+    ))
+    parser.add_argument("--codex_timeout_seconds", default=int(os.environ.get("CODEX_TIMEOUT_SECONDS", "900")), type=int, help=(
+        "Per-problem Codex wall-clock timeout."
+    ))
+    parser.add_argument("--codex_progress_interval", default=int(os.environ.get("CODEX_PROGRESS_INTERVAL", "30")), type=int, help=(
+        "Seconds between Codex progress log lines. Use 0 to disable."
+    ))
+    parser.add_argument("--codex_echo_events", action='store_true', default=True, help=(
+        "Print raw Codex JSONL events while saving them."
+    ))
+    parser.add_argument("--codex_sandbox", default=os.environ.get("CODEX_SANDBOX", "workspace-write"), help=(
+        "Sandbox mode passed to Codex CLI."
+    ))
+    parser.add_argument("--codex_approval_policy", default=os.environ.get("CODEX_APPROVAL_POLICY"), help=(
+        "Optional Codex config override for approval_policy."
+    ))
+    parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help=(
+        "Extra arguments inserted before the prompt."
+    ))
+    parser.add_argument("--codex_overwrite", action='store_true', default=False, help=(
+        "Overwrite per-problem Codex public files and result JSON."
+    ))
+    parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "60")), type=int, help=(
+        "Wall-clock timeout for the finalization pass (second Codex call). 60s only allows a fast memory-based submission; reading logs / re-analysis times out and counts as missing."
+    ))
+    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help=(
+        "Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed."
+    ))
+    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help=(
+        "Optional list of tools to use. Default is all built-in tools."
+    ))
+    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help=(
+        "Optional list of tools to exclude. Default is no excluded tools."
+    ))
+    parser.add_argument("--llm_provider", default="openrouter", help=(
+        "LLM provider used for the symbolic-accuracy equivalence judge."
+    ))
+    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash", help=(
+        "LLM model used for the symbolic-accuracy equivalence judge."
+    ))
     return parser
 
 

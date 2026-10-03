@@ -7,13 +7,13 @@ if TYPE_CHECKING:
     from ..parser import BaseParser
 
 
-class LLMResult: # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
+class APICallResult: # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
     """
     Wrapper for LLM generator that captures the return value.
 
     Example:
         >>> api = OpenAIAPI(model='gpt-4o-mini')
-        >>> result = api("Hello", n=3)  # Returns LLMResult
+        >>> result = api("Hello", n=3)  # Returns APICallResult
         >>> for content, tool_call in result:
         ...     print(content, tool_call)  # Stream generated content and tool calls
         >>> print(result.usage)     # Access via property

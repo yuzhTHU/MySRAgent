@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sr_harness.core import ToolCall
-from sr_harness.api.llm_api import LLMAPI
+from sr_harness.api import BaseAPI
 from sr_harness.api.lmstudio_api import LMStudioAPI
 from sr_harness.tools import BaseTool, ToolMetadata
 
@@ -76,11 +76,11 @@ def test_lmstudio_factory_and_native_tool_call(monkeypatch):
         "usage": {"prompt_tokens": 10, "completion_tokens": 6, "total_tokens": 16},
     }
 
-    api = LLMAPI.create(
+    api = BaseAPI.create(
         "lmstudio",
-        "qwen_qwen3-4b-instruct-2507",
+        model="qwen_qwen3-4b-instruct-2507",
         tool_list=[DemoTool],
-        tool_parser="openai",
+        tool_parser_name="openai",
     )
     chunks, returned = _consume(api("use the tool", temperature=0))
 

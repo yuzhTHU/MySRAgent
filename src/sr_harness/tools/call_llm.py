@@ -22,9 +22,9 @@ class LLMTool(BaseTool):
             llm_model: Model name, e.g., "gpt-4o-mini", "deepseek-chat".
             messages: List of messages, each as [{"role": "user"|"assistant", "content": "..."}, ...].
         """
-        from ..api import LLMAPI
+        from ..api import BaseAPI
 
-        api = LLMAPI.create(llm_provider, llm_model)
+        api = BaseAPI.create(llm_provider, model=llm_model)
         content = ""
         for content, _, _ in (llm_result := api(messages, n=1)):
             pass

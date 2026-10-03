@@ -1,5 +1,5 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Thread-safe bidirectional control shared by interactive and web frontends."""
+"""Thread-safe bidirectional control for interactive frontends."""
 from __future__ import annotations
 
 import threading

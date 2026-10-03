@@ -68,11 +68,11 @@ class SubagentTool(BaseTool):
                 "usage": {},
             }
 
-        from ..api import LLMAPI
+        from ..api import BaseAPI
 
-        api = LLMAPI.create(
+        api = BaseAPI.create(
             self.context.get("subagent_llm_provider") or self.context.get("llm_provider"),
-            self.context.get("subagent_llm_model") or self.context.get("llm_model"),
+            model=self.context.get("subagent_llm_model") or self.context.get("llm_model"),
             tool_list=None,
         )
         result = api(messages, n=1, max_tokens=self.context.get("llm_max_tokens", 4096))

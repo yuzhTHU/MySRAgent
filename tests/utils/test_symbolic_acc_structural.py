@@ -20,7 +20,7 @@ def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
             seen["messages"] = messages
             return FakeResult()
 
-    monkeypatch.setattr("sr_harness.api.llm_api.LLMAPI.create", lambda *args, **kwargs: FakeAPI())
+    monkeypatch.setattr("sr_harness.api.BaseAPI.create", lambda *args, **kwargs: FakeAPI())
     result = llm_judge_equivalence(
         nd.parse("exp(x)"), nd.parse("1+x+x**2/2"),
         {"x": (0.0, 0.01)}, "openrouter", "test-model",

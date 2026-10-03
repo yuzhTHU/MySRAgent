@@ -37,7 +37,7 @@ SRHarness 围绕三项机制组织智能体方程发现过程：
 - 建议安装 Git 和可用的 C/C++ 编译工具链。
 - 部分可选动作有额外依赖，例如 PySR 需要 Julia，神经网络组件需要 PyTorch。
 
-以下流程与 [`install.sh`](install.sh) 一致，但使用 HTTPS 地址：
+以下流程与 [`scripts/install.sh`](scripts/install.sh) 一致，但使用 HTTPS 地址：
 
 ```bash
 git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
@@ -126,12 +126,13 @@ agent = SRAgent(
     save_path="logs/python_api_demo",
 )
 
-result = agent.fit(
+result = agent.run(
     X={"x1": x1, "x2": x2},
     y={"y": np.sin(x1 - x2)},
     problem_description="Discover y as a function of x1 and x2.",
 )
-print(result["best_formula"])
+best = result["candidates"][result["best_candidate"]]
+print(best["formula"])
 ```
 
 ## LLM-SRBench 评测
@@ -175,14 +176,17 @@ Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harn
 
 ## 日志与 Web 可视化
 
-启用 `save_path` 后，SRHarness 会写入追加式搜索资产，主要包括：
+`SearchRunState` 始终在内存中维护当前运行。启用 `save_path` 后，它还会写入：
 
-- `manifest.json`：运行配置与可视化元数据；
-- `records.jsonl`：搜索树节点、Prompt、动作、结果和用量；
+- `run.json`：全局唯一的运行 ID 与 Agent 元数据；
+- `nodes.jsonl`：搜索节点、父子关系、Prompt、动作、结果和用量；
+- `result.json`：候选公式，以及 Pareto front 和最佳候选的下标；
 - `response.jsonl`：原始模型响应与 token/费用统计；
 - `tool_calls.jsonl`：工具调用及输出；
-- `search_record.jsonl`：不断演化的候选公式/Pareto 状态；
-- 相应入口生成的最终结果与文本日志。
+- 文本日志与相应入口生成的结果文件。
+
+当 `save_path=None` 时，运行标识、父子关系、候选公式和最终结果仍可通过
+`agent.run_state` 完整访问，同时不会创建搜索状态文件。
 
 安装并启动 Web 查看器：
 
@@ -191,9 +195,21 @@ pip install -e ".[web]"
 sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 ```
 
-随后打开 <http://127.0.0.1:8000/>。服务会递归发现同时包含 `manifest.json` 与 `records.jsonl` 的运行目录。
+随后打开 <http://127.0.0.1:8000/>。Web API 与搜索查看器直接读取当前会话内存中的
+`SearchRunState`，不依赖持久化运行文件。
 
 ![SRHarness Web 搜索树查看器](assets/web.png)
+
+工作台默认打开“数据与问题”页。用户可以选择或上传 CSV，指定一个因变量和若干自变量，
+编辑变量描述，并将变量拖入 X/Y/Hue/Size 槽位以快速预览变量关系。SRHarness 会根据这些
+配置生成初始 System Prompt 和 User Prompt，两者均可在运行前编辑。内置 `demo.csv`
+包含三个输入列（其中一个是分类变量）和一个数值因变量。
+
+运行期间，“执行时间线”展示模型推理、工具调用及结果、token/费用用量和控制事件；
+“当前上下文”展示各个 R-C-L 节点对应的消息。搜索树与候选公式面板会联动到相应节点，
+候选公式可在全部排名结果和 Pareto front 之间切换。研究者指导、模型修改、暂停/继续、
+停止以及 `ask_human` 回复会在安全的操作边界生效。界面支持中英文、明暗主题，以及可调整
+宽度或折叠的左右面板。
 
 ### 研究后端、Subagent 与双向交互
 
@@ -206,17 +222,11 @@ sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
 三项研究工具的说明由各自 `get_doc()` 动态注册为
 只读 runtime skill，不在内置 `skills/` 目录维护副本。
 
-`SRAgentInteractive` 可与 Web 服务共享 `InteractionController`，从网页暂停、恢复、停止、
-注入研究者意见，并回复 `ask_human`：
-
-```python
-from sr_harness import InteractionController, SRAgentInteractive
-from sr_harness.web import create_app
-
-controller = InteractionController()
-agent = SRAgentInteractive(..., interaction_controller=controller)
-app = create_app("logs", controller=controller)
-```
+`SRAgentInteractive` 通过 `InteractionManager` 连接具体交互界面，同时继续使用统一的搜索
+循环。默认的 `TerminalInteractionManager` 在终端中处理 `ask_human`；Web 工作台则注入
+`WebInteractionManager`，负责将运行状态和工作区绑定到 Web Session，在安全边界处理暂停、
+恢复、停止和研究者意见，并发布模型、工具与候选事件。界面适配器不持有科研搜索状态，
+也不复制 R-C-L 循环。
 
 auto-routing 用于模型后端选择：简单任务和早期探索使用基础后端；配置了
 `strong_llm_provider` / `strong_llm_model` 后，复杂任务或两轮仍未收敛的搜索会升级到
@@ -244,20 +254,25 @@ auto-routing 用于模型后端选择：简单任务和早期探索使用基础�
 ## 项目结构
 
 ```text
-├── src/sr_harness/        # 核心 Python 包
-│   ├── api/             # LLM 服务适配器
-│   ├── parser/          # 原生/text/JSON/XML 工具调用解析
-│   ├── tools/           # 科学动作及统一评估契约
-│   ├── skills/          # 可复用的 Agent 科学指导文档
-│   ├── utils/           # 指标、符号准确率、日志及其它工具
-│   ├── web/             # 搜索树记录与查看器后端
-│   └── _vendor/         # 集成的 Benchmark/基线适配器
-├── tests/               # 单元测试与集成测试
-├── scripts/             # 实验及分析脚本
-├── analysis/            # 分析 notebook
-├── data/                # 本地数据，已被 Git 忽略
-├── logs/                # 运行资产，已被 Git 忽略
-└── playground/          # 临时实验，已被 Git 忽略
+├── src/sr_harness/          # Python 包
+│   ├── agents/              # 批处理与交互式 SRAgent
+│   ├── api/                 # BaseAPI 与 LLM 服务适配器
+│   ├── core/                # API、工具、候选、节点与运行状态结构
+│   ├── interaction/         # 终端与 Web 交互管理器
+│   ├── runtime/             # 模型路由与交互控制
+│   ├── cli/                 # sr-harness 子命令
+│   ├── parser/              # 原生/text/JSON/XML 工具调用解析
+│   ├── tools/               # 科学动作及统一评估契约
+│   ├── skills/              # 可复用的 Agent 科学指导文档
+│   ├── web/                 # 交互工作台后端与静态界面
+│   ├── utils/               # 指标、符号准确率、日志及其它工具
+│   └── _vendor/             # 集成的 Benchmark/基线适配器
+├── tests/                   # 单元测试与集成测试
+├── scripts/                 # 实验及分析脚本
+├── analysis/                # 分析 notebook
+├── data/                    # 本地数据，已被 Git 忽略
+├── logs/                    # 运行资产，已被 Git 忽略
+└── playground/              # 临时实验，已被 Git 忽略
 ```
 
 目录约定：
@@ -280,27 +295,3 @@ python -m pytest tests/ -v
 ## 许可证
 
 SRHarness 使用 [MIT License](LICENSE) 开源。
-
-### SRAgent Interactive 浏览器工作台
-
-```bash
-pip install -e '.[web]'
-sr-harness web --port 8000
-# 服务器 / SSH 环境下不自动打开浏览器
-sr-harness web --no-browser --host 127.0.0.1 --port 8000
-# 使用原交互脚本生成的数据和工具配置
-sr-harness run --web --equation 'y = sin(x1 - x2)'
-```
-
-打开 `http://127.0.0.1:8000`，在底部填写研究问题并点击“开始探索”。模型的凭据沿用现有 Provider 配置。工作台包含：
-
-- 左侧：真实 Agent Workspace，目录浏览、文本预览、拖入上传、点击下载；支持的桌面浏览器还可以拖出下载，不支持时使用下载按钮。单文件上限为 256 MiB，同名文件拒绝覆盖。运行结束后文件继续保留在日志目录中。
-- 中间：执行时间线及当前 LLM 请求上下文，包括 Provider 实际返回的推理、输出、工具参数及结果。按完整响应和工具事件更新，不是逐 token 流式输出。实时事件缓冲保留最近 1000 条，已完成轮次可在搜索记录中查看。
-- 右侧：嵌入原有 R–C–L–K 搜索树，以及按 Agent 排序的 `topk_records`、公式、验证集（若无则训练集）指标。完整查看器在 `/viewer`，也可通过 `sr-harness web --viewer-only` 独立使用。
-- 底部：启动前可设置 R/C/L/K、模型及 Workspace 内的数值 CSV 路径与目标列。CSV 其余列均作为特征，需要至少 5 行且无缺失或非有限值；未指定 CSV 时使用演示数据。通过原脚本启动时使用脚本生成的数据。
-
-运行中的 Prompt 在下一次 LLM 请求前注入，并保留在当前分支后续对话中。`ask_human` 提问显示在输入框上方，直接在此回复。模型更新也在下一次请求前应用；手动切换后使用指定模型，不再自动路由。暂停／停止在请求或工具边界生效，正在执行的网络请求或工具不会被强制终止。
-
-每个服务器进程管理一次运行；结束后重启服务器开始新任务。当前不包含账号、多会话或认证功能。实现位于 `src/sr_harness/web/`，通过 `WebInteractiveAgent` 扩展接入，保留原 `SRAgentInteractive.fit()` 搜索循环。
-
-工作台的常驻状态栏显示模型等待、工具执行、候选评估、人工回复及当前阶段耗时；服务连接状态与 Agent 是否有新输出分别显示。暂停请求需等当前调用返回，真正到达操作边界后会显示“已暂停”。工具调用和返回结果合并为一张卡片，带成功／失败状态及耗时。当前搜索树直接按运行 ID 增量读取，不依赖扫描历史日志；加载失败会显示原因并自动重试，文件列表刷新不会阻塞状态或事件更新。

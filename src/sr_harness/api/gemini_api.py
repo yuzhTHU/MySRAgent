@@ -6,12 +6,13 @@ from typing import Generator, List, Dict
 from datetime import datetime, timezone, timedelta
 from google import genai
 from google.genai import types
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class GeminiAPI(LLMAPI):
+@BaseAPI.register("gemini")
+class GeminiAPI(BaseAPI):
     supported_models = [
         "gemini-2.5-pro",
         "gemini-2.5-flash",

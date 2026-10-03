@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 import json
-import heapq
 import logging
 import numpy as np
 from pathlib import Path
@@ -13,21 +12,18 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from joblib import Parallel, delayed
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
-from ..api.llm_api import LLMAPI
-from ..api.model_router import ModelRouter
+from ..api import BaseAPI
+from ..tools import BaseTool
 from ..parser import BaseParser
-from ..api.core import ToolCall
 from ..skills import SkillManager
-from ..tools import BaseTool, ToolCallResult
+from ..runtime import ModelRouter
 from ..utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
 from ..utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
-from ..web import SearchRecordWriter
+from ..core import CandidateRecord, ParentLink, SearchRunState, ToolCall, ToolCallResult
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
-
-class FitEarlyStop(Exception):
-    pass
 
 
 def _execute_tool_call_in_subprocess(tool: BaseTool, tool_call: ToolCall) -> ToolCallResult:
@@ -42,7 +38,7 @@ class SRAgent(FactoryMixin):
     工具调用、Buffer 更新等。具体实现需继承此类并实现必要方法。
 
     Attributes:
-        llm_api: LLM API 实例。
+        api: LLM API 实例。
         buffer: 对话历史 Buffer。
         max_refinement_depth: 最大迭代次数。
     """
@@ -55,6 +51,7 @@ class SRAgent(FactoryMixin):
         verbose: bool = False,
         tool_parser: str | BaseParser = 'openai',
         save_path: Optional[str] = None,
+        run_id: str | None = None,
         local_sample_size: int = 1,
         max_refinement_depth: int = 20,
         global_width: int = 1,
@@ -81,6 +78,7 @@ class SRAgent(FactoryMixin):
             verbose: 是否启用详细日志（DEBUG 级别）。
             tool_parser: 工具解析器，可以是字符串（'text', 'json'）或 BaseParser 实例。
             save_path: 日志文件保存路径。None 表示不保存到文件。
+            run_id: 本次运行的全局唯一标识。None 表示自动生成。
             local_sample_size: 每轮生成的候选解数量。
             max_refinement_depth: 最大迭代次数。
             global_width: 每个 restart turn 中独立对话分支数量。
@@ -101,7 +99,12 @@ class SRAgent(FactoryMixin):
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
-        setup_logging(info_level='debug' if verbose else 'info', save_path=Path(save_path) / "info.log", force=False)
+        log_path = Path(save_path) / "info.log" if save_path is not None else None
+        setup_logging(
+            info_level='debug' if verbose else 'info',
+            save_path=log_path,
+            force=False,
+        )
 
         if not hasattr(self, "excluded_tools"):
             # ask_human and workspace_code_executor require interaction or
@@ -152,7 +155,7 @@ class SRAgent(FactoryMixin):
         )
         self._task_route_score = 0
         self._task_route_reasons: list[str] = []
-        self._strong_llm_api = None
+        self._strong_api = None
         self._last_model_route = None
 
         # 关键组件
@@ -174,7 +177,7 @@ class SRAgent(FactoryMixin):
                 )
         self.tools = None # 延迟实例化, 因为需要 content 上下文
         self.parser = None # 延迟实例化, 因为需要 tools 工具列表
-        self.llm_api = None # 延迟实例化, 因为需要 tools 工具列表
+        self.api = None # 延迟实例化, 因为需要 tools 工具列表
 
         # 附属组件
         self.total_timer = Timer() # 总用时统计
@@ -183,23 +186,32 @@ class SRAgent(FactoryMixin):
         self.money_counter = ParallelTimer(unit='$') # 费用统计
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
-        self.search_record_writer = SearchRecordWriter(save_path, self)
+        self.run_state = SearchRunState(
+            save_path=save_path,
+            ranking_metric=ranking_metric,
+            larger_is_better=larger_is_better,
+            agent_metadata={
+                "class": self.__class__.__name__,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+                "tool_parser": str(tool_parser),
+                "local_sample_size": local_sample_size,
+                "max_refinement_depth": max_refinement_depth,
+                "global_width": global_width,
+                "max_restart_loop": max_restart_loop,
+                "restart_top_k": restart_top_k,
+                "max_workers": max_workers,
+            },
+            run_id=run_id,
+        )
 
         _logger.info(f"Initialized {self.__class__.__name__}")
 
-    def fit( # 这个函数已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
-        self,
-        X: Dict[str, np.ndarray],
-        y: Dict[str, np.ndarray] | np.ndarray,
-        problem_description: str,
-    ) -> Dict[str, Any]:
+    def run(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray] | np.ndarray, problem_description: str) -> Dict[str, Any]:
         """执行符号回归任务的主入口。
 
-        包含以下阶段：
-        1. 初始化：设置数据、重置状态
-        2. 主循环：生成 Prompt → 请求 LLM → 解析 Action → 执行工具 → 更新 Buffer
-        3. 后处理：整理结果
-        4. 日志打印和终止检查
+        负责数据划分以及工作区、工具、Parser 和 API 的初始化，随后调用
+        search() 执行 R-C-L 搜索。
 
         Args:
             X: 输入特征字典，键为特征名，值为 numpy 数组。
@@ -207,17 +219,13 @@ class SRAgent(FactoryMixin):
             problem_description: 问题描述字符串，告知 Agent 任务目标。
 
         Returns:
-            包含最终结果的字典，通常包括：
-            - best_formula: 最优公式
-            - best_score: 最优得分
-            - history: 历史迭代记录
+            包含本次运行状态、候选公式列表、Pareto front 候选下标和最佳候选下标的字典。
         """
         if not isinstance(y, dict):
             y = {"target": y}
 
         train_data, validation_data = self._split_data(X, y)
 
-        ## 实例化工具和 LLM API
         tool_context = {
             "data": train_data,
             "target": next(iter(y)),
@@ -227,140 +235,141 @@ class SRAgent(FactoryMixin):
             "llm_max_tokens": self.llm_max_tokens,
             "skill_manager": self.skill_manager,
         }
-        self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
-        self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
-        self.llm_api = LLMAPI.create(
-            self.llm_provider,
-            self.llm_model,
-            tool_list=self.tools,
-            tool_parser=self.tool_parser,
-        )
-        if self.tool_parser == 'openai':
-            _logger.debug(
-                f"Using OpenAI function calling as tool parser. Tools will be described in the system prompt as follows:\n"
-                f"{json.dumps(self.llm_api.tool_description_json, indent=2)}"
+        with self.prepare_tool_context(tool_context) as tool_context:
+            self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
+            self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
+            self.api = BaseAPI.create(
+                self.llm_provider,
+                model=self.llm_model,
+                tool_list=self.tools,
+                tool_parser_name=self.tool_parser,
             )
-        else:
+            if self.tool_parser == 'openai':
+                description = json.dumps(self.api.tool_description_json, indent=2)
+            else:
+                description = self.api.tool_description_text
             _logger.debug(
-                f"Using {self.tool_parser} as tool parser. Tools will be described in the system prompt as follows:\n"
-                f"{self.llm_api.tool_description_text}"
+                f"Using {self.tool_parser} as tool parser. "
+                f"Tools will be described as follows:\n{description}"
             )
-                
+            try:
+                return self.search(X, y, problem_description)
+            except KeyboardInterrupt as error:
+                coordinate = self.run_state.latest_coordinate
+                error.partial_result = self.search_result(
+                    "interrupted",
+                    R=coordinate.R if coordinate else None,
+                    C=coordinate.C if coordinate else None,
+                    L=coordinate.L if coordinate else None,
+                )
+                raise
+            except Exception as error:
+                coordinate = self.run_state.latest_coordinate
+                error.partial_result = self.search_result(
+                    "failed",
+                    R=coordinate.R if coordinate else None,
+                    C=coordinate.C if coordinate else None,
+                    L=coordinate.L if coordinate else None,
+                )
+                raise
+
+    @contextmanager
+    def prepare_tool_context(self, tool_context: Dict[str, Any]):
+        """Prepare resources and context shared by initialized tools."""
+        yield tool_context
+
+    def search(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray], problem_description: str) -> Dict[str, Any]:
+        """Run the R-C-L search after data, tools, parser, and API are initialized.
+
+        Each refinement step builds the prompt, requests the model, executes tools,
+        records the search node, collects candidates, updates the conversation, and
+        evaluates the termination hook.
+        """
         ## 开始迭代
-        topk_records = []
-        R = C = L = None
         self.total_timer.clear(reset_last_add_time=True)
         self.named_timer.clear(reset_last_add_time=True)
-        try:
-            for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
-                _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
+        for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
+            _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
-                # 用平凡结果或者历史最佳结果构建新的 initial prompt
-                restart_records = heapq.nsmallest(self.restart_top_k, topk_records)
-                initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
-                initial_node_parents = {record["node_id"]: 'restart_parent' for _, _, _, record in restart_records}
-                self.named_timer.add('build_initial_prompt')
+            # 用平凡结果或者历史最佳结果构建新的 initial prompt
+            restart_records = self.run_state.ranked_candidates()[:self.restart_top_k]
+            initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
+            initial_node_parents = {record.node_id: "restart_seed" for record in restart_records}
+            self.named_timer.add("build_initial_prompt")
+            for C in range(1, self.global_width + 1):  # C 次独立重复对话
+                _logger.info(
+                    f"(R={R}/{self.max_restart_loop}) × "
+                    f"Global Branch (C={C}/{self.global_width})"
+                )
 
-                for C in range(1, self.global_width + 1):  # C 次独立重复对话
-                    _logger.info(f"(R={R}/{self.max_restart_loop}) × Global Branch (C={C}/{self.global_width})")
-                
-                    # 用 initial prompt 初始化 buffer, node_parent 记录当前 buffer 对应的 parent node_id list.
-                    buffer = deepcopy(initial_prompt)
-                    node_parents = deepcopy(initial_node_parents)
-                    self.named_timer.add('init_buffer')
+                # 用 initial prompt 初始化 buffer，node_parents 记录当前 buffer 的父节点
+                buffer = deepcopy(initial_prompt)
+                node_parents = deepcopy(initial_node_parents)
+                self.named_timer.add("init_buffer")
 
-                    for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
-                        _logger.info(
-                            f"(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × "
-                            f"Refinement Step (L={L}/{self.max_refinement_depth})"
-                        )
+                for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
+                    _logger.info(
+                        f"(R={R}/{self.max_restart_loop}) × "
+                        f"(C={C}/{self.global_width}) × "
+                        f"Refinement Step (L={L}/{self.max_refinement_depth})"
+                    )
 
-                        # Step 1: 根据 Buffer 创建 Prompt
-                        prompt = self.build_prompt(buffer, R=R, L=L, C=C)
-                        for tool in self.tools:
-                            tool.context["messages"] = deepcopy(prompt)
-                        self.named_timer.add('build_prompt')
+                    # Step 1: 根据 Buffer 创建 Prompt
+                    self.before_iteration(buffer, R=R, L=L, C=C)
+                    prompt = self.build_prompt(buffer, R=R, L=L, C=C)
+                    for tool in self.tools:
+                        tool.context["messages"] = deepcopy(prompt)
+                    self.named_timer.add("build_prompt")
 
-                        # Step 2: 请求 LLM 得到 (Content, Tool Calls, Message) 元组
-                        response_list, usage = self.request_llm(prompt, R=R, L=L, C=C)
-                        self.named_timer.add('request_llm')
+                    # Step 2: 请求 LLM 得到 Content、Tool Calls 和 Message
+                    response_list, usage = self.request_llm(prompt, R=R, L=L, C=C)
+                    self.named_timer.add("request_llm")
 
-                        # Step 3: 执行 Tool Calls 得到 Results
-                        results_list = self.get_results(response_list, R=R, L=L, C=C)
-                        self.named_timer.add('get_results')
+                    # Step 3: 执行 Tool Calls 得到 Results
+                    results_list = self.get_results(response_list, R=R, L=L, C=C)
+                    self.named_timer.add("get_results")
 
-                        # Step 4: 更新 top-k 最优结果
-                        topk_records = self.update_topk(topk_records, response_list, results_list, R=R, L=L, C=C)
-                        self.named_timer.add('update_topk')
+                    # Step 4: 记录当前搜索节点
+                    self.record_search_iteration(
+                        response_list, results_list, node_parents, prompt, usage, R, L, C,
+                    )
+                    self.named_timer.add("record_search_iteration")
 
-                        # Step 5: 基于 Response Content, Tool Calls, Messages 和 Results 更新 Buffer
-                        buffer, node_parents = self.update_buffer(
-                            buffer, response_list, results_list,
-                            topk_records, node_parents, prompt, usage, R, L, C,
-                        )
-                        self.named_timer.add('update_buffer')
+                    # Step 5: 验证并收集候选公式
+                    self.collect_candidates(response_list, results_list, R=R, L=L, C=C)
+                    self.named_timer.add("collect_candidates")
 
-                        # Step 6: 打印本轮日志
-                        self.log_info(response_list, topk_records, R=R, L=L, C=C)
-                        self.named_timer.add('log_info')
-                        self.total_timer.add()
+                    # Step 6: 更新对话 Buffer 和父节点关系
+                    buffer, node_parents = self.update_buffer(
+                        buffer, response_list, results_list, node_parents, R, L, C,
+                    )
+                    self.named_timer.add("update_buffer")
 
-                        # Step 7: 记录搜索过程
-                        self.record_search(topk_records, R=R, L=L, C=C)
-                        self.named_timer.add('record_search')
-                        self.total_timer.add()
+                    # Step 7: 打印本轮日志
+                    self.log_info(response_list, R=R, L=L, C=C)
+                    self.named_timer.add("log_info")
+                    self.total_timer.add()
 
-                        if topk_records and topk_records[0][-1]['data_split_results']['train']['metrics']['mse'] == 0.0:
-                            raise FitEarlyStop()
+                    # Step 8: 判断是否终止当前搜索
+                    status = self.handle_iteration_complete(buffer, R=R, L=L, C=C)
+                    if status is not None:
+                        _logger.note("Early stopping triggered. Returning best result.")
+                        return self.search_result(status, R=R, L=L, C=C)
 
-            _logger.note(f"Finished all iterations. Returning best result.")
-            best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
-        
-        except FitEarlyStop as e:
-            _logger.note(f"Early stopping triggered by perfect solution. Returning best result.")
-            best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
-
-        except KeyboardInterrupt as e:
-            best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
-            raise
-
-        except Exception as e:
-            best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records), 'topk_records': topk_records}
-            raise
+        _logger.note("Finished all iterations. Returning best result.")
+        coordinate = self.run_state.latest_coordinate
+        return self.search_result(
+            "completed",
+            R=coordinate.R if coordinate else None,
+            C=coordinate.C if coordinate else None,
+            L=coordinate.L if coordinate else None,
+        )
 
     def _split_data(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray]):
         """Split aligned arrays into train and validation data mappings."""
         data = X | y
         arrays = {name: np.asarray(value) for name, value in data.items()}
-        target = next(iter(y))
-        n_samples = len(arrays[target])
-        network_data = "A" in arrays or "G" in arrays
-        if network_data:
-            temporal_names = {
-                name for name, value in arrays.items()
-                if name not in {"A", "G"} and value.ndim > 0
-                and len(value) == n_samples
-            }
-            mismatched_targets = [
-                name for name in y if name not in temporal_names
-            ]
-            if mismatched_targets:
-                raise ValueError(
-                    "Network-dynamics targets must use time as their first axis: "
-                    f"{mismatched_targets}"
-                )
-        else:
-            lengths = {len(value) for value in arrays.values()}
-            if len(lengths) != 1:
-                raise ValueError(
-                    "All X and y arrays must have the same length, got "
-                    f"lengths={sorted(lengths)}."
-                )
-            temporal_names = set(arrays)
+        n_samples = len(arrays[next(iter(y))])
         n_validation = int(round(n_samples * self.validation_fraction))
         if self.validation_fraction == 0:
             n_train = n_samples # 当不使用 validation_fraction 时, 训练集就是验证集
@@ -388,6 +397,22 @@ class SRAgent(FactoryMixin):
             train_indices = indices[:n_train]
             validation_indices = indices[-n_validation:]
 
+        if (network_data := "A" in arrays or "G" in arrays):
+            temporal_names = {
+                name for name, value in arrays.items()
+                if name not in {"A", "G"} and value.ndim > 0 and len(value) == n_samples
+            }
+            if mismatched_targets := [name for name in y if name not in temporal_names]:
+                raise ValueError(
+                    f"Network-dynamics targets must use time as their first axis: {mismatched_targets}"
+                )
+        elif len(lengths := {len(value) for value in arrays.values()}) != 1:
+            raise ValueError(
+                f"All X and y arrays must have the same length, got lengths={sorted(lengths)}."
+            )
+        else:
+            temporal_names = set(arrays)
+
         def select(selected):
             return {
                 name: value[selected] if name in temporal_names else value
@@ -412,7 +437,7 @@ class SRAgent(FactoryMixin):
         # 根据是否有历史最优结果来动态设置 MSE 目标
         if not restart_records:
             mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-        elif (best_mse := restart_records[0][-1]['data_split_results']['train']['metrics']['mse']) > 0:
+        elif (best_mse := restart_records[0].metric("mse", "train")) > 0:
             target_mse = best_mse * 0.1
             mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
         else:
@@ -445,16 +470,16 @@ class SRAgent(FactoryMixin):
         # 如果有历史最优结果，注入作为参考上下文
         if restart_records:
             previous_formulas = []
-            for idx, (priority, complexity, sequence, record) in enumerate(restart_records):
-                formula = record.get('formula', 'N/A')
-                result = record['data_split_results']
+            for idx, record in enumerate(restart_records):
+                formula = record.formula
+                result = record.details['data_split_results']
                 previous_formulas.append(
                     f"{idx}. Formula: {formula}\n"
                     f"    (Train | Validation)\n"
                     f"    R2={result['train']['metrics']['r2']:.6g} | {result['validation']['metrics']['r2']:.6g}\n"
                     f"    MSE={result['train']['metrics']['mse']:.6g} | {result['validation']['metrics']['mse']:.6g}\n"
                 )
-            if (best_mse := restart_records[0][-1]['data_split_results']['train']['metrics']['mse']) > 0:
+            if (best_mse := restart_records[0].metric("mse", "train")) > 0:
                 goal = f"find a formula with MSE < {best_mse * 0.1:.3g} (10x better than the previous best MSE)"
             else:
                 goal = "find a simpler formula that also achieves MSE = 0"
@@ -475,11 +500,11 @@ class SRAgent(FactoryMixin):
             "role": "user",
             "content": user_content
         })
-        process_message = self.build_process_message([], L=0)
+        process_message = self.build_process_message(L=0)
         initial_prompt.append(process_message)
         return initial_prompt
 
-    def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
+    def build_prompt(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
         if self.force_initial_diagnostics and L == 1:
             # Persist the evidence in the branch buffer so later refinement
@@ -507,15 +532,25 @@ class SRAgent(FactoryMixin):
         _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
         return prompt
 
-    def run_initial_diagnostics(self, R: int, L: int, C: int) -> Dict[str, str]:
+    def before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> None:
+        """Apply mode-specific control changes before constructing this iteration's prompt."""
+        pass
+
+    def handle_iteration_complete(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
+        """Return a terminal status when the current search should stop."""
+        best_candidate = self.best_candidate()
+        if (
+            best_candidate is not None and best_candidate.metric("mse", "train") == 0.0
+        ):
+            return "early_stopped"
+        return None
+
+    def run_initial_diagnostics(self, R, L, C) -> Dict[str, str]:
         """Run the mandatory branch-opening diagnostics and format them for the LLM."""
         calls = [
             ToolCall(name="statistics_analysis", params={}),
             ToolCall(name="relationship_analysis", params={}),
-            ToolCall(
-                name="read_skill",
-                params={"name": "discover-symbolic-laws"},
-            ),
+            ToolCall(name="read_skill", params={"name": "discover-symbolic-laws"}),
         ]
         results = self.execute_action(calls)
         self.record_tool_calls(calls, results, R=R, L=L, C=C, forced=True)
@@ -542,7 +577,7 @@ class SRAgent(FactoryMixin):
             ),
         }
     
-    def request_llm(self, prompt: List[Dict[str, Any]], R: int, L: int, C: int):
+    def request_llm(self, prompt: List[Dict[str, Any]], R, L, C):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
         route = self.model_router.route(
@@ -551,21 +586,21 @@ class SRAgent(FactoryMixin):
             refinement_step=L,
         )
         self._last_model_route = route
-        llm_api = self.llm_api
+        api = self.api
         if route.tier == "strong":
-            if self._strong_llm_api is None:
-                self._strong_llm_api = LLMAPI.create(
+            if self._strong_api is None:
+                self._strong_api = BaseAPI.create(
                     route.provider,
-                    route.model,
+                    model=route.model,
                     tool_list=self.tools,
-                    tool_parser=self.tool_parser,
+                    tool_parser_name=self.tool_parser,
                 )
-            llm_api = self._strong_llm_api
+            api = self._strong_api
         _logger.info(
             f"Model route: tier={route.tier}, backend={route.provider}/{route.model}, "
             f"score={route.score}, reason={route.reason}"
         )
-        llm_result = llm_api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
+        llm_result = api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
         for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()
@@ -581,7 +616,7 @@ class SRAgent(FactoryMixin):
         usage = self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list, usage
     
-    def get_results(self, response_list, R: int, L: int, C: int):
+    def get_results(self, response_list, R, L, C):
         """执行 Tool Calls 得到 Results。"""
         # 合并 - 调用 - 分割
         all_tool_calls = []
@@ -603,13 +638,9 @@ class SRAgent(FactoryMixin):
         return results_list
 
     def record_tool_calls(
-        self,
-        tool_calls: List[ToolCall],
+        self, tool_calls: List[ToolCall],
         results: List[ToolCallResult],
-        R: int,
-        L: int,
-        C: int,
-        forced: bool = False,
+        R, L, C, forced: bool = False
     ) -> None:
         """Persist tool calls from either the LLM or framework-enforced diagnostics."""
         if self.save_path is None:
@@ -633,20 +664,12 @@ class SRAgent(FactoryMixin):
         buffer: List[Dict[str, Any]],
         response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
         results_list: List[List[ToolCallResult]],
-        topk_records: List[Tuple[float, float, int, Dict[str, Any]]],
-        node_parents: Dict[str, str],
-        prompt: List[Dict[str, Any]],
-        usage: Dict[str, Any],
-        R: int,
-        L: int,
-        C: int,
+        node_parents: Dict[str, str], R, L, C
     ):
         """根据 LLM Response 和 Tool Results 更新 Buffer。"""
         # 如果没有成功的回复，跳过本轮更新
         if len(response_list) == 0:
             return buffer, node_parents
-        # 记录本轮搜索迭代的原始数据和选中分支信息，供后续分析和可视化使用
-        self.record_search_iteration(response_list, results_list, node_parents, prompt, usage, R, L, C)
         node_parents = {}
         # 选择产生了最佳排序指标的 tool_call 所在的 response 分支
         selected_K = 1
@@ -656,7 +679,7 @@ class SRAgent(FactoryMixin):
                 if (priorities := self.sortby(result.result)) is not None and priorities[0] < selected_priority:
                     selected_K = K
                     selected_priority = priorities[0]
-        node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=selected_K)] = 'direct_parent'
+        node_parents[self.run_state.node_id(R=R, C=C, L=L, K=selected_K)] = 'continuation'
         _logger.info(f"Selected LLM branch: {selected_K}/{len(results_list)}")
         _, tool_calls, message = response_list[selected_K - 1]
         results = results_list[selected_K - 1]
@@ -679,18 +702,18 @@ class SRAgent(FactoryMixin):
                 # 对于 non-openai parser, 将 tool_calls 拼到 content 中
                 else:
                     message['content'] += "\n\n" + tool_call.raw_str
-                node_parents[self.search_record_writer.node_id(R=R, C=C, L=L, K=K)] = 'tool_call_parent'
+                node_parents[self.run_state.node_id(R=R, C=C, L=L, K=K)] = 'context_merge'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
         if tool_calls or (message.get('content') or '').strip():
             buffer.append(message)
             buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
         else:
             _logger.warning("Skipping empty LLM response (no content nor tool calls).")
-        process_message = self.build_process_message(topk_records, L)
+        process_message = self.build_process_message(L)
         buffer.append(process_message)
         return buffer, node_parents
 
-    def build_process_message(self, topk_records, L):
+    def build_process_message(self, L):
         # 将当前搜索进度加入 buffer
         remaining_rounds = self.max_refinement_depth - L - 1
         progress_line = (
@@ -714,23 +737,23 @@ class SRAgent(FactoryMixin):
                 "your best available target formula now using the final-answer mechanism available in "
                 "this environment, with a brief justification if text is required."
             )
+        pareto_front = self.get_pareto_front()
         pareto_front_str = format_pareto_front(
-            self.get_pareto_front(topk_records),
+            [self.candidate_dict(record) for record in pareto_front],
             concise=True,
             formula_max_length=160,
         )
-        pareto_front = self.get_pareto_front(topk_records)
         diagnostics = []
         for record in pareto_front:
-            if eic := record.get("eic_diagnostics"):
+            if eic := record.details.get("eic_diagnostics"):
                 diagnostics.append(
-                    f"- {record['formula']}: EIC={eic['eic']:.6g}; "
+                    f"- {record.formula}: EIC={eic['eic']:.6g}; "
                     f"worst subtree={eic['worst_subtree']}"
                 )
         available_tools = {tool.metadata.name for tool in getattr(self, "tools", [])}
         routing = []
         distinct_formulas = list(dict.fromkeys(
-            record.get("formula") for _, _, _, record in sorted(topk_records)
+            record.formula for record in self.run_state.ranked_candidates()
         ))
         if (
             len(distinct_formulas) >= 2
@@ -751,89 +774,70 @@ class SRAgent(FactoryMixin):
             "\n\n[Specialist routing]\n" + "\n".join(f"- {item}" for item in routing)
             if routing else ""
         )
-        return {
-            "role": "user", "content": (
-                f"[Iteration status]\n"
-                f"{progress_line} {policy}\n\n"
-                f"[Current Pareto Front]\n"
-                f"{pareto_front_str}"
-                f"{diagnostics_text}"
-                f"{routing_text}"
-            )
-        }
+        return {"role": "user", "content": (
+            f"[Iteration status]\n"
+            f"{progress_line} {policy}\n\n"
+            f"[Current Pareto Front]\n"
+            f"{pareto_front_str}"
+            f"{diagnostics_text}"
+            f"{routing_text}"
+        )}
 
-    def push_candidate(self, record, topk_records):
-        priorities = self.sortby(record)
-        if priorities is None:
+    def push_candidate(self, record: CandidateRecord) -> None:
+        if not self.run_state.push_candidate(record):
             _logger.warning(
                 "Skipping candidate with missing or non-finite ranking metrics: "
-                f"{record.get('formula')!r}"
+                f"{record.formula!r}"
             )
-            return
-        sequence = len(topk_records) # 相同 priority 和 complexity 时按照 sequence 排序 (越小越重要)
-        heapq.heappush(topk_records, (*priorities, sequence, record))
 
-    def update_topk(self, topk_records, response_list, results_list, R: int, L: int, C: int):
-        """根据 LLM Response 和 Tool Results 更新 top-k 最优结果。"""
+    def collect_candidates(self, response_list, results_list, R, L, C):
+        """Validate candidate tool results and add them to the run state."""
+        loader = []
         for K in range(1, len(response_list) + 1):
-            for act, res in zip(response_list[K - 1][1], results_list[K - 1]):
+            for _, res in zip(response_list[K - 1][1], results_list[K - 1]):
                 if res.result.get('is_candidate'):
-                    train_metrics = res.result['data_split_results']['train']['metrics']
-                    assert self.ranking_metric in train_metrics, f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
-                    assert 'complexity' in train_metrics, "Tool result must contain 'complexity' in metrics for candidate formulas."
-                    record = {
-                        "formula": res.result['formula'],
-                        "data_split_results": res.result["data_split_results"],
-                        "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
-                    }
-                    if (
-                        "eic_diagnostics" not in res.result
-                        and not str(res.result.get("method", "")).startswith("ND2")
-                    ):
-                        eic_tool = next(
-                            (
-                                tool for tool in self.tools
-                                if tool.metadata.name == "evaluate_eic"
-                            ),
-                            None,
-                        )
-                        if eic_tool is not None:
-                            audit_call = ToolCall(
-                                name="evaluate_eic",
-                                params={"f": record["formula"], "repeats": 4},
-                            )
-                            audit_result = eic_tool(**audit_call.params)
-                            self.tools_counter.add("evaluate_eic")
-                            self.record_tool_calls(
-                                [audit_call],
-                                [audit_result],
-                                R=R,
-                                L=L,
-                                C=C,
-                                forced=True,
-                            )
-                            if audit_result.ok:
-                                record["eic_diagnostics"] = audit_result.result[
-                                    "eic_diagnostics"
-                                ]
-                    if diagnostics := res.result.get("eic_diagnostics"):
-                        record["eic_diagnostics"] = diagnostics
-                        for _, _, _, previous in topk_records:
-                            if previous.get("formula") == record["formula"]:
-                                previous["eic_diagnostics"] = diagnostics
-                    self.push_candidate(record, topk_records)
-                    # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
-                    for formula_dict in res.result.get('all_formulas', []):
-                        assert self.ranking_metric in formula_dict["data_split_results"]["train"]["metrics"], f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
-                        record = {
-                            "formula": formula_dict["formula"],
-                            "data_split_results": formula_dict["data_split_results"],
-                            "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
-                        }
-                        self.push_candidate(record, topk_records)
-        return topk_records
+                    loader.append((K, res))
+
+        for K, res in loader:
+            train_metrics = res.result['data_split_results']['train']['metrics']
+            assert self.ranking_metric in train_metrics, f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
+            assert 'complexity' in train_metrics, "Tool result must contain 'complexity' in metrics for candidate formulas."
+            details = {
+                key: value for key, value in res.result.items()
+                if key not in {"formula", "is_candidate", "all_formulas"}
+            }
+            record = CandidateRecord(
+                formula=res.result['formula'],
+                node_id=self.run_state.node_id(R=R, C=C, L=L, K=K),
+                details=details,
+            )
+            if "eic_diagnostics" not in res.result and not str(res.result.get("method", "")).startswith("ND2"):
+                eic_tool = next((tool for tool in self.tools if tool.metadata.name == "evaluate_eic"), None)
+                if eic_tool is not None:
+                    audit_call = ToolCall(name="evaluate_eic", params={"f": record.formula, "repeats": 4})
+                    audit_result = eic_tool(**audit_call.params)
+                    self.tools_counter.add("evaluate_eic")
+                    self.record_tool_calls([audit_call], [audit_result], R=R, L=L, C=C, forced=True)
+                    if audit_result.ok:
+                        record.details["eic_diagnostics"] = audit_result.result["eic_diagnostics"]
+            if diagnostics := res.result.get("eic_diagnostics"):
+                record.details["eic_diagnostics"] = diagnostics
+                self.run_state.update_diagnostics(record.formula, diagnostics)
+            self.push_candidate(record)
+            # 对于 call_pysr 等工具，可能会返回多个 candidate formulas, 可以将它们全部加入 top-k
+            for formula_dict in res.result.get('all_formulas', []):
+                assert self.ranking_metric in formula_dict["data_split_results"]["train"]["metrics"], (
+                    f"Tool result must contain '{self.ranking_metric}' in metrics for candidate formulas."
+                )
+                record = CandidateRecord(
+                    formula=formula_dict["formula"],
+                    node_id=self.run_state.node_id(R=R, C=C, L=L, K=K),
+                    details={key: value for key, value in formula_dict.items() if key != "formula"},
+                )
+                self.push_candidate(record)
+        return self.run_state.ranked_candidates()
     
-    def log_info(self, response_list, topk_records, R: int, L: int, C: int):
+    def log_info(self, response_list, R, L, C):
         """打印本轮日志, response_list 是用来统计本轮新增工具调用次数的。"""
         new_count = defaultdict(int)
         for _, tool_calls, _ in response_list:
@@ -843,10 +847,9 @@ class SRAgent(FactoryMixin):
             f"{name}: {count} ({new_count[name]} new)" 
             for name, count in self.tools_counter.named_count.items()
         )
-        if topk_records:
-            best_record = topk_records[0][-1]
+        if best_record := self.best_candidate():
             metric_label, metric_value = self.record_metric(best_record)
-            best_metric = f"{best_record['formula']} ({metric_label}={metric_value:.6g})"
+            best_metric = f"{best_record.formula} ({metric_label}={metric_value:.6g})"
         else:
             best_metric = "None"
         log = {
@@ -861,20 +864,7 @@ class SRAgent(FactoryMixin):
         msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
         _logger.info(tag2ansi(msg))
 
-    def record_search(self, topk_records, R: int, L: int, C: int):
-        """记录本轮搜索迭代的原始数据和选中分支信息，供后续分析和可视化使用。"""
-        if self.save_path is None:
-            return
-        pareto_front = self.get_pareto_front(topk_records)
-        with open(Path(self.save_path) / 'search_record.jsonl', 'a') as f:
-            json.dump({
-                "progress": self.format_progress(R, L, C),
-                "coord": {"R": R, "C": C, "L": L},
-                'pareto_front': pareto_front,
-            }, f)
-            f.write('\n')
-
-    def record_llm_result(self, llm_result, R: int, L: int, C: int) -> Dict[str, Any] | None:
+    def record_llm_result(self, llm_result, R, L, C) -> Dict[str, Any] | None:
         """记录最近一次 LLM 请求的返回值和用量统计。"""
         usage = llm_result.returned['usage']
         for name, num in usage['token'].items():
@@ -882,16 +872,13 @@ class SRAgent(FactoryMixin):
         for name, num in usage['price'].items():
             self.money_counter.add(name, num)
         if self.save_path is not None:
+            model_router = vars(self._last_model_route) if self._last_model_route is not None else None
             with open(Path(self.save_path) / 'response.jsonl', 'a') as f:
                 json.dump({
                     "responses": llm_result.returned["responses"],
                     "progress": self.format_progress(R, L, C),
                     "usage": usage,
-                    "model_route": (
-                        vars(self._last_model_route)
-                        if self._last_model_route is not None
-                        else None
-                    ),
+                    "model_route": model_router
                 }, f)
                 f.write('\n')
         return usage
@@ -900,19 +887,14 @@ class SRAgent(FactoryMixin):
         self, response_list, results_list, parent_nodes, prompt, usage, R, L, C,
     ):
         """Record one visualization node for each local sample."""
-        parents = []
+        parents: list[ParentLink] = []
         for parent_node_id, relation in parent_nodes.items():
-            if relation == 'restart_parent':
-                parents.append(self.search_record_writer.node_parent(parent_node_id, "restart_parent", "strong"))
-            elif relation == 'direct_parent':
-                parents.append(self.search_record_writer.node_parent(parent_node_id, "direct_parent", "strong"))
-            elif relation == 'tool_call_parent':
-                parents.append(self.search_record_writer.node_parent(parent_node_id, "tool_call_parent", "weak"))
-            else:
+            if relation not in {"restart_seed", "continuation", "context_merge"}:
                 _logger.warning(f"Unknown parent relation: {relation} for node_id: {parent_node_id}.")
-                parents.append(self.search_record_writer.node_parent(parent_node_id, relation, "strong"))
+                continue
+            parents.append(self.run_state.parent_link(parent_node_id, relation))
 
-        self.search_record_writer.record_iteration(response_list, results_list, parents, prompt, usage, R, L, C)
+        self.run_state.register_iteration(response_list, results_list, tuple(parents), prompt, usage, R, L, C)
 
     def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
         """执行 Action。"""
@@ -958,15 +940,22 @@ class SRAgent(FactoryMixin):
                 results[idx] = result
         return results
 
-    def format_progress(self, R: int, L: int, C: int):
-        return f'(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × (L={L}/{self.max_refinement_depth}) × (K={self.local_sample_size})'
+    def format_progress(self, R, L, C):
+        return (
+            f"(R={R}/{self.max_restart_loop}) × "
+            f"(C={C}/{self.global_width}) × "
+            f"(L={L}/{self.max_refinement_depth}) × "
+            f"(K={self.local_sample_size})"
+        )
 
     def record_metric(self, record):
-        if not isinstance(record, dict) or not record:
-            return None, None
-
         metric_label = self.ranking_metric.replace('_', ' ').upper()
-        split_results = record.get("data_split_results")
+        if isinstance(record, CandidateRecord):
+            split_results = record.details.get("data_split_results")
+        elif isinstance(record, dict):
+            split_results = record.get("data_split_results")
+        else:
+            return None, None
         if not isinstance(split_results, dict):
             return None, None
         validation_metrics = split_results.get("validation", {}).get("metrics", {})
@@ -978,12 +967,15 @@ class SRAgent(FactoryMixin):
         return None, None
 
     def sortby(self, record):
-        """ 未经审核的修改 """
         _, metric_value = self.record_metric(record)
         if metric_value is None:
             return None
 
-        split_results = record.get('data_split_results', {})
+        split_results = (
+            record.details.get('data_split_results', {})
+            if isinstance(record, CandidateRecord)
+            else record.get('data_split_results', {})
+        )
         train_metrics = split_results.get('train', {}).get('metrics', {})
         validation_metrics = split_results.get('validation', {}).get('metrics', {})
         metric_values = [train_metrics.get(self.ranking_metric)]
@@ -1003,13 +995,24 @@ class SRAgent(FactoryMixin):
             finite_complexity,
         )
 
-    def get_pareto_front(self, topk_records):
-        """从 top-k 结果中提取 Pareto 前沿。"""
-        pareto_front = []
-        current_complexity = float('inf')
-        for _, _, _, record in sorted(topk_records):
-            complexity = record['data_split_results']['train']['metrics'].get('complexity', float('inf'))
-            if complexity < current_complexity:
-                pareto_front.append(record)
-                current_complexity = complexity
-        return pareto_front
+    @staticmethod
+    def candidate_dict(record: CandidateRecord) -> dict[str, Any]:
+        """Adapt a candidate to utilities that consume split results at top level."""
+        return {
+            "formula": record.formula,
+            "node_id": record.node_id,
+            **record.details,
+        }
+
+    def best_candidate(self) -> CandidateRecord | None:
+        candidates = self.run_state.ranked_candidates()
+        return candidates[0] if candidates else None
+
+    def get_pareto_front(self) -> list[CandidateRecord]:
+        """Return candidates on the metric-complexity Pareto front."""
+        candidates = self.run_state.ranked_candidates()
+        return [candidates[index] for index in self.run_state.pareto_indices(candidates)]
+
+    def search_result(self, status: str, R: int | None, L: int | None, C: int | None):
+        progress = self.format_progress(R, L, C)
+        return self.run_state.result(status=status, progress=progress).to_dict()

@@ -20,23 +20,23 @@ for R in 1..max_restart_loop:       # best-solution restart 次数
 
 ## SRAgent 核心组件
 
-SRAgent 持有两个核心组件：
+SRAgent 在运行时组织以下核心组件：
 
-`tool_list: List[BaseTool]`：可用的工具实例列表。每个工具接收调用参数，返回一个结果字典。
+`tools: List[BaseTool]`：可用的工具实例列表。每个工具接收调用参数，返回一个 `ToolCallResult`。
 - 工具的详细开发指南见 [`tools/README.md`](tools/README.md)。
 - 工具的调用流程如下：
   1. 初始化 SRAgent 时，工具被实例化并拿到运行时上下文（数据、目标变量等）。
   2. LLM 产生工具调用（名称 + 参数）
-  3. Agent 根据名称在 `tool_list` 中查找对应工具实例
+  3. Agent 根据名称在 `tools` 中查找对应工具实例
   4. 调用 `tool(**params)`，返回 `ToolCallResult`（包含 `ok`、`result`、`result_str`、`meta_data`）
 
-`llm_api: LLMAPI`：LLM API 实例，负责与 LLM 服务交互。
+`api: BaseAPI`：LLM API 实例，负责与 LLM 服务交互。
 - 调用方式如下：
   ```python
-  llm_result = self.llm_api(messages, n=local_sample_size)
+  llm_result = self.api(messages, n=local_sample_size)
   ```
 - `messages` 是对话消息列表，格式为 `[{'role': 'system', 'content': ...}, {'role': 'user', 'content': ...}, ...]`。
-- `llm_result` 是一个 `LLMResult` 对象，可迭代获取 LLM 的响应：
+- `llm_result` 是一个 `APICallResult` 对象，可迭代获取 LLM 的响应：
   ```python
   for content, tool_calls, message in llm_result:
       # content: LLM 响应中的文字内容
@@ -55,29 +55,34 @@ SRAgent 持有两个核心组件：
 每一轮 (L) 的执行步骤如下：
 
 1. **构建 Prompt**：根据当前 buffer（对话历史）构建 messages。
-2. **请求 LLM**：调用 `llm_api(messages)`，得到 K 个候选响应。
+2. **请求 LLM**：调用 `api(messages)`，得到 K 个候选响应。
 3. **执行工具**：解析每个响应中的 tool_calls，查找并调用对应工具，得到结果列表。
-4. **更新 Buffer**：选择产生最优 mse 的分支，将其 message 和工具结果追加到 buffer；其他分支中不涉及公式评估的工具结果也会追加，避免丢失有用信息。
-5. **更新 Top-K**：将 `is_candidate=True` 的结果按 mse 排序记录。
-6. **日志输出**：打印当前最优结果、工具调用统计、token/费用用量等。
+4. **记录搜索节点**：将当前 Prompt、响应、工具结果、父节点关系和用量写入 `SearchRunState`。
+5. **收集候选公式**：验证 `is_candidate=True` 的结果，并按配置的排名指标更新候选集合。
+6. **更新 Buffer**：选择产生最优候选的分支，将其 message 和工具结果追加到 buffer；其它分支中不涉及公式评估的工具结果也会追加，避免丢失有用信息。
+7. **日志与终止检查**：打印当前最优结果、工具调用统计和 token/费用用量，并判断是否结束搜索。
 
 ## 目录结构
 
 ```
 src/sr_harness/
 ├── agents/
-│   ├── sr_agent.py              # SRAgent 主类，包含 fit() 主循环和各个步骤方法
+│   ├── sr_agent.py              # SRAgent 主类，包含 run() 主循环和各个步骤方法
 │   └── sr_agent_interactive.py  # 交互式 SRAgent
-├── api/             # LLM API 封装
-│   ├── core.py      # LLMResult、ToolCall 等核心数据结构
-│   ├── llm_api.py   # LLMAPI 基类和工厂方法
-│   └── *_api.py     # 各提供商实现 (OpenAI, DeepSeek, Gemini, ...)
-├── parser/          # 工具调用解析器
+├── api/                         # BaseAPI 与各 Provider API
+│   ├── base_api.py
+│   └── *_api.py                 # OpenAI、DeepSeek、Gemini 等实现
+├── core/                        # APICallResult、ToolCall 和搜索状态等核心结构
+│   ├── api.py
+│   ├── search.py
+│   └── tool.py
+├── interaction/                 # 终端与 Web 交互管理器
+├── runtime/                     # 模型路由与交互控制器
+├── parser/                      # 工具调用解析器
 │   ├── base_parser.py   # BaseParser 基类
 │   ├── *_parser.py   # 具体解析器实现 (TextParser, JSONParser, ...)
-├── tools/           # 工具定义
-│   ├── base_tool.py # BaseTool 基类
-│   └── ...          # 具体工具实现
-├── utils/           # 工具函数
-└── skills/          # 技能文档（暂时用不到）
+├── tools/                       # BaseTool 与具体科学工具
+├── skills/                      # 运行时技能管理
+├── web/                         # Web 服务与会话适配
+└── utils/                       # 通用工具函数
 ```

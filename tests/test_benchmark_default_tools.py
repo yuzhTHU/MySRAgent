@@ -26,7 +26,7 @@ def test_failed_agent_with_formula_is_not_reported_as_success(monkeypatch, tmp_p
             self.money_counter = argparse.Namespace(count=0.01)
             self.tools_counter = argparse.Namespace(named_count={})
 
-        def fit(self, **kwargs):
+        def run(self, **kwargs):
             return {
                 "status": "failed",
                 "best_formula": "x",

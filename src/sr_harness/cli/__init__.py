@@ -10,7 +10,7 @@ COMMANDS = {
     "run": ("run", "Run SRAgent on a synthetic symbolic-regression problem."),
     "bench": ("bench", "Evaluate an algorithm with LLM-SRBench."),
     "tool": ("tool", "Inspect or invoke an SRHarness tool."),
-    "web": ("web", "Serve the SRHarness search visualization."),
+    "web": ("web", "Serve the SRHarness interactive workbench."),
     "download-models": ("download_models", "Download a model checkpoint."),
     "upload-models": ("upload_models", "Upload a model checkpoint."),
 }

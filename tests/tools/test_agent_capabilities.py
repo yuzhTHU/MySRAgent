@@ -5,9 +5,9 @@ import threading
 import numpy as np
 import pytest
 
-from sr_harness.web.interaction import InteractionController
+from sr_harness.runtime import InteractionController
 from sr_harness.web.app import create_app
-from sr_harness.agents.model_router import ModelRouter
+from sr_harness.runtime import ModelRouter
 from sr_harness.core import SearchRunState, ToolCall
 from sr_harness import SRAgent
 from sr_harness.tools.evaluate_formula import EvaluateTool

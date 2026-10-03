@@ -3,12 +3,13 @@ import logging
 import tempfile
 from pathlib import Path
 from typing import Generator, List, Dict
-from .llm_api import LLMAPI
+from .base_api import BaseAPI
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
-class ManualAPI(LLMAPI): # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
+@BaseAPI.register("manual")
+class ManualAPI(BaseAPI): # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
     supported_models = ["manual"]
 
     def __init__(self, model="manual", save_path=None, **kwargs):

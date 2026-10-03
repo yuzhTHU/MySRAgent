@@ -27,25 +27,49 @@ def update_parser(parser):
     })
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
-    parser.add_argument("--tools", default=default_tools, type=str, nargs='+', choices=BaseTool.all_registered_names, help="Optional list of tools to use.")
-    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
-    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
-    parser.add_argument("-L", "--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
-    parser.add_argument("-C", "--global_width", type=int, default=1, help="Number of independent branches per restart loop.")
-    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help="Maximum number of best-solution restart loops.")
-    parser.add_argument("--restart_top_k", type=int, default=1, help="Number of previous best formulas to inject into the next restart prompt.")
-    parser.add_argument("--llm_max_tokens", type=int, default=4096, help="Maximum number of tokens to generate for each LLM response.")
-    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help="Tool response parser type.")
-    parser.add_argument("--max_workers", type=int, default=0, help="Maximum number of parallel workers for tool execution. 0 means no parallel execution.")
-    parser.add_argument("--validation_fraction", type=float, default=0.2, help="Fraction of samples held out for validation.")
-    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help="Validation split strategy.")
-    parser.add_argument("--split_random_state", type=int, default=42, help="Random seed used by the random validation split.")
-    parser.add_argument(
-        "--force_initial_diagnostics",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws.",
-    )
+    parser.add_argument("--tools", default=default_tools, type=str, nargs='+', choices=BaseTool.all_registered_names, help=(
+        "Optional list of tools to use."
+    ))
+    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help=(
+        "Optional list of tools to ban. Takes precedence over --tools."
+    ))
+    parser.add_argument("-K", "--local_sample_size", type=int, default=2, help=(
+        "Number of LLM samples to generate for each branch."
+    ))
+    parser.add_argument("-L", "--max_refinement_depth", type=int, default=10, help=(
+        "Maximum agent refinement depth."
+    ))
+    parser.add_argument("-C", "--global_width", type=int, default=1, help=(
+        "Number of independent branches per restart loop."
+    ))
+    parser.add_argument("-R", "--max_restart_loop", type=int, default=2, help=(
+        "Maximum number of best-solution restart loops."
+    ))
+    parser.add_argument("--restart_top_k", type=int, default=1, help=(
+        "Number of previous best formulas to inject into the next restart prompt."
+    ))
+    parser.add_argument("--llm_max_tokens", type=int, default=4096, help=(
+        "Maximum number of tokens to generate for each LLM response."
+    ))
+    parser.add_argument("--tool_parser", default="openai", choices=["openai", "text", "json", "xml"], help=(
+        "Tool response parser type."
+    ))
+    parser.add_argument("--max_workers", type=int, default=0, help=(
+        "Maximum number of parallel workers for tool execution. 0 means no parallel execution."
+    ))
+    parser.add_argument("--validation_fraction", type=float, default=0.2, help=(
+        "Fraction of samples held out for validation."
+    ))
+    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help=(
+        "Validation split strategy."
+    ))
+    parser.add_argument("--split_random_state", type=int, default=42, help=(
+        "Random seed used by the random validation split."
+    ))
+    parser.add_argument("--force_initial_diagnostics", action=argparse.BooleanOptionalAction, default=True, help=(
+        "Before each branch's first LLM request, run statistics_analysis, "
+        "relationship_analysis, and read discover-symbolic-laws."
+    ))
     return parser
 
 
@@ -113,8 +137,6 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "problem_name": task.name,
         "duration_seconds": None,
-        "best_formula": None,
-        "best_mse": None,
         "status": "not_started",
         "progress": None,
         "token_usage": None,
@@ -123,7 +145,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         "llm_model": f"{args.llm_model} @ {args.llm_provider}",
     }
     try:
-        result |= agent.fit(X=X, y=y, problem_description=problem_description)
+        result |= agent.run(X=X, y=y, problem_description=problem_description)
     except KeyboardInterrupt as e:
         _logger.note("Experiment interrupted by user.")
         result |= getattr(e, "partial_result", {"status": "interrupted"})
@@ -139,13 +161,23 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         result["money_usage"] = agent.money_counter.count
         result["tools_usage"] = agent.tools_counter.named_count
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k not in ['pareto_front', 'topk_records']])
+        log = '\n'.join([
+            f"[red]{k.replace('_', ' ').title()}[reset]: {v}"
+            for k, v in result.items()
+            if k not in {"pareto_front", "candidates"}
+        ])
+        candidates = result.get("candidates", [])
+        pareto = [
+            {"formula": candidates[index]["formula"], **candidates[index]["details"]}
+            for index in result.get("pareto_front", [])
+            if 0 <= index < len(candidates)
+        ]
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
             f"{log}\n"
             f"\n[red bold]Pareto Front[reset]\n"
-            f"{format_pareto_front(result.get('pareto_front'))}\n"
+            f"{format_pareto_front(pareto)}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
         # 保存文件
@@ -159,15 +191,22 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     if result.get("status") not in {"completed", "early_stopped"}:
         error = result.get("error") or f"agent did not complete (status={result.get('status')!r})"
         raise RuntimeError(error)
-    if not result["best_formula"]:
+    best_index = result.get("best_candidate")
+    candidates = result.get("candidates", [])
+    best_formula = (
+        candidates[best_index]["formula"]
+        if isinstance(best_index, int) and 0 <= best_index < len(candidates)
+        else None
+    )
+    if not best_formula:
         error = f"agent finished with status={result.get('status')!r} but no formula was produced"
         raise RuntimeError(error)
 
-    f = nd.parse(result["best_formula"])
+    f = nd.parse(best_formula)
 
     def predict(X: np.ndarray) -> np.ndarray:
         pred_data = {feat: X[:, i] for i, feat in enumerate(features)}
         pred_data[target] = np.zeros(len(X))  # 占位，不会被使用
         return f.eval(pred_data).flatten()
 
-    return SRResult(predict=predict, expression=result["best_formula"])
+    return SRResult(predict=predict, expression=best_formula)

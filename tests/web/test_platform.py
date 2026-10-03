@@ -7,11 +7,11 @@ pytest.importorskip('fastapi')
 pytest.importorskip('httpx')
 from fastapi.testclient import TestClient
 
-from sr_harness.api.result import LLMResult
-from sr_harness.core import SearchRunState, ToolCall
-from sr_harness.api.llm_api import LLMAPI
+from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
+from sr_harness.core import APICallResult, SearchRunState, ToolCall
+from sr_harness.api import BaseAPI
 from sr_harness.web.app import create_app
-from sr_harness.web.interaction import InteractionController
+from sr_harness.runtime import InteractionController
 from sr_harness.web.session import InteractiveSession
 
 
@@ -109,13 +109,13 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
                                'name': call.name, 'arguments': '{"f":"x**2 + 2*x + 1"}'}}]}
                 yield {'content': message['content'], 'tool_call': [call], 'message': message}
                 return {'usage': {'token': {}, 'price': {}}, 'responses': []}
-            return LLMResult(generate())
+            return APICallResult(generate())
 
     def create(provider, model, **kwargs):
         models.append((provider, model))
         return FakeAPI()
 
-    monkeypatch.setattr(LLMAPI, 'create', create)
+    monkeypatch.setattr(BaseAPI, 'create', create)
     client.put('/api/workspace/upload?path=notes.txt', content=b'research')
     client.post('/api/control/command', json={'action': 'message', 'message': 'Prefer simple formulas'})
     response = client.post('/api/session/start', json={
@@ -126,8 +126,9 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     session.thread.join(20)
     assert not session.thread.is_alive()
     assert session.state == 'completed', session.result
-    assert session.topk
-    assert session.topk[0]['mse'] < 1e-20
+    topk = session.snapshot()['topk_records']
+    assert topk
+    assert topk[0]['mse'] < 1e-20
     assert client.get('/api/workspace/download?path=notes.txt').content == b'research'
     assert len(prompts) == 2
     assert models[-1] == ('openai', 'test-next-model')
@@ -147,7 +148,6 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
 
 
 def test_csv_input_and_failure_state(platform, monkeypatch):
-    from sr_harness.web.session import WebInteractiveAgent
     client, session = platform
     client.put('/api/workspace/upload?path=measurements.csv',
                content=(b'temperature,humidity,station,pressure\n'
@@ -156,7 +156,7 @@ def test_csv_input_and_failure_state(platform, monkeypatch):
     def fail_run(self, X, y, description):
         seen.update(X=X, y=y, description=description)
         raise RuntimeError('test provider unavailable')
-    monkeypatch.setattr(WebInteractiveAgent, 'run', fail_run)
+    monkeypatch.setattr(SRAgentInteractive, 'run', fail_run)
     response = client.post('/api/session/start', json={
         'dataset': 'measurements.csv', 'target': 'pressure',
         'features': ['humidity'], 'prompt': 'Fit pressure'})
@@ -182,6 +182,7 @@ def test_current_tree_never_scans_history(platform):
         larger_is_better=False,
         run_id=session.run_id,
     )
+    assert state.latest_coordinate is None
     state.register_iteration(
         [('', [], {'role': 'assistant', 'content': ''})],
         [[]],
@@ -192,6 +193,9 @@ def test_current_tree_never_scans_history(platform):
         L=1,
         C=1,
     )
+    assert state.latest_coordinate == state.nodes[
+        state.node_id(R=1, C=1, L=1, K=1)
+    ].coordinate
     session.run_state = state
     response = client.get(f'/api/runs/{session.run_id}/records')
     assert response.status_code == 200
@@ -211,8 +215,8 @@ def test_model_wait_pause_ack_and_stop(platform, monkeypatch):
                 assert release.wait(5)
                 yield from []
                 return {'usage': {'token': {}, 'price': {}}, 'responses': []}
-            return LLMResult(generate())
-    monkeypatch.setattr(LLMAPI, 'create', lambda *args, **kwargs: WaitingAPI())
+            return APICallResult(generate())
+    monkeypatch.setattr(BaseAPI, 'create', lambda *args, **kwargs: WaitingAPI())
     try:
         client.post('/api/session/start', json={'max_refinement_depth': 2})
         assert entered.wait(5)

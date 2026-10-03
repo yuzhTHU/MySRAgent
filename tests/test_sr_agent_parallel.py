@@ -42,16 +42,18 @@ def make_agent(tmp_path):
     return agent
 
 
-def test_interactive_agent_reuses_shared_fit_loop():
-    assert "fit" not in SRAgentInteractive.__dict__
-    assert SRAgentInteractive.fit is SRAgent.fit
-    assert SRAgentInteractive.run is SRAgent.fit
+def test_interactive_agent_reuses_shared_run_loop():
+    assert "run" not in SRAgentInteractive.__dict__
+    assert SRAgentInteractive.run is SRAgent.run
+    assert not hasattr(SRAgent, "fit")
 
 
 def test_interactive_guidance_is_added_before_prompt_construction():
     agent = object.__new__(SRAgentInteractive)
-    agent.interaction_controller = SimpleNamespace(
-        checkpoint=lambda: ["compare against a power law"]
+    agent.interaction_manager = SimpleNamespace(
+        checkpoint=lambda: ["compare against a power law"],
+        publish=lambda *args: None,
+        take_model_settings=lambda: None,
     )
     buffer = [{"role": "user", "content": "Find a formula."}]
 
