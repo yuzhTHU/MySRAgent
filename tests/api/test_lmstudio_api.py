@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sr_harness.api.core import ToolCall
+from sr_harness.core import ToolCall
 from sr_harness.api.llm_api import LLMAPI
 from sr_harness.api.lmstudio_api import LMStudioAPI
 from sr_harness.tools import BaseTool, ToolMetadata

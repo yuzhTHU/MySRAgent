@@ -11,7 +11,6 @@ import numpy as np
 import nd2py as nd
 from pathlib import Path
 from logging import getLogger
-from dataclasses import dataclass
 from scipy import stats
 from docstring_parser import DocstringStyle, parse
 from abc import ABC, abstractmethod
@@ -19,6 +18,7 @@ from types import NoneType, UnionType
 from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
 from ..utils import FactoryMixin, log_exception
+from ..core.tool import ToolCallResult, ToolMetadata
 if TYPE_CHECKING:
     from ..skills import SkillManager
 
@@ -27,45 +27,6 @@ _logger = getLogger(f'sr_harness.{__name__}')
 _ANSI_ESCAPE_RE = re.compile(
     r"(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[@-_])"
 )
-
-
-@dataclass
-class ToolMetadata:
-    """工具元数据。
-
-    Attributes:
-        name: 工具名称，用于 LLM 识别和调用。
-        description: 工具简述，说明工具的功能和适用场景。
-            设置为 None 以从 execute 方法的 docstring 中自动提取工具描述。
-        parameters: OpenAI/OpenRouter function calling 兼容的 JSON Schema。
-            设置为 None 以从 execute 方法的签名和 docstring 中自动推断基础 schema。
-    """
-    name: str
-    description: str | None = None
-    parameters: Dict[str, Any] | None = None
-
-
-@dataclass
-class ToolCallResult:
-    """工具调用结果。
-
-    Attributes:
-        ok: 是否成功执行工具（当且仅当出现无法处理的报错时为 False）
-        result: 运行结果, 用于存档和后续分析
-        result_str: 对 result 格式化后的版本, 用于展示给 LLM 的结果字符串
-        meta_data: 额外的元信息，如执行时间、日志等
-    """
-    ok: bool
-    result: Dict[str, Any]
-    result_str: str
-    meta_data: Dict[str, Any]
-
-    def get(self, key: str, default: Any = None) -> Any:
-        """Dictionary-like access to the wrapped result for legacy callers."""
-        return self.result.get(key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return self.result[key]
 
 
 class ToolRunAbort(RuntimeError):

@@ -1,8 +1,7 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 from .llm_api import LLMAPI, ToolList, ToolParserName
-from .core import LLMResult
+from .result import LLMResult
 from .manual_api import ManualAPI
-from .core import ToolCall
 from ..utils import setup_lazy_imports, TYPE_CHECKING
 
 # 引入可选依赖的子模块

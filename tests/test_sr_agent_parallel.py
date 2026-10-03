@@ -4,9 +4,10 @@ import json
 import numpy as np
 from types import SimpleNamespace
 
-from sr_harness.api.core import ToolCall
+from sr_harness.core import CandidateRecord, ToolCall, ToolCallResult, ToolMetadata
 from sr_harness.agents.sr_agent import SRAgent
-from sr_harness.tools.base_tool import BaseTool, ToolCallResult, ToolMetadata
+from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
+from sr_harness.tools.base_tool import BaseTool
 from sr_harness.tools.read_skill import ReadSkill
 from sr_harness.tools.relationship_analysis import RelationshipAnalysisTool
 from sr_harness.tools.statistics_analysis import StatisticsTool
@@ -39,6 +40,30 @@ def make_agent(tmp_path):
     )
     agent.tools = [UnitParallelTool(offset=10)]
     return agent
+
+
+def test_interactive_agent_reuses_shared_fit_loop():
+    assert "fit" not in SRAgentInteractive.__dict__
+    assert SRAgentInteractive.fit is SRAgent.fit
+    assert SRAgentInteractive.run is SRAgent.fit
+
+
+def test_interactive_guidance_is_added_before_prompt_construction():
+    agent = object.__new__(SRAgentInteractive)
+    agent.interaction_controller = SimpleNamespace(
+        checkpoint=lambda: ["compare against a power law"]
+    )
+    buffer = [{"role": "user", "content": "Find a formula."}]
+
+    agent.before_iteration(buffer, R=1, L=1, C=1)
+
+    assert buffer[-1] == {
+        "role": "user",
+        "content": (
+            "[Human guidance injected during the run]\n"
+            "compare against a power law"
+        ),
+    }
 
 
 def test_agent_exposes_only_skills_from_enabled_tools(tmp_path):
@@ -288,44 +313,39 @@ def test_update_buffer_injects_iteration_status(tmp_path):
         {"role": "system", "content": "Base system."},
         {"role": "user", "content": "Solve the task."},
     ]
-    prompt = list(buffer)
+    original_buffer = list(buffer)
     response_list = [("", [], {"role": "assistant", "content": ""})]
     results_list = [[]]
 
     updated, _ = agent.update_buffer(
-        buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=2, C=1
+        buffer, response_list, results_list, {}, R=1, L=2, C=1
     )
 
     assert updated is buffer
-    assert len(buffer) == len(prompt) + 1
+    assert len(buffer) == len(original_buffer) + 1
     assert buffer[0]["content"] == "Base system."
     assert "refinement round L=3/5" in buffer[-1]["content"]
     assert "From now on, 2 refinement round(s) remain" in buffer[-1]["content"]
     assert "No Pareto front yet" in buffer[-1]["content"]
-    assert prompt[-1]["content"] == "Solve the task."
+    assert original_buffer[-1]["content"] == "Solve the task."
 
 
 def test_update_buffer_injects_current_pareto_front(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_refinement_depth = 5
-    candidate = {
-        "formula": "x + y",
+    candidate = CandidateRecord(formula="x + y", node_id="candidate-node", details={
         "data_split_results": {
             "train": {"metrics": {"mse": 0.1, "r2": 0.98, "complexity": 3}},
             "validation": {"metrics": {"mse": 0.2, "r2": 0.97, "complexity": 3}},
         },
-        "node_id": "R1-C1-L1-K1",
-    }
-    topk_records = [(*agent.sortby(candidate), 0, candidate)]
+    })
+    agent.push_candidate(candidate)
     buffer = [{"role": "user", "content": "Find a formula."}]
 
     agent.update_buffer(
         buffer,
         [("", [], {"role": "assistant", "content": ""})],
         [[]],
-        topk_records,
-        {},
-        list(buffer),
         {},
         R=1,
         L=1,
@@ -345,11 +365,10 @@ def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
         {"role": "system", "content": "Base system."},
         {"role": "user", "content": "Solve the task."},
     ]
-    prompt = list(buffer)
     response_list = [("", [], {"role": "assistant", "content": ""})]
     results_list = [[]]
 
-    agent.update_buffer(buffer, response_list, results_list, [], {}, prompt, {}, R=1, L=4, C=1)
+    agent.update_buffer(buffer, response_list, results_list, {}, R=1, L=4, C=1)
     final_status = buffer[-1]["content"]
 
     assert "final refinement round" in final_status
@@ -370,9 +389,8 @@ def test_record_metric_ignores_non_candidate_tool_results(tmp_path):
     assert agent.sortby(diagnostic_result.result) is None
 
 
-def test_update_buffer_sorts_unwrapped_tool_results(tmp_path, monkeypatch):
+def test_update_buffer_sorts_unwrapped_tool_results(tmp_path):
     agent = make_agent(tmp_path)
-    monkeypatch.setattr(agent, "record_search_iteration", lambda *args: None)
     agent.parser = SimpleNamespace(format_tool_result_messages=lambda *args: [])
     buffer = [{"role": "user", "content": "Find a formula."}]
     response_list = [
@@ -386,12 +404,12 @@ def test_update_buffer_sorts_unwrapped_tool_results(tmp_path, monkeypatch):
         }, "candidate", {})],
     ]
 
-    agent.update_buffer(buffer, response_list, results_list, [], {}, list(buffer), {}, R=1, L=1, C=1)
+    agent.update_buffer(buffer, response_list, results_list, {}, R=1, L=1, C=1)
 
     assert buffer[-2]["content"] == "candidate"
 
 
-def test_update_topk_records_pareto_front(tmp_path):
+def test_collect_candidates_records_pareto_front(tmp_path):
     agent = make_agent(tmp_path)
     response_list = [
         ("", [
@@ -424,16 +442,30 @@ def test_update_topk_records_pareto_front(tmp_path):
         }, "", {}),
     ]]
 
-    topk_records = agent.update_topk([], response_list, results_list, R=1, L=1, C=1)
-    agent.record_search(topk_records, R=1, L=1, C=1)
+    candidates = agent.collect_candidates(response_list, results_list, R=1, L=1, C=1)
+    result = agent.search_result("completed", R=1, L=1, C=1)
 
-    lines = (tmp_path / "search_record.jsonl").read_text(encoding="utf-8").splitlines()
-    record = json.loads(lines[-1])
-    assert record["coord"] == {"R": 1, "C": 1, "L": 1}
-    assert [item["formula"] for item in record["pareto_front"]] == ["x + y", "x"]
+    assert [item.formula for item in candidates] == ["x + y", "x", "x + y + z"]
+    assert result["pareto_front"] == [0, 1]
+    assert [result["candidates"][index]["formula"] for index in result["pareto_front"]] == ["x + y", "x"]
+    saved = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert saved["pareto_front"] == [0, 1]
 
 
-def test_update_topk_rejects_non_finite_candidate_metrics(tmp_path):
+def test_no_file_mode_keeps_search_identity_in_memory():
+    agent = SRAgent(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=["unit_parallel_tool"],
+        save_path=None,
+    )
+
+    node_id = agent.run_state.node_id(R=1, C=1, L=1, K=1)
+    assert node_id.startswith(f"{agent.run_state.run_id}:")
+    assert agent.save_path is None
+
+
+def test_collect_candidates_rejects_non_finite_candidate_metrics(tmp_path):
     agent = make_agent(tmp_path)
     response_list = [
         ("", [
@@ -460,7 +492,7 @@ def test_update_topk_rejects_non_finite_candidate_metrics(tmp_path):
         }, "", {}),
     ]]
 
-    topk_records = agent.update_topk([], response_list, results_list, R=1, L=1, C=1)
+    topk_records = agent.collect_candidates(response_list, results_list, R=1, L=1, C=1)
 
-    assert [entry[-1]["formula"] for entry in topk_records] == ["P"]
-    assert [item["formula"] for item in agent.get_pareto_front(topk_records)] == ["P"]
+    assert [entry.formula for entry in topk_records] == ["P"]
+    assert [item.formula for item in agent.get_pareto_front()] == ["P"]

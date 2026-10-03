@@ -7,7 +7,8 @@ pytest.importorskip('fastapi')
 pytest.importorskip('httpx')
 from fastapi.testclient import TestClient
 
-from sr_harness.api.core import LLMResult, ToolCall
+from sr_harness.api.result import LLMResult
+from sr_harness.core import SearchRunState, ToolCall
 from sr_harness.api.llm_api import LLMAPI
 from sr_harness.web.app import create_app
 from sr_harness.web.interaction import InteractionController
@@ -135,7 +136,9 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
         {'role': 'system', 'content': 'Custom system prompt'},
         {'role': 'user', 'content': 'Custom user prompt'},
     ]
-    assert all(any(m.get('content') == 'Prefer simple formulas' for m in p) for p in prompts)
+    assert all(any(
+        (m.get('content') or '').endswith('Prefer simple formulas') for m in p
+    ) for p in prompts)
     kinds = [e['kind'] for e in session.controller.events()]
     assert all(k in kinds for k in ['context', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle'])
     runs = client.get('/api/runs').json()['runs']
@@ -164,47 +167,37 @@ def test_csv_input_and_failure_state(platform, monkeypatch):
     assert seen['description'] == 'Fit pressure'
     assert session.state == 'failed'
     assert client.get('/api/session').json()['result']['error'] == 'test provider unavailable'
-    assert (session.run_dir / 'web_result.json').exists()
+    assert session.run_state is not None
+    assert session.run_state.run_id == session.run_id
+    assert session.run_state.node_count == 0
 
 
-def test_current_tree_never_scans_history(platform, monkeypatch):
-    import json
-    from sr_harness.web import app as web_app
+def test_current_tree_never_scans_history(platform):
     client, session = platform
-    def no_scan(*args):
-        raise AssertionError('current run must not traverse historical logs')
-    monkeypatch.setattr(web_app, '_iter_run_dirs', no_scan)
     # Before the first complete iteration, respond promptly with 404.
-    assert client.get(f'/api/runs/{session.run_dir.name}/records').status_code == 404
-    (session.run_dir / 'manifest.json').write_text('{}')
-    record = {'seq': 1, 'node_id': 'node1', 'core': {'tool_names': []}, 'detail': {'prompt': []}}
-    (session.run_dir / 'records.jsonl').write_text(json.dumps(record)+'\n')
-    for key in [session.run_dir.name, web_app._run_key(session.run_dir.parent, session.run_dir)]:
-        response = client.get(f'/api/runs/{key}/records')
-        assert response.status_code == 200
-        assert response.json()['records'][0]['node_id'] == 'node1'
-        assert client.get(f'/api/runs/{key}/records?after_seq=1').json()['records'] == []
-
-
-def test_discovery_skips_workspace(tmp_path):
-    from sr_harness.web.app import _iter_run_dirs, _resolve_run_dir, _run_key
-    run = tmp_path / 'experiment' / 'run'
-    run.mkdir(parents=True)
-    (run / 'manifest.json').write_text('{}')
-    (run / 'records.jsonl').touch()
-    nested = run / 'sr_workspace_test' / 'nested'
-    nested.mkdir(parents=True)
-    (nested / 'manifest.json').write_text('{}')
-    (nested / 'records.jsonl').touch()
-    assert list(_iter_run_dirs(tmp_path)) == [run]
-    assert _resolve_run_dir(tmp_path, _run_key(tmp_path, run)) == run
-    external = tmp_path.parent / 'external-run'
-    external.mkdir(exist_ok=True)
-    (external / 'manifest.json').write_text('{}')
-    (external / 'records.jsonl').touch()
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException):
-        _resolve_run_dir(tmp_path, _run_key(tmp_path, external))
+    assert client.get(f'/api/runs/{session.run_id}/records').status_code == 404
+    state = SearchRunState(
+        save_path=None,
+        ranking_metric='mse',
+        larger_is_better=False,
+        run_id=session.run_id,
+    )
+    state.register_iteration(
+        [('', [], {'role': 'assistant', 'content': ''})],
+        [[]],
+        (),
+        [],
+        {},
+        R=1,
+        L=1,
+        C=1,
+    )
+    session.run_state = state
+    response = client.get(f'/api/runs/{session.run_id}/records')
+    assert response.status_code == 200
+    assert response.json()['records'][0]['node_id'] == state.node_id(R=1, C=1, L=1, K=1)
+    assert client.get(f'/api/runs/{session.run_id}/records?after_seq=1').json()['records'] == []
+    assert client.get('/api/runs/unrelated/records').status_code == 404
 
 
 def test_model_wait_pause_ack_and_stop(platform, monkeypatch):

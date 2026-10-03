@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import threading
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from sr_harness.web.interaction import InteractionController
 from sr_harness.web.app import create_app
-from sr_harness.api.model_router import ModelRouter
-from sr_harness.api.core import ToolCall
+from sr_harness.agents.model_router import ModelRouter
+from sr_harness.core import SearchRunState, ToolCall
 from sr_harness import SRAgent
 from sr_harness.tools.evaluate_formula import EvaluateTool
 from sr_harness.utils import ParallelTimer
@@ -60,18 +59,19 @@ def test_new_candidate_is_audited_without_spending_an_llm_round():
     agent.tools = [EICTool(**context)]
     agent.tools_counter = ParallelTimer(unit="call")
     agent.save_path = None
-    agent.search_record_writer = SimpleNamespace(
-        node_id=lambda **kwargs: "candidate-node"
+    agent.run_state = SearchRunState(
+        save_path=None,
+        ranking_metric="mse",
+        larger_is_better=False,
     )
-    topk = agent.update_topk(
-        [],
+    topk = agent.collect_candidates(
         [("", [ToolCall(name="evaluate_formula", params={})], {})],
         [[candidate]],
         R=1,
         L=1,
         C=1,
     )
-    assert topk[0][-1]["eic_diagnostics"]["worst_subtree"] == "root"
+    assert topk[0].details["eic_diagnostics"]["worst_subtree"] == "root"
     assert agent.tools_counter.named_count["evaluate_eic"] == 1
 
 

@@ -1,22 +1,10 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterator, TYPE_CHECKING
+from typing import Iterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..parser import BaseParser
-
-
-@dataclass
-class ToolCall:
-    """Normalized tool call emitted by LLM APIs and parsers."""
-
-    name: str
-    params: dict
-    id: str | None = None
-    raw: Any = None
-    raw_str: str | None = None
 
 
 class LLMResult: # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容

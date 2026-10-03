@@ -4,7 +4,8 @@
 所有工具都应继承自 BaseTool，并实现 execute 方法，详见本目录下的 README.md
 """
 
-from .base_tool import BaseTool, ToolMetadata, ToolCallResult, ToolRunAbort
+from ..core import ToolCallResult, ToolMetadata
+from .base_tool import BaseTool, ToolRunAbort
 from .statistics_analysis import StatisticsTool
 from .relationship_analysis import RelationshipAnalysisTool
 from .evaluate_formula import EvaluateTool, SubmitFormulaTool

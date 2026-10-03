@@ -6,7 +6,7 @@ from typing import Any
 
 from sr_harness.api.openrouter_api import OpenRouterAPI
 from sr_harness.api.siliconflow_api import SiliconFlowAPI
-from sr_harness.api.core import ToolCall
+from sr_harness.core import ToolCall
 from sr_harness.tools import BaseTool, ToolMetadata
 
 

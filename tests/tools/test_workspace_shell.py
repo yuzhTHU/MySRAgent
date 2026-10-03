@@ -9,8 +9,12 @@
 - 管道功能
 """
 
+import io
+import tarfile
 import tempfile
 from pathlib import Path
+
+import pytest
 
 from sr_harness.tools.workspace_shell import Workspace, WorkspaceShellTool
 
@@ -215,6 +219,27 @@ class TestWorkspaceShellTool:
         assert result.get("success") is False
         assert "No such file" in result.get("error", "")
 
+    @pytest.mark.parametrize("flags", ["-la", "-al", "-l -a", "-a -l"])
+    def test_ls_accepts_grouped_and_separate_short_options(self, flags):
+        """短选项可以组合、拆分，并且顺序不影响含义。"""
+        (self.ws.path / ".hidden").write_text("secret")
+        result = self.tool.execute(f"ls {flags}")
+        assert result.get("success") is True
+        assert ".hidden" in result["stdout"]
+        assert "data.csv" in result["stdout"]
+        assert "-rw" in result["stdout"]
+
+    def test_unknown_option_is_not_treated_as_a_path(self):
+        result = self.tool.execute("ls -z")
+        assert result.get("success") is False
+        assert "unrecognized arguments" in result.get("error", "")
+
+    def test_double_dash_allows_dash_prefixed_paths(self):
+        (self.ws.path / "-notes").write_text("dash path")
+        result = self.tool.execute("cat -- -notes")
+        assert result.get("success") is True
+        assert result["stdout"] == "dash path"
+
     # ─── cat 命令 ───
 
     def test_cat_file(self):
@@ -269,6 +294,16 @@ class TestWorkspaceShellTool:
         parts = result["stdout"].strip().split()
         assert int(parts[0]) == 4  # 4 行
 
+    def test_wc_line_flag(self):
+        result = self.tool.execute("wc -l data.csv")
+        assert result.get("success") is True
+        assert result["stdout"].split() == ["4", "data.csv"]
+
+    def test_wc_grouped_flags(self):
+        result = self.tool.execute("wc -lw data.csv")
+        assert result.get("success") is True
+        assert result["stdout"].split()[:2] == ["4", "4"]
+
     # ─── grep 命令 ───
 
     def test_grep_pattern(self):
@@ -305,6 +340,11 @@ class TestWorkspaceShellTool:
         assert "alice" in lines[1]
         assert "10" not in result["stdout"]
 
+    def test_cut_accepts_attached_and_intermixed_options(self):
+        result = self.tool.execute("cut data.csv -d, -f1")
+        assert result.get("success") is True
+        assert result["stdout"].splitlines() == ["name", "alice", "bob", "charlie"]
+
     # ─── 管道 ───
 
     def test_pipe_cat_head(self):
@@ -327,6 +367,26 @@ class TestWorkspaceShellTool:
         assert result.get("success") is True
         parts = result["stdout"].strip().split()
         assert int(parts[0]) == 4
+
+    def test_pipe_without_surrounding_spaces(self):
+        result = self.tool.execute("cat data.csv|head -2|wc -l")
+        assert result.get("success") is True
+        assert result["stdout"] == "2"
+
+    def test_quoted_pipe_is_data_not_an_operator(self):
+        (self.ws.path / "pipes.txt").write_text("alice|bob\ncharlie\n")
+        result = self.tool.execute("grep -F 'alice|bob' pipes.txt")
+        assert result.get("success") is True
+        assert result["stdout"] == "alice|bob"
+
+    @pytest.mark.parametrize(
+        "command",
+        ["cat data.csv > copy.csv", "cat data.csv && wc", "cat data.csv || wc", "ls; wc", "ls |"],
+    )
+    def test_rejects_unsupported_shell_operators(self, command):
+        result = self.tool.execute(command)
+        assert result.get("success") is False
+        assert "parse error" in result.get("error", "")
 
     def test_output_is_limited(self):
         """长输出会被截断。"""
@@ -351,12 +411,24 @@ class TestWorkspaceShellTool:
         assert result.get("success") is True
         assert (self.ws.path / "newdir").is_dir()
 
+    def test_mkdir_parents_and_rm_grouped_flags(self):
+        """文件命令同样支持常见的组合短选项。"""
+        result = self.tool.execute("mkdir -p parent/child")
+        assert result.get("success") is True
+        assert (self.ws.path / "parent" / "child").is_dir()
+
+        result = self.tool.execute("rm -rf parent")
+        assert result.get("success") is True
+        assert not (self.ws.path / "parent").exists()
+
     def test_cp_file(self):
         """cp 复制文件。"""
         result = self.tool.execute("cp data.csv data_copy.csv")
         assert result.get("success") is True
         assert (self.ws.path / "data_copy.csv").exists()
-        assert (self.ws.path / "data_copy.csv").read_text() == (self.ws.path / "data.csv").read_text()
+        assert (self.ws.path / "data_copy.csv").read_text() == (
+            self.ws.path / "data.csv"
+        ).read_text()
 
     def test_mv_file(self):
         """mv 移动/重命名文件。"""
@@ -387,6 +459,33 @@ class TestWorkspaceShellTool:
         assert (self.ws.path / "compress_me.txt").exists()
         assert (self.ws.path / "compress_me.txt").read_text() == "compress this content"
 
+    def test_tar_accepts_grouped_flags_and_destination(self):
+        """tar -xzf 和 -C 由声明式参数解析器处理。"""
+        source = self.ws.path / "source.txt"
+        source.write_text("archive content")
+        archive = self.ws.path / "files.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            tf.add(source, arcname="nested/source.txt")
+
+        result = self.tool.execute("tar -xzf files.tar.gz -C extracted")
+        assert result.get("success") is True
+        assert (self.ws.path / "extracted" / "nested" / "source.txt").read_text() == (
+            "archive content"
+        )
+
+    def test_tar_rejects_path_traversal(self):
+        """data extraction filter 阻止归档成员逃出目标目录。"""
+        archive = self.ws.path / "unsafe.tar"
+        with tarfile.open(archive, "w") as tf:
+            member = tarfile.TarInfo("../escaped.txt")
+            payload = b"unsafe"
+            member.size = len(payload)
+            tf.addfile(member, io.BytesIO(payload))
+
+        result = self.tool.execute("tar -xf unsafe.tar")
+        assert result.get("success") is False
+        assert not (self.ws.path.parent / "escaped.txt").exists()
+
     # ─── format_result_dict ───
 
     def test_format_result_success(self):
@@ -397,7 +496,13 @@ class TestWorkspaceShellTool:
 
     def test_format_result_error(self):
         """失败结果格式化输出 error。"""
-        result = {"success": False, "stdout": "", "stderr": "", "error": "Path invalid", "exit_code": 1}
+        result = {
+            "success": False,
+            "stdout": "",
+            "stderr": "",
+            "error": "Path invalid",
+            "exit_code": 1,
+        }
         formatted = WorkspaceShellTool.format_result_dict(result)
         assert "Path invalid" in formatted
 
@@ -408,4 +513,3 @@ class TestWorkspaceShellTool:
         tool_result = self.tool("ls")
         assert tool_result.ok is True
         assert "data.csv" in tool_result.result["stdout"]
-

@@ -9,7 +9,8 @@ from abc import abstractmethod
 from typing import Any, Dict, Generator, List, Literal, Sequence, Tuple, Type
 from ..tools import BaseTool
 from ..parser import BaseParser
-from .core import LLMResult, ToolCall
+from ..core import ToolCall
+from .result import LLMResult
 from .tool_call_mixin import ToolCallMixin
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")

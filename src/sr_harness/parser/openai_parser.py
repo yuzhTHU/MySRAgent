@@ -7,8 +7,8 @@ from ast import literal_eval
 from logging import getLogger
 from typing import List, Dict, Any
 from .base_parser import BaseParser
-from ..api.core import ToolCall
-from ..tools import BaseTool, ToolCallResult
+from ..core import ToolCall, ToolCallResult
+from ..tools import BaseTool
 
 _logger = getLogger(f'sr_harness.{__name__}')
 

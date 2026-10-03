@@ -8,7 +8,8 @@ import nd2py as nd
 import numpy as np
 import pytest
 
-from sr_harness.tools.base_tool import BaseTool, ToolCallResult, ToolRunAbort, ToolMetadata
+from sr_harness.core import ToolCallResult, ToolMetadata
+from sr_harness.tools.base_tool import BaseTool, ToolRunAbort
 
 
 @BaseTool.register("unit_sample_tool")

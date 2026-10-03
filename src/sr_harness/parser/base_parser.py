@@ -7,8 +7,8 @@ from __future__ import annotations
 from logging import getLogger
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-from ..api.core import ToolCall
-from ..tools import BaseTool, ToolCallResult
+from ..core import ToolCall, ToolCallResult
+from ..tools import BaseTool
 from ..utils import FactoryMixin
 
 _logger = getLogger(f'sr_harness.{__name__}')
