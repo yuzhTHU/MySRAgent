@@ -2,37 +2,20 @@
 from __future__ import annotations
 
 import csv
-import json
-import math
 import shutil
 import threading
 import time
 import uuid
-from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 
 from ..agents.sr_agent_interactive import SRAgentInteractive
-from ..agents.sr_agent import SRAgent
 from ..api.llm_api import LLMAPI
-from ..api.model_router import ModelRouter
+from ..agents.model_router import ModelRouter
+from ..core import json_value
 from .interaction import InteractionController
-
-
-def json_value(value):
-    if isinstance(value, dict):
-        return {str(k): json_value(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_value(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return json_value(value.tolist())
-    if isinstance(value, np.generic):
-        return json_value(value.item())
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
 
 
 def add_variable_descriptions(messages, descriptions, variables):
@@ -54,9 +37,11 @@ class WebInteractiveAgent(SRAgentInteractive):
     def __init__(self, *, session, **kwargs):
         self.session = session
         super().__init__(interaction_controller=session.controller, **kwargs)
+        with self.session.lock:
+            self.session.run_state = self.run_state
 
     def emit(self, kind, payload):
-        self.session.controller.publish(kind, json_value(self.search_record_writer.serialization(payload)))
+        self.session.controller.publish(kind, json_value(payload))
 
     def build_initial_prompt(self, *args, **kwargs):
         # Tools are initialized by fit before this hook. Keep the actual workspace
@@ -83,12 +68,9 @@ class WebInteractiveAgent(SRAgentInteractive):
                 message["content"] = overrides[message["role"]]
         return prompt
 
-    def request_llm(self, prompt, R, L, C):
+    def before_iteration(self, buffer, R, L, C):
         self.emit("activity", {"phase": "checkpoint", "coord": {"R": R, "C": C, "L": L}})
-        for message in self.interaction_controller.checkpoint():
-            guidance = {"role": "user", "content": message}
-            prompt.append(guidance)
-            self._active_buffer.append(deepcopy(guidance))
+        super().before_iteration(buffer, R=R, L=L, C=C)
         with self.session.lock:
             settings = self.session.pending_settings
             self.session.pending_settings = None
@@ -109,14 +91,14 @@ class WebInteractiveAgent(SRAgentInteractive):
                 self.emit("settings_applied", settings)
             except Exception as exc:
                 self.emit("settings_error", {"error": str(exc)})
+
+    def request_llm(self, prompt, R, L, C):
         self.emit("context", {"messages": prompt, "coord": {"R": R, "C": C, "L": L}})
-        for tool in self.tools:
-            tool.context["messages"] = deepcopy(prompt)
         route = self.model_router.route(task_score=self._task_route_score,
                                        task_reasons=self._task_route_reasons, refinement_step=L)
         self.emit("activity", {"phase": "model", "coord": {"R": R, "C": C, "L": L},
                                "provider": route.provider, "model": route.model})
-        responses, usage = SRAgent.request_llm(self, prompt, R=R, L=L, C=C)
+        responses, usage = super().request_llm(prompt, R=R, L=L, C=C)
         self.emit("activity", {"phase": "processing", "coord": {"R": R, "C": C, "L": L}})
         cumulative_usage = {
             "token": self.token_counter.named_count,
@@ -136,10 +118,6 @@ class WebInteractiveAgent(SRAgentInteractive):
                                     "coord": {"R": R, "C": C, "L": L, "K": K},
                                     "usage": usage, "cumulative_usage": cumulative_usage})
         return responses, usage
-
-    def build_prompt(self, buffer, R, L, C):
-        self._active_buffer = buffer
-        return super().build_prompt(buffer, R=R, L=L, C=C)
 
     def tool_schema(self, name):
         return next(
@@ -173,17 +151,10 @@ class WebInteractiveAgent(SRAgentInteractive):
         self.emit("activity", {"phase": "processing"})
         return results
 
-    def update_topk(self, *args, **kwargs):
+    def collect_candidates(self, *args, **kwargs):
         self.emit("activity", {"phase": "ranking"})
-        records = super().update_topk(*args, **kwargs)
-        # The interactive loop reads legacy top-level mse/r2, while current
-        # evaluators store metrics per split. Preserve both representations.
-        for _, _, _, record in records:
-            splits = record.get("data_split_results", {})
-            split = "validation" if "validation" in splits else "train"
-            record.update(splits.get(split, {}).get("metrics", {}))
-            record["split"] = split
-        value = json_value(self.search_record_writer.serialization([r[-1] for r in sorted(records)]))
+        records = super().collect_candidates(*args, **kwargs)
+        value = json_value([record.display_dict() for record in records])
         with self.session.lock:
             self.session.topk = value
         self.emit("topk", {"records": value})
@@ -202,7 +173,8 @@ class InteractiveSession:
     def __init__(self, log_dir, controller=None, agent_options=None, data=None, initial_prompt=""):
         self.controller = controller or InteractionController()
         self.lock = threading.RLock()
-        self.run_dir = Path(log_dir).resolve() / ("interactive_" + uuid.uuid4().hex[:12])
+        self.run_id = uuid.uuid4().hex
+        self.run_dir = Path(log_dir).resolve() / self.run_id
         self.workspace = self.run_dir / "workspace"
         self.workspace.mkdir(parents=True)
         self.settings = {"llm_provider": "openrouter", "llm_model": "deepseek/deepseek-v4-flash",
@@ -217,13 +189,14 @@ class InteractiveSession:
         self.state = "idle"
         self.topk = []
         self.result = None
+        self.run_state = None
         self.thread = None
 
     def snapshot(self):
         with self.lock:
             return {"state": self.state, "settings": self.settings.copy(),
                     "pending_settings": self.pending_settings, "topk_records": self.topk,
-                    "result": self.result, "run_id": self.run_dir.name,
+                    "result": self.result, "run_id": self.run_id,
                     "initial_prompt": self.initial_prompt, "supplied_data": self.data is not None,
                     "workspace": str(self.workspace), **self.controller.status()}
 
@@ -376,7 +349,13 @@ class InteractiveSession:
     def _run(self, X, y, description):
         try:
             options = dict(self.settings)
-            options.update(save_path=str(self.run_dir), use_workspace=True, max_workers=0)
+            save_path = options.pop("save_path", str(self.run_dir))
+            options.update(
+                save_path=save_path,
+                run_id=self.run_id,
+                use_workspace=True,
+            )
+            options.setdefault("max_workers", 0)
             agent = WebInteractiveAgent(session=self, **options)
             with self.lock:
                 self.state = "running"
@@ -389,7 +368,6 @@ class InteractiveSession:
         with self.lock:
             self.result = json_value(result)
             self.state = result.get("status", "completed")
-            (self.run_dir / "web_result.json").write_text(json.dumps(self.result, ensure_ascii=False, default=str))
         self.controller.publish("lifecycle", {"state": self.state, "result": self.result})
         self.controller.publish("activity", {"phase": self.state})
 

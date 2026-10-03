@@ -417,7 +417,8 @@ function renderEvent(e) {
     if(pending)toolCards.set(key,card);else toolCards.delete(key);
   } else if(e.kind==='lifecycle') {
     metaTime.before(el('span',_(p.state),'meta-coord'));
-    if(p.result?.best_formula)card.append(el('div',p.result.best_formula,'formula'));
+    const bestIndex=p.result?.best_candidate,bestCandidate=Number.isInteger(bestIndex)?p.result?.candidates?.[bestIndex]:null;
+    if(bestCandidate?.formula)card.append(el('div',bestCandidate.formula,'formula'));
     if(p.result?.error)card.append(el('pre',p.result.error));disclosure(card,_('fullRunResult'),p.result);
   } else if(e.kind==='control') {
     const actionLabel={pause:_('controlPaused'),resume:_('controlResumed'),stop:_('controlStopped'),message:_('controlMessage')}[p.action]||p.action||_('controlAction');

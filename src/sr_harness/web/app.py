@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import math
-import os
 from pathlib import Path
 from typing import Any
 
@@ -46,21 +44,17 @@ def create_app(
 
     @app.get("/api/runs")
     def list_runs():
-        runs = []
-        for run_dir in _iter_run_dirs(app.state.log_dir):
-            manifest = _read_json(run_dir / "manifest.json") or {}
-            record_count, last_seq = _record_stats(run_dir / "records.jsonl")
-            runs.append({
-                "run_id": run_dir.name,
-                "run_key": _run_key(app.state.log_dir, run_dir),
-                "path": str(run_dir),
-                "manifest": manifest,
-                "record_count": record_count,
-                "last_seq": last_seq,
-                "mtime": (run_dir / "records.jsonl").stat().st_mtime,
-            })
-        runs.sort(key=lambda item: item["mtime"], reverse=True)
-        return {"runs": runs}
+        state = getattr(session, "run_state", None) if session is not None else None
+        if state is None:
+            return {"runs": []}
+        count = state.node_count
+        return {"runs": [{
+            "run_id": state.run_id,
+            "run_key": state.run_id,
+            "manifest": {"run_id": state.run_id},
+            "record_count": count,
+            "last_seq": count,
+        }]}
 
     @app.get("/api/control/status")
     def control_status():
@@ -90,9 +84,11 @@ def create_app(
 
     @app.get("/api/runs/{run_id}/records")
     def list_records(run_id: str, after_seq: int = Query(0, ge=0), include_detail: bool = False):
-        run_dir = _resolve_run_dir(app.state.log_dir, run_id)
-        all_records = list(_read_records(run_dir / "records.jsonl"))
-        records_by_id = {record.get("node_id"): record for record in all_records if record.get("node_id")}
+        state = _resolve_run_state(session, run_id)
+        all_records = _number_records(state.records(include_detail=True))
+        records_by_id = {
+            record["node_id"]: record for record in all_records if record.get("node_id")
+        }
         records = []
         for record in all_records:
             if int(record.get("seq", 0)) <= after_seq:
@@ -103,9 +99,11 @@ def create_app(
 
     @app.get("/api/runs/{run_id}/records/{node_id}")
     def get_record(run_id: str, node_id: str):
-        run_dir = _resolve_run_dir(app.state.log_dir, run_id)
-        all_records = list(_read_records(run_dir / "records.jsonl"))
-        records_by_id = {record.get("node_id"): record for record in all_records if record.get("node_id")}
+        state = _resolve_run_state(session, run_id)
+        all_records = _number_records(state.records(include_detail=True))
+        records_by_id = {
+            record["node_id"]: record for record in all_records if record.get("node_id")
+        }
         for record in all_records:
             if record.get("node_id") == node_id:
                 return _with_core_derivatives(record, records_by_id)
@@ -113,22 +111,30 @@ def create_app(
 
     @app.get("/api/runs/{run_id}/stream")
     async def stream_records(run_id: str, request: Request, after_seq: int = Query(0, ge=0)):
-        run_dir = await asyncio.to_thread(_resolve_run_dir, app.state.log_dir, run_id)
-        records_path = run_dir / "records.jsonl"
+        state = _resolve_run_state(session, run_id)
 
         async def event_source():
             next_seq = after_seq
             while not await request.is_disconnected():
                 batch = []
-                all_records = await asyncio.to_thread(lambda: list(_read_records(records_path)))
-                records_by_id = {record.get("node_id"): record for record in all_records if record.get("node_id")}
+                all_records = _number_records(state.records(include_detail=True))
+                records_by_id = {
+                    record["node_id"]: record
+                    for record in all_records
+                    if record.get("node_id")
+                }
                 for record in all_records:
                     seq = int(record.get("seq", 0))
                     if seq > next_seq:
                         batch.append(_strip_detail(_with_core_derivatives(record, records_by_id)))
                         next_seq = max(next_seq, seq)
                 if batch:
-                    yield f"data: {json.dumps(_sanitize_json_value({'records': batch}), ensure_ascii=False, allow_nan=False)}\n\n"
+                    payload = json.dumps(
+                        _sanitize_json_value({"records": batch}),
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    )
+                    yield f"data: {payload}\n\n"
                 await asyncio.sleep(1.0)
 
         return StreamingResponse(event_source(), media_type="text/event-stream")
@@ -136,77 +142,16 @@ def create_app(
     return app
 
 
-def _iter_run_dirs(log_dir: Path):
-    if not log_dir.exists():
-        return
-    # A run's workspace may contain whole projects. Never recursively discover
-    # runs inside one, nor follow directory symlinks into external datasets.
-    for root, directories, files in os.walk(log_dir):
-        directories[:] = [name for name in directories if not name.startswith('.')
-                          and name not in {'workspace', 'node_modules', 'venv', '__pycache__'}
-                          and not name.startswith('sr_workspace_')]
-        if 'manifest.json' in files:
-            directories[:] = []
-            if 'records.jsonl' in files:
-                yield Path(root)
-
-
-def _resolve_run_dir(log_dir: Path, run_id: str) -> Path:
-    root = log_dir.resolve()
-    candidates = [run_id]
-    try:
-        candidates.append(base64.urlsafe_b64decode(run_id + '=' * (-len(run_id) % 4)).decode('utf-8'))
-    except (ValueError, UnicodeError):
-        pass
-    for relative in candidates:
-        candidate = (root / relative).resolve()
-        if (candidate.is_relative_to(root) and (candidate / 'manifest.json').is_file()
-                and (candidate / 'records.jsonl').is_file()):
-            return candidate
-    # A supplied path/run key is authoritative. Only legacy bare names need
-    # discovery; the running session is always an immediate child of log_dir.
-    if run_id.startswith('interactive_') or len(candidates) > 1:
+def _resolve_run_state(session, run_id: str):
+    state = getattr(session, "run_state", None) if session is not None else None
+    if state is None or state.run_id != run_id:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
-    matches = [
-        path
-        for path in _iter_run_dirs(log_dir)
-        if path.name == run_id or _run_key(log_dir, path) == run_id
-    ]
-    if not matches:
-        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
-    matches.sort(key=lambda path: (path / "records.jsonl").stat().st_mtime, reverse=True)
-    return matches[0]
+    return state
 
 
-def _run_key(log_dir: Path, run_dir: Path) -> str:
-    try:
-        rel = run_dir.resolve().relative_to(log_dir.resolve()).as_posix()
-    except ValueError:
-        rel = run_dir.resolve().as_posix()
-    return base64.urlsafe_b64encode(rel.encode("utf-8")).decode("ascii").rstrip("=")
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return _sanitize_json_value(json.load(f, parse_constant=lambda _: None))
-    except FileNotFoundError:
-        return None
-
-
-def _read_records(path: Path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield _sanitize_json_value(json.loads(line, parse_constant=lambda _: None))
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        return
+def _number_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach Web-only cursors without storing them in the search state."""
+    return [dict(record, seq=index) for index, record in enumerate(records, 1)]
 
 
 def _sanitize_json_value(value: Any) -> Any:
@@ -220,15 +165,6 @@ def _sanitize_json_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_sanitize_json_value(item) for item in value]
     return value
-
-
-def _record_stats(path: Path) -> tuple[int, int]:
-    count = 0
-    last_seq = 0
-    for record in _read_records(path):
-        count += 1
-        last_seq = max(last_seq, int(record.get("seq", 0)))
-    return count, last_seq
 
 
 def _strip_detail(record: dict[str, Any]) -> dict[str, Any]:
@@ -260,7 +196,10 @@ def _with_formula_latex(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _with_tool_summary(record: dict[str, Any], records_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _with_tool_summary(
+    record: dict[str, Any],
+    records_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     core = record.get("core")
     if not isinstance(core, dict) or core.get("tool_summary"):
         return record

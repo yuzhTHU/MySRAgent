@@ -1284,7 +1284,7 @@
         const requested = data.runs.find(run => run.run_id === viewerParams.get("run"));
         if (requested || !viewerParams.has("run")) selectRun(runKey(requested || data.runs[0]));
       }
-      statusEl.textContent = data.runs.length ? "" : "No runs with records.jsonl found";
+      statusEl.textContent = data.runs.length ? "" : "No active run records yet";
       } finally { runListLoading = false; }
     }
 
@@ -1293,7 +1293,7 @@
       if (!runs.length) {
         const empty = document.createElement("div");
         empty.className = "muted";
-        empty.textContent = "No records.jsonl found.";
+        empty.textContent = "No active run records yet.";
         runTree.appendChild(empty);
         return;
       }
@@ -1486,7 +1486,7 @@
       const treeIds = [...new Set(records.map(record => treeIdFor(record)))].sort();
       const roots = treeIds.map((treeId, index) => ({
         node_id: rootId(treeId),
-        tree_id: treeId,
+        run_id: treeId,
         tree_index: index,
         virtual_root: true,
         parents: [],
@@ -1497,8 +1497,8 @@
         const treeId = treeIdFor(record);
         const parents = (record.parents || []).length
           ? record.parents
-          : [{ node_id: rootId(treeId), kind: "virtual_root", strength: "strong" }];
-        return { ...record, tree_id: treeId, parents };
+          : [{ node_id: rootId(treeId), relation: "virtual_root" }];
+        return { ...record, run_id: treeId, parents };
       })];
     }
 
@@ -1610,14 +1610,14 @@
         if (node.virtual_root) continue;
         const target = state.positions.get(node.node_id);
         for (const parent of node.parents || []) {
-          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          if (parent.relation === "context_merge" && !state.showWeakEdges) continue;
           if (!byId.has(parent.node_id)) continue;
           const source = state.positions.get(parent.node_id);
           if (!source || !target) continue;
           const path = svgEl("path");
           const mid = (source.y + target.y) / 2;
           path.setAttribute("d", `M${source.x},${source.y} C${source.x},${mid} ${target.x},${mid} ${target.x},${target.y}`);
-          path.setAttribute("class", `edge ${parent.strength === "weak" ? "weak" : "strong"} ${parent.node_id.startsWith(ROOT_PREFIX) ? "root" : ""}`);
+          path.setAttribute("class", `edge ${parent.relation === "context_merge" ? "weak" : "strong"} ${parent.node_id.startsWith(ROOT_PREFIX) ? "root" : ""}`);
           edgeGroup.appendChild(path);
         }
       }
@@ -1651,7 +1651,7 @@
           label.setAttribute("x", point.x);
           label.setAttribute("y", point.y + radius + 15);
           label.setAttribute("class", `node-label ${node.virtual_root ? "root-label" : ""}`);
-          label.textContent = node.virtual_root ? `root ${shortTreeId(node.tree_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
+          label.textContent = node.virtual_root ? `run ${shortTreeId(node.run_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
           nodeGroup.appendChild(label);
         }
       }
@@ -1724,7 +1724,7 @@
       for (const node of nodes) {
         for (const parent of node.parents || []) {
           if (!byId.has(parent.node_id)) continue;
-          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          if (parent.relation === "context_merge" && !state.showWeakEdges) continue;
           children.get(parent.node_id).push(node.node_id);
           parents.get(node.node_id).push(parent.node_id);
         }
@@ -1782,7 +1782,7 @@
       if (!state.positions.size) state.positions = computeLayout(nodes, false);
       const selectedRecord = state.selectedNodeId ? state.records.get(state.selectedNodeId) : null;
       const selectedTreeId = selectedRecord && treeIdFor(selectedRecord);
-      const root = nodes.find(node => node.virtual_root && selectedTreeId && node.tree_id === selectedTreeId)
+      const root = nodes.find(node => node.virtual_root && selectedTreeId && node.run_id === selectedTreeId)
         || nodes.find(node => node.virtual_root);
       if (!root) return;
       const rootPoint = state.positions.get(root.node_id);
@@ -2176,7 +2176,7 @@
       if (record.virtual_root) {
         state.selectedNodeId = null;
         document.getElementById("node-title").textContent = "Virtual root";
-        document.getElementById("node-subtitle").textContent = `Tree ${record.tree_id}`;
+        document.getElementById("node-subtitle").textContent = `Run ${record.run_id}`;
         document.getElementById("metrics").innerHTML = "";
         setFormula(null, null);
         renderPreview(null);
@@ -2767,12 +2767,12 @@
         const target = state.positions.get(node.node_id);
         if (!target) continue;
         for (const parent of node.parents || []) {
-          if (parent.strength === "weak" && !state.showWeakEdges) continue;
+          if (parent.relation === "context_merge" && !state.showWeakEdges) continue;
           if (!byId.has(parent.node_id)) continue;
           const source = state.positions.get(parent.node_id);
           if (!source) continue;
           const mid = (source.y + target.y) / 2;
-          commands.push(parent.strength === "weak" ? "[6 6] 0 d" : "[] 0 d");
+          commands.push(parent.relation === "context_merge" ? "[6 6] 0 d" : "[] 0 d");
           commands.push(parent.node_id.startsWith(ROOT_PREFIX) ? "0.36 0.40 0.45 RG" : "0.50 0.55 0.62 RG");
           commands.push("1.6 w");
           commands.push(`${fmt(tx(source.x))} ${fmt(ty(source.y))} m ${fmt(tx(source.x))} ${fmt(ty(mid))} ${fmt(tx(target.x))} ${fmt(ty(mid))} ${fmt(tx(target.x))} ${fmt(ty(target.y))} c S`);
@@ -2794,7 +2794,7 @@
       if (state.showLabels) for (const node of drawable) {
         const point = state.positions.get(node.node_id);
         const radius = radii.get(node.node_id);
-        const label = node.virtual_root ? `root ${shortTreeId(node.tree_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
+        const label = node.virtual_root ? `run ${shortTreeId(node.run_id)}` : (node.node_label || `R${node.coord.R} C${node.coord.C} L${node.coord.L} K${node.coord.K}`);
         const size = node.virtual_root ? 12 : 11;
         const y = point.y + radius + 15;
         const textWidth = label.length * size * 0.45;
@@ -2891,7 +2891,7 @@
     }
 
     function treeIdFor(record) {
-      return record.tree_id || "legacy";
+      return record.run_id || state.runId || "current";
     }
 
     function rootId(treeId) {
@@ -2899,7 +2899,7 @@
     }
 
     function shortTreeId(treeId) {
-      return String(treeId || "legacy").slice(0, 8);
+      return String(treeId || "current").slice(0, 8);
     }
 
     async function sendControl(action, message = "") {
